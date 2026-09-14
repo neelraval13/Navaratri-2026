@@ -1,5 +1,6 @@
 import type * as React from 'react'
 
+import ConnectivityStatus from '@/components/connectivity-status'
 import DatabaseGate from '@/components/database-gate'
 import RegistrationForm from '@/components/registration/registration-form'
 import ThemeToggle from '@/components/theme-toggle'
@@ -13,7 +14,11 @@ const App: React.FC = () => {
             Navaratri 2026
           </p>
 
-          <ThemeToggle />
+          <div className="flex items-center gap-3">
+            <ConnectivityStatus />
+
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 

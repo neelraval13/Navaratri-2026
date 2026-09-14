@@ -66,9 +66,9 @@ Payment QR:
 - organizer's personal UPI
 - no payment gateway
 
-Planned offline architecture:
-- PWA
-- Service Worker
+Offline architecture:
+- PWA, installable via the browser's own install flow
+- vite-plugin-pwa with a Workbox-generated service worker
 
 Planned backend:
 - Vercel Functions
@@ -814,12 +814,56 @@ Network connectivity must NOT be required to:
 - issue a badge
 - continue to the next attendee
 
-The browser/device will eventually be the operational source of truth using
-IndexedDB.
+The browser/device is the operational source of truth using IndexedDB.
 
 Google Sheets is the synchronized central ledger.
 
-Do not implement offline functionality until its assigned phase.
+### Progressive Web App
+
+The application is a PWA. `vite-plugin-pwa` generates a Workbox service worker
+that precaches the built shell: `index.html`, JS chunks, CSS, icons and the
+self-hosted Oswald `woff2` files. A navigation fallback to the cached
+`index.html` means reloading `/` offline opens the app, after it has been
+successfully loaded online at least once.
+
+The service worker is responsible ONLY for static assets. It never stores
+registration, config or outbox data — those stay in IndexedDB, which remains the
+operational source of truth. Nothing belongs in Cache Storage, localStorage, the
+worker or the manifest.
+
+Once cached, everything operates offline: attendee entry, duplicate lookup,
+Hold, Resume, payment selection, manual confirmation, Issue Badge and the badge
+counter. The UPI QR renders offline too, because it is generated locally —
+though completing the payment still needs the payer's own app and connectivity.
+
+Offline never blocks or disables any registration action, and there is no
+full-page offline error. Only the connectivity indicator changes. There is no
+second offline implementation of any product rule.
+
+A service worker registration failure only logs; the application still loads.
+
+### Service Worker Updates
+
+A newly downloaded version WAITS. It never reloads a page that is open, because
+a desk must not be interrupted mid-registration. The update takes over once
+every tab has been closed. Any update indication stays passive.
+
+There is no custom install button; browser-native installation is enough.
+
+Production PWA behaviour is verified with `pnpm build` + `pnpm preview`. The
+development server deliberately registers no service worker.
+
+### Connectivity Indicator
+
+The header shows `Online` or `Offline mode` from `navigator.onLine` plus the
+`online`/`offline` events. No polling, no ping endpoint, no backend request.
+
+Offline is amber, never destructive red: the desk is designed to keep working.
+
+`Online` means ONLY that the browser reports connectivity. It must never be
+presented as `Synced`, `Sync complete`, `Uploaded` or `Server connected` —
+no synchronization exists. The connectivity hook is kept separable so real sync
+state can be added later without reinterpreting this one.
 
 ---
 
@@ -890,7 +934,8 @@ The application writes in exactly three places:
    pending outbox row, in one transaction
 
 Outbox processing and Google Sheets synchronization remain future work. Nothing
-is sent anywhere yet.
+is sent anywhere yet, online or offline, and no outbox row is ever removed or
+marked synchronized.
 
 ### Database Safety
 
