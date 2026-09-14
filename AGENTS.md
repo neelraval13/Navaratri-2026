@@ -364,8 +364,13 @@ running or has failed. A failed lookup shows
 A stale response for an older phone number must never replace the result for
 the number currently entered.
 
-Resuming a held registration is Phase 2C. A held match is detected and blocked,
-but no Resume action is offered until it actually works.
+A held match belonging to another registration is blocked as a new registration
+and offers `Resume Registration` instead. A held match for the registration the
+operator is currently resuming is allowed — see Hold Persistence.
+
+The UI lookup is not the only defense. Identity conflicts are re-checked against
+the `[phone+normalizedName]` index inside the write transaction, so a stale UI
+lookup can never let a duplicate through.
 
 ---
 
@@ -511,7 +516,80 @@ The badge seen when the registration was originally started is never reserved.
 
 Held registrations eventually live separately from completed badge records.
 
-Do not implement persistence before the relevant phase.
+### Hold Persistence
+
+Hold writes a durable HeldRegistration to IndexedDB.
+
+A held registration consumes NO badge:
+
+- `nextBadge` is never read for ownership and never incremented
+- the record carries no `badgeNumber`
+- the record carries no `completedAt`
+- `paymentStatus` stays `pending`
+
+The registration write and its outbox upsert happen in ONE Dexie transaction.
+Either both persist or neither does.
+
+Each registration has exactly one pending outbox row, keyed deterministically:
+
+`registration:${registrationId}`
+
+Repeated local edits before a sync overwrite that row with the latest snapshot
+instead of accumulating stale ones.
+
+Hold from Step 1 stores NO payment method for a brand-new hold. The hidden
+Step 2 default must never be persisted by accident.
+
+Hold from Step 2 stores the currently selected payment method.
+
+A resumed hold keeps its stored payment method unless the operator explicitly
+changed it.
+
+`amount` is read from the EventConfig row inside the same transaction. If that
+row is missing, the hold fails and nothing is written.
+
+A completed registration can never be overwritten or downgraded by Hold.
+
+### Resume
+
+An exact held identity offers a real `Resume Registration` action.
+
+Resume is READ-ONLY. It loads the stored attendee values into the draft,
+restores the stored payment method (or UPI when none was stored), leaves payment
+unconfirmed, and opens Step 2 — where the operator left off. It writes nothing
+and assigns no badge.
+
+A resumed registration keeps its registration id for its whole life. Re-holding
+UPDATES the same row, preserving `id` and `createdAt`.
+
+`heldAt` is the time of the LATEST hold, refreshed every time the record is held
+again.
+
+### Editing A Held Registration
+
+The operator is editing a held registration from Resume until Clear, a
+successful Hold, or another explicit reset ends the session — NOT only while the
+entered identity still exactly matches what is stored.
+
+Correcting the phone or name during that session does not end it. Re-holding
+still updates the same row, so the UI must keep saying so.
+
+The status therefore reads `Editing held registration` and takes visual priority
+over `New attendee` and over the phone-level `New number` /
+`Used by N attendees`. Its own held record is never a duplicate of itself, so
+Next is allowed and no Resume action is offered for it.
+
+A conflict with a DIFFERENT registration still overrides and blocks:
+
+- completed exact match → red `Already registered`
+- held exact match belonging to another record → amber `Registration on hold`,
+  which offers Resume for that record
+
+Checking and failed lookup states still take precedence over all of the above
+and still fail closed.
+
+Clear abandons the editing session only. It never deletes or mutates the saved
+held record.
 
 ---
 
@@ -666,11 +744,14 @@ never deletes or recreates the database.
 
 ### Current Write Surface
 
-The registration workflow does not write to the database yet. Hold persistence,
-Issue Badge persistence, outbox items and `nextBadge` allocation belong to later
-phases.
+The application writes in exactly two places:
 
-The startup config bootstrap is currently the only write in the application.
+1. the startup event-config bootstrap
+2. Hold Registration — the held registration plus its pending outbox row, in one
+   transaction
+
+Issue Badge persistence, `nextBadge` allocation, badge number assignment and
+outbox processing remain future work. Nothing is sent anywhere yet.
 
 ### Database Safety
 

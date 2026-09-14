@@ -10,9 +10,12 @@ export const EVENT_CONFIG_ID = 'event'
  */
 interface RegistrationAttendee {
   id: string
-  /** Human-facing name exactly as the operator entered it. */
+  /**
+   * Human-facing name with leading/trailing whitespace trimmed; internal
+   * spacing is preserved. Never the normalized form.
+   */
   name: string
-  /** Normalized form reserved for duplicate detection in a later phase. */
+  /** Normalized form used for identity and duplicate matching. */
   normalizedName: string
   /** Raw 10-digit Indian number, e.g. `9876543210`. Never +91, spaces or display formatting. */
   phone: string
@@ -80,12 +83,33 @@ export interface EventConfig {
   updatedAt: string
 }
 
+/**
+ * Narrowing helpers for the discriminated union. They live beside the model so
+ * the database layer never has to import a UI module to tell the two apart.
+ */
+export const isCompletedRegistration = (
+  registration: RegistrationRecord,
+): registration is CompletedRegistration => {
+  return registration.status === 'completed'
+}
+
+export const isHeldRegistration = (
+  registration: RegistrationRecord,
+): registration is HeldRegistration => {
+  return registration.status === 'held'
+}
+
 export type OutboxOperation = 'upsert'
 
 /**
  * Durable queue of registration states awaiting synchronization.
  *
- * This phase only establishes the table. Nothing enqueues or drains it yet.
+ * Holding a registration writes or overwrites that registration's single
+ * pending row in the same transaction as the registration itself, so the queue
+ * can never drift from the record.
+ *
+ * Nothing drains the queue yet: there is no processor and nothing is sent
+ * anywhere.
  */
 export interface OutboxItem {
   id: string

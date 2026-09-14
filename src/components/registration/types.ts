@@ -21,3 +21,10 @@ export interface BlockedAttendeeField {
    */
   attempt: number
 }
+
+/**
+ * Outcome of the most recent Hold attempt, shown above the current step.
+ */
+export type HoldNotice =
+  | { kind: 'held'; name: string }
+  | { kind: 'error'; message: string }

@@ -33,7 +33,13 @@ export const isAgeValid = (age: string): boolean => {
   return DIGITS_PATTERN.test(age) && Number(age) <= MAX_AGE
 }
 
-export const isGenderValid = (gender: Gender): boolean => {
+/**
+ * Also narrows the UI selection type to the domain gender, so a validated
+ * attendee can be handed to the database layer without a cast.
+ */
+export const isGenderValid = (
+  gender: Gender,
+): gender is Exclude<Gender, ''> => {
   return gender !== ''
 }
 

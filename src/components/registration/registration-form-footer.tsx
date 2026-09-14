@@ -9,19 +9,26 @@ interface RegistrationFormFooterProps {
   currentStep: RegistrationStep
   paymentConfirmed: boolean
   badgeLabel: string
+  /** True while a hold write is in flight; every footer action is suspended. */
+  isHolding: boolean
   onNext: () => void
   onBack: () => void
   onClear: () => void
+  onHold: () => void
 }
 
 const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
   currentStep,
   paymentConfirmed,
   badgeLabel,
+  isHolding,
   onNext,
   onBack,
   onClear,
+  onHold,
 }) => {
+  const holdLabel = isHolding ? 'Holding…' : 'Hold Registration'
+
   if (paymentConfirmed) {
     return (
       <CardFooter className="border-t">
@@ -44,6 +51,7 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
               type="button"
               variant="outline"
               className="h-12 sm:min-w-32"
+              disabled={isHolding}
               onClick={onClear}
             >
               Clear
@@ -54,13 +62,16 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
                 type="button"
                 variant="secondary"
                 className="h-12 sm:min-w-44"
+                disabled={isHolding}
+                onClick={onHold}
               >
-                Hold Registration
+                {holdLabel}
               </Button>
 
               <Button
                 type="button"
                 className="h-12 sm:min-w-36"
+                disabled={isHolding}
                 onClick={onNext}
               >
                 Next
@@ -74,6 +85,7 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
               type="button"
               variant="outline"
               className="h-12 sm:min-w-32"
+              disabled={isHolding}
               onClick={onBack}
             >
               <ArrowLeft data-icon="inline-start" />
@@ -85,6 +97,7 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
                 type="button"
                 variant="outline"
                 className="h-12 sm:min-w-32"
+                disabled={isHolding}
                 onClick={onClear}
               >
                 Clear
@@ -94,8 +107,10 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
                 type="button"
                 variant="secondary"
                 className="h-12 sm:min-w-44"
+                disabled={isHolding}
+                onClick={onHold}
               >
-                Hold Registration
+                {holdLabel}
               </Button>
             </div>
           </>

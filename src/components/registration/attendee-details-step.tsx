@@ -20,6 +20,7 @@ import type {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import type { HeldRegistration, RegistrationRecord } from '@/db/types'
 import { useJitter } from '@/hooks/use-jitter'
 import type { PhoneLookup } from '@/hooks/use-phone-lookup'
 import { formatPhoneNumber } from '@/lib/phone'
@@ -42,6 +43,11 @@ interface AttendeeDetailsStepProps {
   identityMatch: IdentityMatch
   /** Increments each time Next is blocked by an unresolved or failed lookup. */
   blockedDatabaseCheck: number
+  /** True from Resume until Clear, a successful Hold, or another reset. */
+  isEditingHeldRegistration: boolean
+  /** The DIFFERENT held/completed record this identity collides with, if any. */
+  otherRegistrationConflict: RegistrationRecord | null
+  onResume: (registration: HeldRegistration) => void
   onPhoneChange: (phone: string) => void
   onNameChange: (name: string) => void
   onAgeChange: (age: string) => void
@@ -59,6 +65,9 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
   phoneLookup,
   identityMatch,
   blockedDatabaseCheck,
+  isEditingHeldRegistration,
+  otherRegistrationConflict,
+  onResume,
   onPhoneChange,
   onNameChange,
   onAgeChange,
@@ -99,19 +108,25 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
   }, [blockedDatabaseCheck, triggerJitter])
 
   /**
-   * Phone status answers "has this number been used?". Identity status answers
-   * the more specific "has this person already registered?".
-   *
-   * The identity match is only ever anything but `unknown` once the lookup has
-   * loaded AND a name has been entered, so once that more specific answer
-   * exists it replaces the preliminary phone status rather than sitting beside
-   * it. Clearing the name returns the match to `unknown`, which restores the
-   * phone-level status — including the amber shared-number block.
-   *
-   * Checking and failed lookups keep the match at `unknown`, so those states
-   * stay visible.
+   * A lookup that is still running or has failed always wins, so progression
+   * keeps failing closed and the operator can see why.
    */
-  const showIdentityStatus = identityMatch.kind !== 'unknown'
+  const isDatabaseStatusUnresolved =
+    phoneLookup.status === 'checking' || phoneLookup.status === 'failed'
+
+  /**
+   * Phone status answers "has this number been used?". Identity status answers
+   * the more specific "who is this, and are they already registered?" — which
+   * includes "you are editing this held registration". Once that more specific
+   * answer exists it replaces the preliminary phone status rather than sitting
+   * beside it.
+   *
+   * While a held registration is being edited there is always a specific answer
+   * to give, even before a name has been typed.
+   */
+  const showIdentityStatus =
+    !isDatabaseStatusUnresolved &&
+    (isEditingHeldRegistration || identityMatch.kind !== 'unknown')
 
   const showPhoneStatus = phoneLookup.status !== 'idle' && !showIdentityStatus
 
@@ -250,6 +265,9 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
             <IdentityStatus
               match={identityMatch}
               existingRegistrationCount={phoneLookup.registrations.length}
+              isEditingHeldRegistration={isEditingHeldRegistration}
+              otherRegistrationConflict={otherRegistrationConflict}
+              onResume={onResume}
             />
           ) : null}
         </div>
