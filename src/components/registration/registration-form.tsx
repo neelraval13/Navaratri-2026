@@ -3,6 +3,10 @@ import type * as React from 'react'
 
 import AttendeeDetailsStep from '@/components/registration/attendee-details-step'
 import { getFirstInvalidAttendeeField } from '@/components/registration/attendee-validation'
+import {
+  UNKNOWN_IDENTITY_MATCH,
+  getIdentityMatch,
+} from '@/components/registration/identity-match'
 import PaymentStep from '@/components/registration/payment-step'
 import RegistrationFormFooter from '@/components/registration/registration-form-footer'
 import RegistrationFormHeader from '@/components/registration/registration-form-header'
@@ -14,6 +18,7 @@ import type {
   RegistrationStep,
 } from '@/components/registration/types'
 import { Card, CardContent } from '@/components/ui/card'
+import { usePhoneLookup } from '@/hooks/use-phone-lookup'
 import { formatBadgeNumber } from '@/lib/badge'
 
 /**
@@ -36,6 +41,18 @@ const RegistrationForm: React.FC = () => {
   const [blockedField, setBlockedField] = useState<BlockedAttendeeField | null>(
     null,
   )
+  const [blockedDatabaseCheck, setBlockedDatabaseCheck] = useState(0)
+
+  const phoneLookup = usePhoneLookup(phone)
+
+  /**
+   * Matched in memory against the already-loaded phone result set, so a name
+   * keystroke never issues another query.
+   */
+  const identityMatch =
+    phoneLookup.status === 'loaded'
+      ? getIdentityMatch(phoneLookup.registrations, name)
+      : UNKNOWN_IDENTITY_MATCH
 
   const badgeLabel = formatBadgeNumber(CURRENT_BADGE_NUMBER)
 
@@ -45,9 +62,19 @@ const RegistrationForm: React.FC = () => {
     )
   }
 
+  const blockField = (field: AttendeeField) => {
+    setBlockedField((previous) => ({
+      field,
+      attempt: (previous?.attempt ?? 0) + 1,
+    }))
+  }
+
   /**
    * Next always looks actionable, but it only advances once every attendee
-   * detail is valid. Otherwise it points the operator at the first blocker.
+   * detail is valid AND this identity is eligible to register.
+   *
+   * Duplicate protection fails closed: a lookup that is still running or that
+   * failed blocks progression rather than assuming a new attendee.
    */
   const handleNext = () => {
     const firstInvalidField = getFirstInvalidAttendeeField(
@@ -59,11 +86,21 @@ const RegistrationForm: React.FC = () => {
 
     if (firstInvalidField !== null) {
       revealField(firstInvalidField)
+      blockField(firstInvalidField)
 
-      setBlockedField((previous) => ({
-        field: firstInvalidField,
-        attempt: (previous?.attempt ?? 0) + 1,
-      }))
+      return
+    }
+
+    if (phoneLookup.status !== 'loaded') {
+      // Not a field problem, so no field is marked invalid. The database status
+      // under the phone field is the honest explanation.
+      setBlockedDatabaseCheck((previous) => previous + 1)
+
+      return
+    }
+
+    if (identityMatch.kind === 'held' || identityMatch.kind === 'completed') {
+      blockField('name')
 
       return
     }
@@ -95,6 +132,7 @@ const RegistrationForm: React.FC = () => {
     setCurrentStep('attendee')
     setRevealedFields([])
     setBlockedField(null)
+    setBlockedDatabaseCheck(0)
   }
 
   return (
@@ -110,6 +148,9 @@ const RegistrationForm: React.FC = () => {
             gender={gender}
             revealedFields={revealedFields}
             blockedField={blockedField}
+            phoneLookup={phoneLookup}
+            identityMatch={identityMatch}
+            blockedDatabaseCheck={blockedDatabaseCheck}
             onPhoneChange={setPhone}
             onNameChange={setName}
             onAgeChange={setAge}

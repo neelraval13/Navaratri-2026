@@ -1,5 +1,6 @@
 import type * as React from 'react'
 
+import DatabaseGate from '@/components/database-gate'
 import RegistrationForm from '@/components/registration/registration-form'
 import ThemeToggle from '@/components/theme-toggle'
 
@@ -17,7 +18,9 @@ const App: React.FC = () => {
       </header>
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
-        <RegistrationForm />
+        <DatabaseGate>
+          <RegistrationForm />
+        </DatabaseGate>
       </main>
     </div>
   )

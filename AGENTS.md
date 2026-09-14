@@ -298,29 +298,74 @@ Phone number alone is NOT a duplicate.
 
 A parent may register multiple children using the same phone number.
 
-Future duplicate behavior:
+Step 1 checks the local database READ-ONLY. It never writes.
+
+### Name Normalization
+
+The comparison form is exactly:
+
+1. trim leading whitespace
+2. trim trailing whitespace
+3. collapse repeated internal whitespace to one space
+4. lowercase
+
+`Rahul Sharma`, ` rahul   sharma ` and `RAHUL SHARMA` all normalize to
+`rahul sharma`.
+
+No fuzzy matching, no phonetic matching, no punctuation stripping, no spelling
+correction.
+
+The human-facing Name input is never modified. `normalizedName` is for
+comparison and storage only.
+
+### Phone Lookup
+
+The lookup runs ONLY at exactly 10 raw digits. A partial number is never
+queried.
+
+It uses the `phone` index and never scans the registrations table.
+
+Below 10 digits, phone usage and any identity match derived from it are
+cleared.
 
 Phone not previously used
-→ New number
+→ green `New number`
 
 Phone previously used
-→ Informational warning only
+→ amber informational `Used by N attendees`, with a compact summary of the
+existing registrations
 
-Same phone + different name
-→ Allowed
+A shared family phone number is expected and allowed. It is never an error, and
+it says nothing about WhatsApp.
+
+### Identity Match
+
+Same phone + different normalized name
+→ allowed, shown as green `New attendee`
 
 Same phone + same normalized name + HELD
-→ Resume held registration
+→ amber `Registration on hold`, blocks Next
 
 Same phone + same normalized name + COMPLETED
-→ Reject duplicate
+→ red `Already registered · Badge #xxx`, blocks Next
 
-Name normalization should eventually account for:
-- case
-- leading/trailing spaces
-- repeated spaces
+`[phone+normalizedName]` is not unique, so corrupt data could hold both a held
+and a completed record for one identity. The COMPLETED record always wins. An
+issued badge must never be downgraded to "on hold".
 
-Do not implement duplicate logic before the relevant phase.
+### Fail Closed
+
+Duplicate protection must never fail open.
+
+Next must not proceed while the lookup for the current phone number is still
+running or has failed. A failed lookup shows
+`Unable to check existing registrations.` and must never assume a new attendee.
+
+A stale response for an older phone number must never replace the result for
+the number currently entered.
+
+Resuming a held registration is Phase 2C. A held match is detected and blocked,
+but no Resume action is offered until it actually works.
 
 ---
 
@@ -604,6 +649,28 @@ Synchronization must eventually be idempotent.
 Startup bootstrap creates the default event config row ONLY when it does not
 already exist. Existing configuration, such as `nextBadge`, is never
 overwritten with defaults.
+
+### Database Readiness
+
+Registration depends on IndexedDB for duplicate detection, so the registration
+UI must not begin database-dependent work before `bootstrapDatabase()` has
+completed successfully.
+
+Startup gates the registration form on that bootstrap and shows a minimal
+initialization state until it resolves. Bootstrap has exactly one owner; feature
+components never bootstrap.
+
+If bootstrap fails, registration stays unavailable rather than running with
+duplicate checks that silently fail open. The failure state offers a retry and
+never deletes or recreates the database.
+
+### Current Write Surface
+
+The registration workflow does not write to the database yet. Hold persistence,
+Issue Badge persistence, outbox items and `nextBadge` allocation belong to later
+phases.
+
+The startup config bootstrap is currently the only write in the application.
 
 ### Database Safety
 

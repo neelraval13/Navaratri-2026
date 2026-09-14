@@ -9,6 +9,9 @@ import {
   isNameValid,
   isPhoneValid,
 } from '@/components/registration/attendee-validation'
+import type { IdentityMatch } from '@/components/registration/identity-match'
+import IdentityStatus from '@/components/registration/identity-status'
+import PhoneStatus from '@/components/registration/phone-status'
 import type {
   AttendeeField,
   BlockedAttendeeField,
@@ -18,8 +21,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useJitter } from '@/hooks/use-jitter'
+import type { PhoneLookup } from '@/hooks/use-phone-lookup'
 import { formatPhoneNumber } from '@/lib/phone'
 import { cn } from '@/lib/utils'
+
+/**
+ * The database status is not an attendee field, but Next can still be blocked
+ * by it, so it is a jitter target of its own.
+ */
+type JitterTarget = AttendeeField | 'database-status'
 
 interface AttendeeDetailsStepProps {
   phone: string
@@ -28,6 +38,10 @@ interface AttendeeDetailsStepProps {
   gender: Gender
   revealedFields: AttendeeField[]
   blockedField: BlockedAttendeeField | null
+  phoneLookup: PhoneLookup
+  identityMatch: IdentityMatch
+  /** Increments each time Next is blocked by an unresolved or failed lookup. */
+  blockedDatabaseCheck: number
   onPhoneChange: (phone: string) => void
   onNameChange: (name: string) => void
   onAgeChange: (age: string) => void
@@ -42,6 +56,9 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
   gender,
   revealedFields,
   blockedField,
+  phoneLookup,
+  identityMatch,
+  blockedDatabaseCheck,
   onPhoneChange,
   onNameChange,
   onAgeChange,
@@ -49,7 +66,7 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
   onRevealField,
 }) => {
   const { jitteringField, triggerJitter, clearJitter } =
-    useJitter<AttendeeField>()
+    useJitter<JitterTarget>()
 
   const phoneRef = useRef<HTMLInputElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
@@ -72,6 +89,31 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
 
     triggerJitter(blockedField.field)
   }, [blockedField, triggerJitter])
+
+  useEffect(() => {
+    if (blockedDatabaseCheck === 0) {
+      return
+    }
+
+    triggerJitter('database-status')
+  }, [blockedDatabaseCheck, triggerJitter])
+
+  /**
+   * Phone status answers "has this number been used?". Identity status answers
+   * the more specific "has this person already registered?".
+   *
+   * The identity match is only ever anything but `unknown` once the lookup has
+   * loaded AND a name has been entered, so once that more specific answer
+   * exists it replaces the preliminary phone status rather than sitting beside
+   * it. Clearing the name returns the match to `unknown`, which restores the
+   * phone-level status — including the amber shared-number block.
+   *
+   * Checking and failed lookups keep the match at `unknown`, so those states
+   * stay visible.
+   */
+  const showIdentityStatus = identityMatch.kind !== 'unknown'
+
+  const showPhoneStatus = phoneLookup.status !== 'idle' && !showIdentityStatus
 
   const showPhoneError = revealedFields.includes('phone') && !isPhoneValid(phone)
   const showNameError = revealedFields.includes('name') && !isNameValid(name)
@@ -159,6 +201,21 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
               {ATTENDEE_FIELD_MESSAGES.phone}
             </p>
           ) : null}
+
+          {showPhoneStatus ? (
+            <div
+              className={cn(
+                jitteringField === 'database-status' && 'jitter',
+              )}
+              onAnimationEnd={clearJitter}
+            >
+              <PhoneStatus
+                status={phoneLookup.status}
+                registrations={phoneLookup.registrations}
+                onRetry={phoneLookup.retry}
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-2">
@@ -187,6 +244,13 @@ const AttendeeDetailsStep: React.FC<AttendeeDetailsStepProps> = ({
             >
               {ATTENDEE_FIELD_MESSAGES.name}
             </p>
+          ) : null}
+
+          {showIdentityStatus ? (
+            <IdentityStatus
+              match={identityMatch}
+              existingRegistrationCount={phoneLookup.registrations.length}
+            />
           ) : null}
         </div>
 

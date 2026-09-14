@@ -38,7 +38,7 @@ const createDefaultEventConfig = (): EventConfig => {
  *
  * Nothing here deletes, clears or resets data.
  */
-export const bootstrapDatabase = async (): Promise<void> => {
+const runBootstrap = async (): Promise<void> => {
   await db.open()
 
   await db.transaction('rw', db.config, async () => {
@@ -50,4 +50,24 @@ export const bootstrapDatabase = async (): Promise<void> => {
 
     await db.config.add(createDefaultEventConfig())
   })
+}
+
+let bootstrapPromise: Promise<void> | null = null
+
+/**
+ * The application's single bootstrap entry point.
+ *
+ * The first caller starts the work and every later caller awaits the same
+ * promise, so remounts, StrictMode double effects and a retry can never run two
+ * bootstraps concurrently. A failed attempt clears the memo so a retry starts a
+ * genuinely new attempt.
+ */
+export const bootstrapDatabase = (): Promise<void> => {
+  bootstrapPromise ??= runBootstrap().catch((error: unknown) => {
+    bootstrapPromise = null
+
+    throw error
+  })
+
+  return bootstrapPromise
 }

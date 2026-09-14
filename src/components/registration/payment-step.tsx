@@ -4,6 +4,7 @@ import type { Gender, PaymentMethod } from '@/components/registration/types'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { formatPhoneNumber } from '@/lib/phone'
 import { cn } from '@/lib/utils'
 
 const GENDER_LABELS: Record<Exclude<Gender, ''>, string> = {
@@ -38,7 +39,7 @@ const PaymentStep: React.FC<PaymentStepProps> = ({
   const attendeeName = name.trim()
 
   const attendeeDetails = [
-    phone.trim() ? `+91 ${phone.trim()}` : '',
+    phone.trim() ? `+91 ${formatPhoneNumber(phone.trim())}` : '',
     age.trim(),
     gender ? GENDER_LABELS[gender] : '',
   ]
