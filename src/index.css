@@ -149,6 +149,39 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/**
+ * Short one-shot horizontal jitter used to reject invalid operator input.
+ * Re-trigger it by removing the class for a frame before re-applying it.
+ */
+@keyframes jitter {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  25% {
+    transform: translateX(-4px);
+  }
+
+  50% {
+    transform: translateX(3px);
+  }
+
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+.jitter {
+  animation: jitter 220ms ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jitter {
+    animation: none;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

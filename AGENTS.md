@@ -239,16 +239,22 @@ The global app shell may independently contain the event name and theme toggle.
 Fields:
 
 Phone Number
-- fixed +91 prefix
-- exactly 10 digits eventually
-- numeric entry
+- fixed +91 visual prefix, never part of the stored value
+- digits only
+- exactly 10 digits
+- stored internally as raw digits, for example `9876543210`
+- displayed as `XXXXX XXXXX`, for example `98765 43210`
+- an invalid character attempt is rejected and the existing value is preserved
+- an 11th digit is never accepted
 - parents may reuse the same phone number for multiple children
 
 Name
+- at least one non-whitespace character after trimming
 
 Age
-- integer
-- eventual allowed range 0–120
+- digits only
+- range 0–120 inclusive
+- a value above 120 is never accepted
 
 Gender
 - Male
@@ -256,6 +262,28 @@ Gender
 - no default selection
 
 The phone number is intentionally entered before the name.
+
+Rejected input is signalled with a brief jitter on the field, never a toast or
+a modal.
+
+### Step 1 Progression
+
+Next remains visually actionable. It is not disabled.
+
+Next must never reach Step 2 unless every attendee detail is valid.
+
+When Next is blocked, guide the operator to the FIRST invalid field in this
+order:
+
+Phone → Name → Age → Gender
+
+Focus that field, jitter it, and show a concise inline message for it.
+
+Validation feedback must not appear on initial render. It appears once a field
+has become relevant through interaction, or once Next has been blocked by it.
+
+A field's message and its `aria-invalid` state clear as soon as it becomes
+valid.
 
 ---
 
@@ -343,6 +371,14 @@ Hide:
 - Back
 - Clear
 - Hold Registration
+
+Lock:
+- the UPI / Cash payment method controls
+
+The confirmed method remains visible but cannot be changed by mouse, keyboard,
+or label click.
+
+A confirmed payment cannot be undone within the current registration.
 
 Show only:
 
