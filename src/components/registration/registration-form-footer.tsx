@@ -11,10 +11,18 @@ interface RegistrationFormFooterProps {
   badgeLabel: string
   /** True while a hold write is in flight; every footer action is suspended. */
   isHolding: boolean
+  /** True while the badge issuance transaction is in flight. */
+  isIssuing: boolean
+  /** True once a badge has been issued and is waiting to be handed over. */
+  isComplete: boolean
+  /** False when this desk's configured badge range is exhausted. */
+  canIssueBadge: boolean
   onNext: () => void
   onBack: () => void
   onClear: () => void
   onHold: () => void
+  onIssueBadge: () => void
+  onNextPerson: () => void
 }
 
 const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
@@ -22,12 +30,32 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
   paymentConfirmed,
   badgeLabel,
   isHolding,
+  isIssuing,
+  isComplete,
+  canIssueBadge,
   onNext,
   onBack,
   onClear,
   onHold,
+  onIssueBadge,
+  onNextPerson,
 }) => {
   const holdLabel = isHolding ? 'Holding…' : 'Hold Registration'
+
+  if (isComplete) {
+    return (
+      <CardFooter className="border-t">
+        <Button
+          type="button"
+          className="h-14 w-full text-base font-semibold"
+          onClick={onNextPerson}
+        >
+          Next Person
+          <ArrowRight data-icon="inline-end" />
+        </Button>
+      </CardFooter>
+    )
+  }
 
   if (paymentConfirmed) {
     return (
@@ -35,8 +63,10 @@ const RegistrationFormFooter: React.FC<RegistrationFormFooterProps> = ({
         <Button
           type="button"
           className="h-14 w-full text-base font-semibold"
+          disabled={isIssuing || !canIssueBadge}
+          onClick={onIssueBadge}
         >
-          Issue Badge {badgeLabel}
+          {isIssuing ? 'Issuing Badge…' : `Issue Badge ${badgeLabel}`}
         </Button>
       </CardFooter>
     )

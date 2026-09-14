@@ -380,6 +380,10 @@ Fixed amount:
 
 ₹20
 
+The displayed amount and the transaction note come from `EventConfig.amount` and
+`EventConfig.eventName`, the same row persistence reads, so the two cannot
+drift.
+
 Payment methods:
 
 - UPI
@@ -469,6 +473,10 @@ Step 2 before payment:
 Step 2 after payment:
 
 - Issue Badge #xxx
+
+After a badge has been issued:
+
+- Next Person
 
 The footer should remain visually stable between steps.
 
@@ -611,6 +619,87 @@ Badge number must be consumed ONLY when Issue Badge succeeds.
 
 A held registration has no badge number.
 
+### Authoritative Badge Number
+
+`EventConfig.nextBadge` in IndexedDB is authoritative.
+
+The registration form header displays it on Step 1, on Step 2 and for a resumed
+held registration. There is no independent React counter that could drift from
+the stored value.
+
+Only a successful Issue Badge transaction changes it. Opening the form, Next,
+payment selection, payment confirmation, Hold, Resume, Back and Clear all leave
+it exactly where it was.
+
+If the configuration cannot be read, registration does not start. The UI never
+displays a guessed badge number.
+
+### Badge Issuance
+
+Issue Badge is persistent. ONE Dexie transaction over registrations, config and
+outbox does all of it:
+
+1. read EventConfig
+2. refuse if the configured badge range is exhausted
+3. load the resumed held record when there is one
+4. re-check `[phone+normalizedName]` conflicts against the compound index
+5. refuse if the current badge number is already assigned
+6. write the CompletedRegistration
+7. increment `nextBadge` exactly once and refresh `config.updatedAt`
+8. replace the registration's deterministic outbox row with the completed
+   snapshot
+
+Any refusal returns before the first write: no registration, no outbox row, no
+badge consumed.
+
+A brand-new completed registration gets a `crypto.randomUUID()` id and has no
+`heldAt`.
+
+A resumed held registration keeps its id and is transitioned in place.
+`createdAt` and `heldAt` are preserved, `completedAt` is the completion time,
+and no second row is ever created.
+
+`amount` comes from `EventConfig.amount` inside the same transaction, never from
+the UI. `paymentStatus: 'confirmed'` is constructed by the service, never
+accepted from the caller.
+
+`badgeEnd` is honored when configured: once `nextBadge > badgeEnd` the range is
+exhausted and issuance is refused. Allocation never wraps back to `badgeStart`.
+
+### Badge Range Exhausted
+
+While the range is exhausted, the operator cannot progress from Attendee Details
+to Payment at all, and Resume opens Attendee Details rather than Payment.
+
+Payment must NEVER be collected when this desk has no badge to hand over.
+Reaching Payment with no badge available would let an operator take the fee and
+then find Issue Badge unavailable, with Back, Clear and Hold already hidden by
+the confirmed payment.
+
+Hold Registration stays available and functional, because a hold consumes no
+badge. Attendee details can still be entered, held and cleared.
+
+A badge that was just issued is still announced normally on the completion
+screen, even when its own increment exhausted the range. The block applies again
+from the next Step 1.
+
+The UI block is only the earlier layer. The issuance transaction keeps enforcing
+`badgeEnd` independently and keeps returning `badge-range-exhausted`, so a stale
+UI can never push past the range.
+
+If the current `nextBadge` is already assigned to a completed registration,
+issuance fails closed rather than skipping to the next free number. A config
+that has drifted from the physical badge sequence needs operator attention.
+
+### Completion
+
+A successful issue does NOT clear the form. It shows a completion state naming
+the exact physical badge to hand over and to whom, and the form header switches
+to `BADGE ALLOCATED` showing the badge just issued — never the next one.
+
+`Next Person` starts the next draft. It performs no database write, because the
+issuing transaction already advanced `nextBadge`.
+
 Future multi-device use will be handled by physically splitting badge ranges
 between desks.
 
@@ -744,14 +833,16 @@ never deletes or recreates the database.
 
 ### Current Write Surface
 
-The application writes in exactly two places:
+The application writes in exactly three places:
 
 1. the startup event-config bootstrap
 2. Hold Registration — the held registration plus its pending outbox row, in one
    transaction
+3. Issue Badge — the completed registration, the `nextBadge` increment and the
+   pending outbox row, in one transaction
 
-Issue Badge persistence, `nextBadge` allocation, badge number assignment and
-outbox processing remain future work. Nothing is sent anywhere yet.
+Outbox processing, the real UPI QR and Google Sheets synchronization remain
+future work. Nothing is sent anywhere yet.
 
 ### Database Safety
 

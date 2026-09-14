@@ -16,6 +16,9 @@ const PAYMENT_METHOD_OPTION_CLASS_NAME =
   'h-12 gap-3 rounded-4xl border border-input px-5 font-medium has-data-[checked]:border-primary has-data-[checked]:bg-primary/5'
 
 interface PaymentStepProps {
+  /** From EventConfig, so the displayed fee cannot drift from what is stored. */
+  amount: number
+  eventName: string
   phone: string
   name: string
   age: string
@@ -27,6 +30,8 @@ interface PaymentStepProps {
 }
 
 const PaymentStep: React.FC<PaymentStepProps> = ({
+  amount,
+  eventName,
   phone,
   name,
   age,
@@ -134,16 +139,16 @@ const PaymentStep: React.FC<PaymentStepProps> = ({
             </div>
 
             <p className="mt-6 text-4xl font-bold text-primary">
-              ₹20
+              ₹{amount}
             </p>
 
             <p className="mt-1 text-sm text-muted-foreground">
-              Navaratri 2026 Badge Fee
+              {eventName} Badge Fee
             </p>
 
             <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-              Please pay exactly ₹20 and show the successful payment screen
-              before continuing.
+              Please pay exactly ₹{amount} and show the successful payment
+              screen before continuing.
             </p>
           </div>
         ) : (
@@ -153,7 +158,7 @@ const PaymentStep: React.FC<PaymentStepProps> = ({
             </p>
 
             <p className="mt-3 text-5xl font-bold text-primary">
-              ₹20
+              ₹{amount}
             </p>
 
             <p className="mt-4 text-sm text-muted-foreground">
@@ -165,7 +170,8 @@ const PaymentStep: React.FC<PaymentStepProps> = ({
         {paymentConfirmed ? (
           <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
             <p className="font-semibold text-emerald-700 dark:text-emerald-400">
-              ₹20 received via {paymentMethod === 'upi' ? 'UPI' : 'Cash'}
+              ₹{amount} received via{' '}
+              {paymentMethod === 'upi' ? 'UPI' : 'Cash'}
             </p>
           </div>
         ) : (

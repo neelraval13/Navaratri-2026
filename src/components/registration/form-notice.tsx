@@ -1,19 +1,21 @@
 import { CircleAlert, CircleCheck } from 'lucide-react'
 import type * as React from 'react'
 
-import type { HoldNotice as HoldNoticeState } from '@/components/registration/types'
+import type { FormNotice as FormNoticeState } from '@/components/registration/types'
 
-interface HoldNoticeProps {
-  notice: HoldNoticeState
+interface FormNoticeProps {
+  notice: FormNoticeState
 }
 
 /**
- * Confirms the outcome of the last Hold so the operator is never left guessing.
+ * Reports the outcome of the last Hold or Issue Badge attempt, so the operator
+ * is never left guessing whether a write succeeded.
  *
- * Success is amber because a hold is a held state, not a completed one, and it
- * says plainly that no badge was assigned.
+ * A successful hold is amber, not green: it is a held state, not a completed
+ * one, and it says plainly that no badge was assigned. Badge issuance has its
+ * own full completion screen, so only its failures appear here.
  */
-const HoldNotice: React.FC<HoldNoticeProps> = ({ notice }) => {
+const FormNotice: React.FC<FormNoticeProps> = ({ notice }) => {
   if (notice.kind === 'error') {
     return (
       <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3">
@@ -39,4 +41,4 @@ const HoldNotice: React.FC<HoldNoticeProps> = ({ notice }) => {
   )
 }
 
-export default HoldNotice
+export default FormNotice
