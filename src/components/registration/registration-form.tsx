@@ -33,6 +33,7 @@ import { useEventConfig } from '@/hooks/use-event-config'
 import { useJitter } from '@/hooks/use-jitter'
 import { usePhoneLookup } from '@/hooks/use-phone-lookup'
 import { formatBadgeNumber } from '@/lib/badge'
+import { resolveUpiPayment } from '@/lib/upi'
 import { cn } from '@/lib/utils'
 
 const HOLD_ERROR_MESSAGES = {
@@ -490,6 +491,14 @@ const RegistrationForm: React.FC = () => {
   const isComplete = issuedRegistration !== null
 
   /**
+   * Derived from EventConfig, which remains the single source of truth for the
+   * organizer's UPI details. Null means UPI cannot be offered and Cash must be
+   * used. It carries no attendee or badge data, so it is identical for every
+   * registration.
+   */
+  const upiPayment = resolveUpiPayment(config)
+
+  /**
    * While handing a badge over, the header must show the badge just allocated,
    * not the next one waiting.
    */
@@ -547,6 +556,7 @@ const RegistrationForm: React.FC = () => {
           <PaymentStep
             amount={config.amount}
             eventName={config.eventName}
+            upiPayment={upiPayment}
             phone={phone}
             name={name}
             age={age}

@@ -61,6 +61,11 @@ Local persistence:
 - version 1
 - tables: registrations, config, outbox
 
+Payment QR:
+- qrcode, generated locally in the browser
+- organizer's personal UPI
+- no payment gateway
+
 Planned offline architecture:
 - PWA
 - Service Worker
@@ -399,19 +404,62 @@ Payment confirmation is manual.
 
 Do not implement automatic UPI transaction detection.
 
-Future UPI QR:
+### UPI QR
 
-- fixed amount ₹20
-- event payee
-- transaction note:
+The organizer's PERSONAL UPI details come from environment variables, never from
+committed source:
 
-`{Event Name} Badge Fee`
+`VITE_UPI_ID`
+`VITE_UPI_PAYEE_NAME`
 
-Example:
+Real values live only in an uncommitted `.env.local`; `.env.example` documents
+the names. Never put an authentication secret in a `VITE_*` variable — every one
+of them is bundled into the browser.
 
-`Navaratri 2026 Badge Fee`
+Startup bootstrap copies non-empty environment values into `EventConfig.upiId`
+and `EventConfig.payeeName`. A blank or absent value leaves the stored one alone,
+an identical value writes nothing at all, and badge state — `nextBadge`,
+`badgeStart`, `badgeEnd` — is never touched. Correcting the UPI details and
+restarting therefore costs nothing.
 
-The same QR can be reused.
+EventConfig remains the single source of truth for those values.
+
+The QR is generated locally in the browser from the bundled encoder. It makes no
+network request, so it keeps working at a desk with no connectivity. Completing
+the payment still needs the attendee's own UPI app and their connectivity.
+
+The encoded URI is:
+
+`upi://pay?pa=<upiId>&pn=<payeeName>&am=<amount>&cu=INR&tn=<Event Name> Badge Fee`
+
+`am` comes from `EventConfig.amount`, formatted to two decimal places.
+
+The SAME QR is valid for every attendee for the whole event. It contains NO
+attendee name, phone, age, badge number, registration id or transaction
+reference. This application performs no reconciliation, so a per-attendee
+reference would add nothing and would leak personal data into a code that is
+shown to strangers.
+
+Nothing generated is persisted. No image, data URL, canvas or URI is written to
+IndexedDB or copied into a registration; a registration stores only
+`paymentMethod`. The QR is a deterministic presentation artifact of EventConfig.
+
+The QR is black on white in BOTH themes. It is never tinted, inverted or made
+transparent — scannability beats branding.
+
+UPI configuration is NOT verification. The format check is restrained and makes
+no network call; it says nothing about whether the UPI ID exists or belongs to
+anyone.
+
+Confirming a UPI payment remains a manual operator action. There is no gateway,
+no callback, no polling, no status parsing and no automatic detection.
+`Payment Confirmed` becomes available only once a real QR is on screen, so an
+operator can never mark a UPI payment received with nothing presented to scan.
+
+If the UPI ID or payee name is missing or malformed, or `EventConfig.currency`
+is not `INR`, UPI fails closed: the panel reports that UPI payment is not
+configured, `Payment Confirmed` is unavailable, and the operator uses Cash.
+Attendee entry, Hold and Cash registration are all unaffected.
 
 ---
 
@@ -841,8 +889,8 @@ The application writes in exactly three places:
 3. Issue Badge — the completed registration, the `nextBadge` increment and the
    pending outbox row, in one transaction
 
-Outbox processing, the real UPI QR and Google Sheets synchronization remain
-future work. Nothing is sent anywhere yet.
+Outbox processing and Google Sheets synchronization remain future work. Nothing
+is sent anywhere yet.
 
 ### Database Safety
 
