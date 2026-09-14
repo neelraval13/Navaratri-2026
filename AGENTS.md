@@ -54,11 +54,16 @@ Theme:
 - Pink semantic primary
 - Neutral surfaces
 
+Local persistence:
+- Dexie
+- IndexedDB
+- database name: `navaratri-2026-registration`
+- version 1
+- tables: registrations, config, outbox
+
 Planned offline architecture:
 - PWA
 - Service Worker
-- IndexedDB
-- Dexie
 
 Planned backend:
 - Vercel Functions
@@ -558,30 +563,59 @@ Do not implement offline functionality until its assigned phase.
 
 ---
 
-## Planned Local Data Model
+## Local Data Model
 
-Future local storage will use Dexie + IndexedDB.
+Local storage uses Dexie + IndexedDB.
 
-Likely tables:
+Database name:
+
+`navaratri-2026-registration`
+
+Current version:
+
+1
+
+Tables:
 
 - registrations
-- outbox
 - config
+- outbox
 
-Held and completed registrations should preferably use registration status
-rather than separate local tables unless implementation requirements justify
-otherwise.
+IndexedDB is the durable local event store and the operational source of truth
+during the event.
 
-Potential statuses:
+Google Sheets is later synchronized FROM this local store.
+
+Held and completed registrations share the `registrations` table and are
+distinguished by registration status:
 
 - held
 - completed
 
-Every registration will eventually have a unique internal ID.
+A held registration has no badge number.
+
+Every registration has a unique internal ID.
+
+Registration data must never be stored in localStorage. The existing
+localStorage use for theme preference is unrelated and stays.
 
 Synchronization must eventually be idempotent.
 
-Do not implement this early.
+Startup bootstrap creates the default event config row ONLY when it does not
+already exist. Existing configuration, such as `nextBadge`, is never
+overwritten with defaults.
+
+### Database Safety
+
+Schema migrations must preserve existing event data.
+
+Destructive database clearing is forbidden during normal startup or migration.
+
+Never call, as part of startup or a migration:
+
+- `db.delete()`
+- `indexedDB.deleteDatabase()`
+- `table.clear()`
 
 ---
 

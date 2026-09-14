@@ -1,8 +1,15 @@
+import type { Gender as DomainGender } from '@/types/registration'
+
+export type { PaymentMethod } from '@/types/registration'
+
 export type RegistrationStep = 'attendee' | 'payment'
 
-export type Gender = '' | 'male' | 'female'
-
-export type PaymentMethod = 'upi' | 'cash'
+/**
+ * The attendee form starts with no gender selected, so the UI selection type is
+ * the domain gender plus an empty option. Stored records only ever hold a real
+ * domain gender.
+ */
+export type Gender = DomainGender | ''
 
 export type AttendeeField = 'phone' | 'name' | 'age' | 'gender'
 
