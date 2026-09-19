@@ -16,6 +16,7 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.2.6",
     "dexie": "^4.4.6",
+    "googleapis": "^180.0.0",
     "lucide-react": "^1.41.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",

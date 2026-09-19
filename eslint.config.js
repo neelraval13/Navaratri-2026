@@ -27,4 +27,16 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+
+  {
+    // Server-only code: Node globals, and an uppercase `POST` export is an HTTP
+    // method handler rather than a React component.
+    files: ['api/**/*.ts', 'server/**/*.ts'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

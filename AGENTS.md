@@ -70,10 +70,10 @@ Offline architecture:
 - PWA, installable via the browser's own install flow
 - vite-plugin-pwa with a Workbox-generated service worker
 
-Planned backend:
-- Vercel Functions
-- Google Sheets API
-- Google service account
+Backend:
+- Vercel Function at `POST /api/sync-registration`
+- Google Sheets API via `googleapis`
+- Google service account, server-side credentials only
 
 Do not change the agreed architecture unless explicitly instructed.
 
@@ -762,30 +762,150 @@ The spreadsheet will eventually contain two tabs:
 1. Badge Register
 2. Held Registrations
 
+IndexedDB remains the operational source of truth. Google Sheets is the
+synchronized central ledger, written to only by the server.
+
 ### Badge Register
 
-Final human-facing columns include:
+Visible columns, in order:
 
-- Badge Number
-- Name
-- Phone Number
-- WhatsApp Link
-- Age
-- Gender
-- Payment Method
-- Amount
-- Date
-- Time
+`A` Badge · `B` Name · `C` Phone · `D` WhatsApp Link · `E` Age · `F` Gender ·
+`G` Payment · `H` Amount · `I` Date · `J` Time
 
-Internal synchronization identifiers may be added as hidden/supporting columns.
+Technical columns, AFTER the human-facing ledger and hidden in the Sheet UI:
 
-Badge Register must remain numerically sorted ascending by badge number.
+`K` Registration ID · `L` Updated At
 
-Date and Time must be separate human-facing columns.
+Badge is stored as a NUMBER. The `#001` appearance is a display format only, so
+sorting and comparison stay numeric. The tab is kept sorted by Badge ascending.
 
-Use Asia/Kolkata for event date/time.
+### Held Registrations
 
-Internally retain a precise timestamp such as `completedAt`.
+Visible columns, in order:
+
+`A` Name · `B` Phone · `C` WhatsApp Link · `D` Age · `E` Gender · `F` Payment ·
+`G` Amount · `H` Held Date · `I` Held Time
+
+Technical columns, hidden:
+
+`J` Registration ID · `K` Updated At
+
+Payment is blank when the hold happened before a method was chosen.
+
+Date and Time are separate columns, formatted `DD/MM/YYYY` and `hh:mm:ss AM/PM`
+in Asia/Kolkata — never the server's or the browser's timezone. Completed rows
+derive them from `completedAt`, held rows from `heldAt`. The precise ISO
+timestamps stay in IndexedDB and in the hidden `Updated At` column.
+
+Phone is the raw 10 digits with no `+91`; the WhatsApp link carries the country
+code as `https://wa.me/91XXXXXXXXXX`.
+
+### Sync Bridge
+
+`POST /api/sync-registration` accepts ONE registration snapshot and upserts it.
+The shared wire contract lives in `src/shared/sync-contract.ts` and is
+framework-free, so the server and the future browser processor cannot disagree.
+Every field is validated at runtime; invalid input is rejected, never coerced.
+
+Service-account credentials are server-only. They must NEVER be given a `VITE_`
+prefix, because everything so named is bundled into the browser.
+
+**Registration ID is the remote idempotency key** — never name, phone or row
+position. Replaying the same snapshot never creates a second row.
+
+`Updated At` protects against stale writes. An incoming snapshot older than the
+remote row is ignored rather than allowed to downgrade newer Sheet state.
+
+**COMPLETED ALWAYS WINS OVER HELD.** If a registration already has a badge in
+Badge Register, a late-arriving held payload never resurrects it in Held
+Registrations. A successful completed sync clears that person's held row.
+
+**Badge collision fails closed.** If the incoming badge number already belongs
+to a DIFFERENT registration, the endpoint returns `badge-conflict` and writes
+nothing. The physical badge was already handed out, so a human must reconcile
+it. The server never overwrites the other attendee and never picks another
+number.
+
+Cross-device duplicate-person reconciliation is separate future work. Sync is
+never refused merely because another row shares a name or phone under a
+different Registration ID.
+
+### Sheet Write Safety
+
+Every cell is written through `spreadsheets.batchUpdate` with an explicitly
+typed `userEnteredValue`: `stringValue` for text, `numberValue` for numbers.
+`spreadsheets.values` with `USER_ENTERED` is never used for a row write, because
+it parses any string beginning with `=`, `+`, `-` or `@` as a formula — an
+attendee name could then execute inside the operator's spreadsheet.
+
+The WhatsApp cell is the ONLY `formulaValue` the server ever writes. It is built
+from a phone number already restricted to exactly ten digits plus a constant
+label, and the digit check is repeated at the cell builder so a non-conforming
+value degrades to a literal string rather than becoming a formula. No arbitrary
+request field may ever reach `formulaValue`.
+
+The human-facing name is stored literally. It is never sanitised, escaped or
+prefixed with an apostrophe.
+
+Sheet titles contain spaces, so every A1 range single-quotes the title
+(`'Badge Register'!A1:L`). An embedded quote is doubled.
+
+A completed snapshot's remote mutation is ONE `spreadsheets.batchUpdate`: the
+Badge Register append or update, the clearing of any lingering held row, and the
+numeric sort land together or not at all. Sorting is issued on every completed
+path — including `already-current` and `stale-ignored` — because it is always
+safe and repairs a ledger left unsorted by an earlier partial attempt. A stale
+completed request never overwrites the newer badge row but still clears a
+lingering held row, since a completed row already exists remotely.
+
+Held writes use the same typed-cell batch path and need no sorting.
+
+Tab initialisation is also one batch: header values, frozen header, hidden
+technical columns, text phone format and numeric badge format together, so a tab
+can never end up with a correct header but missing contract formatting.
+
+### Sheet Shape Safety
+
+The server creates the two tabs it owns if they are missing. Unrelated tabs are
+never touched.
+
+An existing tab is only safe to initialise when the ENTIRE application-owned
+range is blank. A blank header row with human data below it fails closed — that
+is somebody's spreadsheet, and stamping a header onto it would append beneath
+their records. A partial, reordered or different header also fails closed.
+
+A tab already containing MORE THAN ONE nonblank row with the same Registration
+ID fails closed with `sheet-shape-conflict`. The first duplicate is never chosen
+silently, because that would compound existing ledger corruption. The operator
+message stays generic; the id goes to the server log only.
+
+Held rows are cleared in place rather than deleted, because deleting a row
+shifts every index below it and would race with concurrent writers.
+
+### Concurrency Limitation
+
+Google Sheets offers no conditional unique append keyed on Registration ID, so
+the server can DETECT a duplicate but cannot prevent one being created by two
+simultaneous writers. No distributed lock is implemented and none should be.
+
+Phase 5B must therefore guarantee, in the browser:
+
+- one sync processor running at a time
+- one in-flight request per outbox item
+- no overlapping sync cycles
+
+Registration ids are locally generated UUIDs and each outbox row is owned by the
+device that wrote it, so single-flight per device is the intended concurrency
+control.
+
+The server never touches IndexedDB. A sync failure leaves the local record and
+its pending outbox row exactly as they were.
+
+`SYNC_ALLOWED_ORIGIN` restricts which origin may POST. This is NOT user
+authentication — any direct HTTP client can set an Origin header. Before public
+production use, the deployment must be access-controlled or a real
+authentication layer added. Never put a server secret in a `VITE_*` variable to
+try to authenticate the browser; it would simply be published.
 
 ---
 
@@ -933,9 +1053,13 @@ The application writes in exactly three places:
 3. Issue Badge — the completed registration, the `nextBadge` increment and the
    pending outbox row, in one transaction
 
-Outbox processing and Google Sheets synchronization remain future work. Nothing
-is sent anywhere yet, online or offline, and no outbox row is ever removed or
-marked synchronized.
+The browser still sends nothing anywhere. `POST /api/sync-registration` exists
+and is verified server-side, but no browser code calls it yet: there is no
+outbox processor, no startup or online-event sync, no retry timer and no sync
+status UI. No local outbox row is ever removed or marked synchronized.
+
+Draining the outbox is Phase 5B, deliberately only after the Sheet bridge is
+proven correct and idempotent.
 
 ### Database Safety
 

@@ -35,6 +35,54 @@ Two things this does not do:
 - Payment confirmation in this application is **manual**. There is no gateway
   and no automatic detection — the operator presses `Payment Confirmed`.
 
+## Google Sheets sync setup (server only)
+
+`POST /api/sync-registration` upserts one registration into a central Google
+Spreadsheet. Credentials are server-side only and never reach the browser.
+
+1. Create (or pick) a **Google Cloud project**.
+2. Enable the **Google Sheets API** for it.
+3. Create a **service account**, then create a JSON key for it.
+4. From that JSON take `client_email` and `private_key`. **Do not commit the
+   JSON file**, and do not add it to the repository in any form.
+5. Create or open the target **Google Spreadsheet** and copy its ID from the URL
+   (`https://docs.google.com/spreadsheets/d/<THIS_PART>/edit`).
+6. **Share that spreadsheet with the service-account email as an Editor.** Sync
+   fails until you do; the server never creates a spreadsheet of its own.
+7. Set these server environment variables (locally in `.env.local`, and in the
+   Vercel project settings for a deployment):
+
+   ```bash
+   GOOGLE_SHEETS_SPREADSHEET_ID=<spreadsheet id>
+   GOOGLE_SERVICE_ACCOUNT_EMAIL=<...@...iam.gserviceaccount.com>
+   GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+   SYNC_ALLOWED_ORIGIN=http://localhost:3000
+   ```
+
+   Escaped `\n` sequences in the private key are fine - the server converts them
+   to real newlines.
+
+8. **Never prefix these with `VITE_`.** Anything named `VITE_*` is compiled into
+   the browser bundle; a private key there would be public.
+
+The server creates the two tabs it owns - **Badge Register** and **Held
+Registrations** - if they are missing, writes their header rows, freezes the
+header, hides the technical columns and formats the badge column - all in one
+atomic request.
+
+A tab is only initialized when it is *completely* blank. Sync fails closed
+rather than touching a tab that has a different or partial header, a blank
+header with data underneath it, or two rows sharing one Registration ID. Other
+tabs are never read or modified.
+
+Note on `SYNC_ALLOWED_ORIGIN`: it stops another website's page from driving the
+endpoint, but it is **not user authentication** - any direct HTTP client can send
+whatever Origin header it likes. Before exposing this publicly, put the
+deployment behind access control or add a real authentication layer.
+
+**Phase 5A does not drain the browser outbox.** Nothing in the app calls this
+endpoint yet and no local outbox row is ever deleted. That is Phase 5B.
+
 ## Offline / PWA testing
 
 The service worker is disabled in `pnpm dev` on purpose — stale dev caches are

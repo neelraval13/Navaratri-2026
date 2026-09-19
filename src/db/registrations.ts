@@ -11,6 +11,7 @@ import {
   type RegistrationRecord,
 } from '@/db/types'
 import { normalizeName } from '@/lib/name'
+import { buildPendingOutboxId } from '@/shared/sync-contract'
 import type { Gender, PaymentMethod } from '@/types/registration'
 
 /**
@@ -77,14 +78,14 @@ export type HoldRegistrationResult =
   | { outcome: 'missing-config' }
 
 /**
- * One pending outbox row per registration.
+ * One pending outbox row per registration: repeated local edits before a sync
+ * overwrite the same row with the latest snapshot instead of piling up stale
+ * ones.
  *
- * Repeated local edits before a sync overwrite the same row with the latest
- * snapshot instead of piling up stale ones.
+ * Re-exported from the shared sync contract so the browser writer and the
+ * server validator derive the id from exactly one rule and cannot drift.
  */
-export const buildPendingOutboxId = (registrationId: string): string => {
-  return `registration:${registrationId}`
-}
+export { buildPendingOutboxId }
 
 /**
  * Creates or updates a held registration and enqueues it for future
