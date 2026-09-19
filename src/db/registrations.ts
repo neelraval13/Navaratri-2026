@@ -12,6 +12,7 @@ import {
 } from '@/db/types'
 import { normalizeName } from '@/lib/name'
 import { buildPendingOutboxId } from '@/shared/sync-contract'
+import { notifyOutboxChanged } from '@/sync/outbox-events'
 import type { Gender, PaymentMethod } from '@/types/registration'
 
 /**
@@ -107,7 +108,7 @@ export const holdRegistration = async (
   const name = input.name.trim()
   const normalizedName = normalizeName(input.name)
 
-  return await db.transaction(
+  const result = await db.transaction(
     'rw',
     db.registrations,
     db.config,
@@ -185,6 +186,14 @@ export const holdRegistration = async (
         : { outcome: 'updated', registration }
     },
   )
+
+  // Signalled after the commit, never from inside it: a listener must not
+  // observe a state that could still be rolled back.
+  if (result.outcome === 'created' || result.outcome === 'updated') {
+    notifyOutboxChanged()
+  }
+
+  return result
 }
 
 export interface IssueBadgeInput {
@@ -248,7 +257,7 @@ export const issueBadge = async (
   const name = input.name.trim()
   const normalizedName = normalizeName(input.name)
 
-  return await db.transaction(
+  const result = await db.transaction(
     'rw',
     db.registrations,
     db.config,
@@ -370,4 +379,11 @@ export const issueBadge = async (
       }
     },
   )
+
+  // Same rule: after the commit only.
+  if (result.outcome === 'issued') {
+    notifyOutboxChanged()
+  }
+
+  return result
 }

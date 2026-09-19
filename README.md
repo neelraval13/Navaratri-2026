@@ -80,8 +80,82 @@ endpoint, but it is **not user authentication** - any direct HTTP client can sen
 whatever Origin header it likes. Before exposing this publicly, put the
 deployment behind access control or add a real authentication layer.
 
-**Phase 5A does not drain the browser outbox.** Nothing in the app calls this
-endpoint yet and no local outbox row is ever deleted. That is Phase 5B.
+## Outbox synchronization
+
+**IndexedDB is the operational source of truth.** Every registration action -
+Hold, Resume, Issue Badge - is committed locally first and never waits for the
+network. Google Sheets is a ledger the browser catches up to afterwards.
+
+Each registration owns exactly one outbox row, keyed `registration:<id>`. A
+background processor drains that queue by POSTing one snapshot at a time to
+`/api/sync-registration`. It starts only after the local database has
+bootstrapped, and it runs automatically on:
+
+- app start
+- a local Hold or Issue Badge commit
+- the browser coming back online
+- the tab regaining focus or becoming visible
+- a retry timer for rows that failed
+
+Registration never blocks on any of this. A sync error is reported in the header
+and nothing else; the operator keeps working, and the record is already safe
+locally.
+
+**Offline** simply means rows accumulate. The header shows how many are pending
+and they are sent once connectivity returns.
+
+While the browser reports offline nothing is attempted at all - no request, no
+attempt counted, no error recorded - and that applies to the manual Retry
+button too. There is nothing to retry into, and a failed attempt would only push
+the row further down its backoff. Offline is a connectivity state, not a sync
+failure.
+
+### What "Synced" means
+
+`Synced` means **the local outbox is empty** - every registration this device
+has written has been accepted by the server. It is not a claim about anyone
+else's device.
+
+### Why acknowledgement is conditional
+
+An outbox row is deleted **only when the exact snapshot that was sent is still
+the one stored** - matched on both registration id and the payload's
+`updatedAt`. This is what protects the Held -> Completed transition: if an
+attendee is held, the request is sent, and the badge is issued before the
+response arrives, the newer completed snapshot has already overwritten that row.
+The held response then acknowledges nothing, and the completed snapshot is sent
+in the same cycle. A stale failure cannot contaminate a newer snapshot for the
+same reason.
+
+### Retries and errors
+
+Transient problems - a timeout, a network error, an unreadable response, a 429
+or any 5xx - are retried with a growing delay (5s, 15s, 30s, 60s, then every 5
+minutes).
+
+Some failures need a human instead and are shown as `Sync issue`:
+
+- `badge-conflict` - that badge number already belongs to a different
+  registration in the Sheet. The physical badge is already in someone's hand, so
+  the server refuses to overwrite it and **a person must reconcile the ledger.**
+- `sheet-shape-conflict` - the spreadsheet is not in the shape the app owns.
+- `invalid-request`, `forbidden-origin`, `sync-not-configured` - configuration
+  problems that retrying cannot fix.
+
+The endpoint is idempotent on Registration ID, so replaying a snapshot never
+creates a second row.
+
+### Testing it locally
+
+The endpoint is a Vercel Function, so plain `pnpm dev` does **not** serve it -
+use the Vercel CLI, which runs the function and the Vite dev server together:
+
+```bash
+pnpm dlx vercel@latest dev --listen 3001
+```
+
+Set `SYNC_ALLOWED_ORIGIN=http://localhost:3001` to match. Google credentials
+stay server-side; the browser never holds them and never imports `googleapis`.
 
 ## Offline / PWA testing
 
@@ -112,8 +186,8 @@ Worth knowing:
   while online before it can open without a network.
 - Registrations, event config and the outbox live in **IndexedDB**, never in the
   service worker's caches. The worker only stores the built app shell.
-- The outbox is **not synchronized yet**. `Online` means only that the browser
-  reports connectivity — nothing is sent anywhere.
+- `Online` is a **connectivity** indicator only. Synchronization has its own
+  separate indicator next to it (see *Outbox synchronization* above).
 - The UPI QR renders offline because it is generated locally. Completing the
   actual payment still needs the payer's own UPI app and their connectivity.
 - A new app version downloaded in the background never reloads a page that is

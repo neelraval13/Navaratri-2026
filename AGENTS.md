@@ -888,7 +888,7 @@ Google Sheets offers no conditional unique append keyed on Registration ID, so
 the server can DETECT a duplicate but cannot prevent one being created by two
 simultaneous writers. No distributed lock is implemented and none should be.
 
-Phase 5B must therefore guarantee, in the browser:
+The browser therefore guarantees, and must keep guaranteeing:
 
 - one sync processor running at a time
 - one in-flight request per outbox item
@@ -981,9 +981,9 @@ The header shows `Online` or `Offline mode` from `navigator.onLine` plus the
 Offline is amber, never destructive red: the desk is designed to keep working.
 
 `Online` means ONLY that the browser reports connectivity. It must never be
-presented as `Synced`, `Sync complete`, `Uploaded` or `Server connected` —
-no synchronization exists. The connectivity hook is kept separable so real sync
-state can be added later without reinterpreting this one.
+presented as `Synced`, `Sync complete`, `Uploaded` or `Server connected`.
+Synchronization has its own separate indicator beside it; the two are never
+merged, because a device can be online with work still queued.
 
 ---
 
@@ -1053,13 +1053,9 @@ The application writes in exactly three places:
 3. Issue Badge — the completed registration, the `nextBadge` increment and the
    pending outbox row, in one transaction
 
-The browser still sends nothing anywhere. `POST /api/sync-registration` exists
-and is verified server-side, but no browser code calls it yet: there is no
-outbox processor, no startup or online-event sync, no retry timer and no sync
-status UI. No local outbox row is ever removed or marked synchronized.
-
-Draining the outbox is Phase 5B, deliberately only after the Sheet bridge is
-proven correct and idempotent.
+Those three are the only writers of registration data. The outbox processor
+additionally updates and deletes outbox rows, and writes nothing else — it never
+touches a registration or the config row.
 
 ### Database Safety
 
@@ -1072,6 +1068,142 @@ Never call, as part of startup or a migration:
 - `db.delete()`
 - `indexedDB.deleteDatabase()`
 - `table.clear()`
+
+---
+
+## Outbox Synchronization
+
+A background processor drains the outbox to `POST /api/sync-registration`.
+
+IndexedDB stays the operational source of truth. Registration NEVER waits for
+synchronization: Hold, Resume and Issue Badge commit locally and return, and a
+sync failure never blocks, disables or reverses any registration action.
+
+The processor starts only AFTER `bootstrapDatabase()` has succeeded, for the
+same reason the registration form does.
+
+### Single Flight
+
+Rows are processed SERIALLY, one request in flight at a time, in `createdAt`
+order with the id as a tie-break, so a cycle is deterministic.
+
+Two layers keep cycles from overlapping:
+
+1. an in-tab promise latch — a concurrent caller receives the RUNNING cycle's
+   promise rather than starting a second one
+2. the Web Locks API (`navaratri-2026-outbox-sync`, `ifAvailable: true`) when
+   available, so other tabs on the same origin step aside instead of queueing
+
+Where Web Locks is unavailable the in-tab latch still applies. There is NO
+distributed lock between physical devices and none should be added — each outbox
+row is owned by the device that wrote it.
+
+### Conditional Acknowledgement
+
+This is the safety-critical rule.
+
+An outbox row is deleted ONLY when the snapshot that was sent is still the
+snapshot stored — matched on BOTH `registrationId` and `payload.updatedAt`. A
+row whose payload changed while the request was in flight is left alone and
+re-sent.
+
+A response for an older snapshot must never delete a newer one. This is what
+protects the Held → Completed transition: if a badge is issued while the held
+snapshot is still in flight, the held response acknowledges nothing and the
+completed snapshot is sent in the same cycle.
+
+Failure metadata is written under the same condition, so a stale failure can
+never contaminate a newer snapshot.
+
+The response is verified to echo the registration id and `payloadUpdatedAt` that
+were sent. A mismatch is treated as an invalid response, not as success.
+
+Each snapshot is attempted at most once per cycle.
+
+### Retryable Versus Attention
+
+Retryable — `sync-failed`, `network-error`, `timeout`, `invalid-response`,
+`unexpected-http` — retry automatically with a growing delay: 5s, 15s, 30s, 60s,
+then every 5 minutes.
+
+An opaque 429 or 5xx, including a bare 503 from a proxy, is `sync-failed`. Only
+a VALIDATED failure body may produce an attention code such as
+`sync-not-configured`; an unreadable error page never gets to park a row on the
+attention list.
+
+Attention — `badge-conflict`, `sheet-shape-conflict`, `invalid-request`,
+`forbidden-origin`, `sync-not-configured` — retrying cannot fix these. They
+surface in the sync indicator and wait for a human.
+
+`badge-conflict` specifically means the physical badge is already recorded
+against a DIFFERENT registration. A person must reconcile the ledger; the
+processor never renumbers a badge and the server never overwrites the other
+attendee.
+
+A global failure stops the current cycle rather than burning through every
+remaining row against the same broken configuration. A row-specific failure
+moves on to the next row.
+
+### Triggers
+
+Synchronization runs automatically on:
+
+1. application start, once the database is ready
+2. a local Hold or Issue Badge commit, signalled AFTER the transaction commits
+3. the browser going back online
+4. the tab regaining focus or becoming visible
+5. a retry timer for rows that are due
+
+### Offline Is Not A Sync Failure
+
+`navigator.onLine` is used in ONE direction only. It cannot prove the endpoint
+is reachable when it says online, but a browser reporting OFFLINE is certain
+enough to skip work that would fail.
+
+While it reports offline, for automatic AND manual runs alike:
+
+- no request is made
+- `attemptCount` is not incremented
+- `lastAttemptAt` is not touched
+- no failure code or message is written
+- NO retry timer is armed
+
+Rows stay durable and the status is still re-derived from IndexedDB. The
+`online` event is what resumes synchronization.
+
+Arming a timer while offline would fire immediately, skip, and re-arm — a
+zero-delay spin. A manual retry ignores backoff and the attention hold, but not
+this.
+
+### Another Tab Owns The Lock
+
+Failing to take the Web Lock is a SKIP, not a failure and not an attempt. No
+outbox row is read for sending and no attempt metadata changes.
+
+That tab schedules one restrained re-check — about a second — rather than
+competing for the lock in a zero-delay loop, so it still notices when the other
+tab has drained the queue.
+
+### Sync Status
+
+The header shows synchronization separately from connectivity.
+
+`Synced` means exactly one thing: the LOCAL OUTBOX IS EMPTY. It says nothing
+about any other device.
+
+Pending rows are shown as a count, sync issues as `Sync issue`, and a manual
+retry is offered whenever anything is pending.
+
+### Sync Boundaries
+
+The service worker never caches or intercepts `/api/sync-registration`.
+Registration data is never cached as an HTTP response.
+
+The browser NEVER holds Google credentials and never imports `googleapis` or
+anything under `server/sync/`. Only the shared wire contract in
+`src/shared/sync-contract.ts` is imported by both sides.
+
+Attendee names, phone numbers and full request payloads are never logged.
 
 ---
 

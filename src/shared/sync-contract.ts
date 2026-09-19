@@ -329,3 +329,133 @@ export const parseSyncRegistrationRequest = (body: unknown): ParseResult => {
 
   return { ok: false, message: 'payload.status must be "held" or "completed".' }
 }
+
+/**
+ * Client-side failure codes.
+ *
+ * The server's own outcomes plus the ways a request can fail before any server
+ * outcome exists. Stored on the outbox row as `lastErrorCode` so retry policy
+ * can tell "try again shortly" from "a human must look at this".
+ */
+export type OutboxSyncErrorCode =
+  | SyncFailureOutcome
+  | 'network-error'
+  | 'timeout'
+  | 'invalid-response'
+  | 'unexpected-http'
+
+const SUCCESS_OUTCOMES: readonly SyncSuccessOutcome[] = [
+  'synced',
+  'already-current',
+  'stale-ignored',
+  'completed-wins',
+]
+
+const FAILURE_OUTCOMES: readonly SyncFailureOutcome[] = [
+  'invalid-request',
+  'sync-not-configured',
+  'forbidden-origin',
+  'badge-conflict',
+  'sheet-shape-conflict',
+  'sync-failed',
+]
+
+export type ParseResponseResult =
+  | { ok: true; response: SyncRegistrationResponse }
+  | { ok: false; message: string }
+
+/**
+ * Validates an untrusted HTTP response body at runtime.
+ *
+ * TypeScript says nothing about what actually came back over the wire. A
+ * proxy, an error page or a future server change could return anything, and a
+ * malformed body must never be mistaken for an acknowledgement that retires a
+ * local snapshot.
+ */
+export const parseSyncRegistrationResponse = (
+  value: unknown,
+): ParseResponseResult => {
+  if (!isRecord(value)) {
+    return { ok: false, message: 'Response body must be a JSON object.' }
+  }
+
+  if (value.ok === true) {
+    const outcome = value.outcome
+
+    if (!SUCCESS_OUTCOMES.includes(outcome as SyncSuccessOutcome)) {
+      return { ok: false, message: 'Unknown success outcome.' }
+    }
+
+    if (!isNonEmptyString(value.registrationId)) {
+      return { ok: false, message: 'registrationId must be a non-empty string.' }
+    }
+
+    if (!isIsoTimestamp(value.payloadUpdatedAt)) {
+      return {
+        ok: false,
+        message: 'payloadUpdatedAt must be an ISO 8601 timestamp.',
+      }
+    }
+
+    return {
+      ok: true,
+      response: {
+        ok: true,
+        outcome: outcome as SyncSuccessOutcome,
+        registrationId: value.registrationId,
+        payloadUpdatedAt: value.payloadUpdatedAt,
+      },
+    }
+  }
+
+  if (value.ok !== false) {
+    return { ok: false, message: 'Response must carry a boolean `ok`.' }
+  }
+
+  const outcome = value.outcome
+
+  if (!FAILURE_OUTCOMES.includes(outcome as SyncFailureOutcome)) {
+    return { ok: false, message: 'Unknown failure outcome.' }
+  }
+
+  if (typeof value.message !== 'string') {
+    return { ok: false, message: 'Failure response must carry a message.' }
+  }
+
+  if (isPresent(value, 'registrationId') && typeof value.registrationId !== 'string') {
+    return { ok: false, message: 'registrationId must be a string when present.' }
+  }
+
+  if (isPresent(value, 'payloadUpdatedAt') && !isIsoTimestamp(value.payloadUpdatedAt)) {
+    return {
+      ok: false,
+      message: 'payloadUpdatedAt must be an ISO 8601 timestamp when present.',
+    }
+  }
+
+  const badgeNumber = value.badgeNumber
+
+  if (
+    isPresent(value, 'badgeNumber') &&
+    (typeof badgeNumber !== 'number' ||
+      !Number.isInteger(badgeNumber) ||
+      badgeNumber < 1)
+  ) {
+    return { ok: false, message: 'badgeNumber must be a positive integer.' }
+  }
+
+  const response: SyncFailureResponse = {
+    ok: false,
+    outcome: outcome as SyncFailureOutcome,
+    message: value.message,
+    ...(typeof value.registrationId === 'string'
+      ? { registrationId: value.registrationId }
+      : {}),
+    ...(isIsoTimestamp(value.payloadUpdatedAt)
+      ? { payloadUpdatedAt: value.payloadUpdatedAt }
+      : {}),
+    ...(typeof badgeNumber === 'number' ? { badgeNumber } : {}),
+  }
+
+  return { ok: true, response }
+}

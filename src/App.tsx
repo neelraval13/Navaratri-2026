@@ -3,6 +3,8 @@ import type * as React from 'react'
 import ConnectivityStatus from '@/components/connectivity-status'
 import DatabaseGate from '@/components/database-gate'
 import RegistrationForm from '@/components/registration/registration-form'
+import SyncManager from '@/components/sync-manager'
+import SyncStatus from '@/components/sync-status'
 import ThemeToggle from '@/components/theme-toggle'
 
 const App: React.FC = () => {
@@ -14,8 +16,12 @@ const App: React.FC = () => {
             Navaratri 2026
           </p>
 
+          {/* Connectivity and sync are separate facts: the browser can be
+              online while snapshots are still queued. */}
           <div className="flex items-center gap-3">
             <ConnectivityStatus />
+
+            <SyncStatus />
 
             <ThemeToggle />
           </div>
@@ -24,6 +30,9 @@ const App: React.FC = () => {
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
         <DatabaseGate>
+          {/* Starts only once bootstrap has succeeded. Renders nothing. */}
+          <SyncManager />
+
           <RegistrationForm />
         </DatabaseGate>
       </main>

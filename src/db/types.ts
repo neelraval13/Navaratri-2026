@@ -1,3 +1,4 @@
+import type { OutboxSyncErrorCode } from '@/shared/sync-contract'
 import type { Gender, PaymentMethod } from '@/types/registration'
 
 /**
@@ -108,8 +109,8 @@ export type OutboxOperation = 'upsert'
  * pending row in the same transaction as the registration itself, so the queue
  * can never drift from the record.
  *
- * Nothing drains the queue yet: there is no processor and nothing is sent
- * anywhere.
+ * The browser processor drains it: a row is deleted only when the server
+ * acknowledges the EXACT snapshot the row still holds.
  */
 export interface OutboxItem {
   id: string
@@ -119,8 +120,18 @@ export interface OutboxItem {
   payload: RegistrationRecord
   /** ISO 8601 UTC. */
   createdAt: string
+  /** Network sync attempts made for the CURRENT snapshot. Reset to 0 by a new one. */
   attemptCount: number
   /** ISO 8601 UTC. */
   lastAttemptAt?: string
+  /** Operator-safe summary of the last failure. Never a stack trace. */
   lastError?: string
+  /**
+   * Machine-readable last failure, used to separate retryable failures from
+   * ones needing operator attention.
+   *
+   * Optional and NON-INDEXED: IndexedDB records may carry extra properties, so
+   * this needs no store change, no new index and no version bump.
+   */
+  lastErrorCode?: OutboxSyncErrorCode
 }
