@@ -1,4 +1,7 @@
-import { readSyncEnvironment } from '../server/sync/environment'
+import {
+  readSyncEnvironment,
+  SYNC_DISABLED_LOG_MESSAGES,
+} from '../server/sync/environment'
 import { syncRegistration } from '../server/sync/sync-registration'
 import {
   parseSyncRegistrationRequest,
@@ -57,12 +60,20 @@ const success = (
  * the pending outbox row in place for Phase 5B to retry.
  */
 export async function POST(request: Request): Promise<Response> {
-  // Read configuration first: the Origin check itself depends on it.
-  const environment = readSyncEnvironment()
+  /**
+   * Read configuration first: the Origin check itself depends on it, and the
+   * release interlock must be settled before anything else happens.
+   *
+   * A disabled or mismatched deployment reports the EXISTING
+   * `sync-not-configured` contract. No new outcome is introduced for the
+   * release switch, so the browser keeps its Phase 5B classification, retains
+   * its outbox rows and carries on registering locally.
+   */
+  const configuration = readSyncEnvironment()
 
-  if (environment === null) {
+  if (!configuration.ok) {
     console.error(
-      'Navaratri sync: refused because required server environment variables are missing.',
+      `Navaratri sync: refused. ${SYNC_DISABLED_LOG_MESSAGES[configuration.reason]}`,
     )
 
     return failure(
@@ -71,6 +82,8 @@ export async function POST(request: Request): Promise<Response> {
       503,
     )
   }
+
+  const environment = configuration.environment
 
   /**
    * A same-origin browser POST always carries an Origin header. This keeps the

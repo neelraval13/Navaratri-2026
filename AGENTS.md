@@ -810,6 +810,9 @@ Every field is validated at runtime; invalid input is rejected, never coerced.
 Service-account credentials are server-only. They must NEVER be given a `VITE_`
 prefix, because everything so named is bundled into the browser.
 
+Credentials existing is NOT sufficient authority to write. Every Sheet write is
+additionally gated by the release interlock — see Production Release Safety.
+
 **Registration ID is the remote idempotency key** — never name, phone or row
 position. Replaying the same snapshot never creates a second row.
 
@@ -1204,6 +1207,100 @@ anything under `server/sync/`. Only the shared wire contract in
 `src/shared/sync-contract.ts` is imported by both sides.
 
 Attendee names, phone numbers and full request payloads are never logged.
+
+---
+
+## Production Release Safety
+
+### Release Interlock
+
+Two server-only variables gate every Sheet write. Neither may ever be `VITE_`
+prefixed.
+
+`SYNC_WRITE_ENABLED` must be EXACTLY `true`. Unset, blank, `false`, `TRUE`,
+`True`, `1`, `yes` and any padded value such as ` true` or `true ` all mean
+disabled. The value is NOT trimmed and NOT case-folded.
+
+`SYNC_ALLOWED_VERCEL_ENV` must be exactly `development`, `preview` or
+`production` — again no trimming and no case folding — and must exactly equal
+the runtime `VERCEL_ENV`, which is not trimmed either. An ABSENT `VERCEL_ENV`
+fails closed: this application is deliberately deployed through Vercel, and an
+unknown runtime is where writing to the real ledger is least safe.
+
+There must NEVER be a fallback that assumes `development` when `VERCEL_ENV` is
+missing. Deployed Production and Preview runtimes take the value from Vercel
+itself. Locally, `vercel dev` does NOT expose it to the function in this
+project, so guarded local sync testing supplies it explicitly:
+
+```bash
+env VERCEL_ENV=development pnpm dlx vercel@latest dev --listen 3001
+```
+
+The absent-value guard is not weakened to make local testing convenient.
+
+A whitespace or casing typo is a CONFIGURATION FAILURE. The interlock never
+repairs a near-miss value, because a release switch that guesses at intent is
+not a release switch.
+
+The interlock is evaluated BEFORE any credential is read, so a deployment with
+writes disabled never handles a private key at all.
+
+A failed interlock returns the EXISTING `sync-not-configured` contract. No new
+outcome was introduced for the release switch, so the browser's Phase 5B
+classification is unchanged: rows are retained, `Sync issue` is shown, and
+registration continues locally.
+
+This exists because the repository is connected to Vercel Git auto-deployment. A
+push can produce a deployment before production credentials and access
+protection are intentionally ready. Sheet writes must never become possible
+merely because credentials happen to exist.
+
+### Environment Policy
+
+Preview must NEVER use the production spreadsheet by default. The preferred
+preview configuration is no Google sync credentials at all and writes disabled.
+
+Production write enablement happens ONLY after deployment protection is in
+place. Vercel Authentication or Password Protection are the platform options; an
+application authentication layer would be a future phase.
+
+`SYNC_ALLOWED_ORIGIN` is a same-origin guard. It is NOT authentication and must
+never be described as such — any direct HTTP client can set an Origin header.
+
+If no suitable access-control mechanism exists, production Sheet writes stay
+disabled.
+
+### Persistent Storage
+
+After database readiness the browser requests persistent storage, at most once
+per session. It never blocks startup or registration, never shows a modal, never
+clears data, and a refusal or an exception is non-fatal.
+
+Persistence is BEST EFFORT, not a backup. It does not survive Clear Site Data,
+uninstalling the app, a wiped profile or a failed device. Google Sheets is the
+ledger for snapshots already acknowledged; pending rows exist only on the
+device.
+
+### Operations
+
+Event-day procedure lives in `docs/`:
+
+- `docs/PRODUCTION_RELEASE_CHECKLIST.md`
+- `docs/EVENT_DAY_RUNBOOK.md`
+
+No destructive reset or clear is ever part of normal event operations. Local
+inspection helpers are read-only by default, and a helper that prints personal
+data is separate and deliberate.
+
+Production must never seed test data: no test registrations, no test outbox
+rows, no test badge rows, no test phone numbers and no disposable spreadsheet
+id. EventConfig bootstrap defaults are the only automatic writes.
+
+### release:check
+
+`pnpm release:check` is a READ-ONLY repository audit. It must never mutate a
+file, run a Git command, contact a network, deploy, print a secret value or
+delete anything.
 
 ---
 

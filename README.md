@@ -65,6 +65,19 @@ Spreadsheet. Credentials are server-side only and never reach the browser.
 8. **Never prefix these with `VITE_`.** Anything named `VITE_*` is compiled into
    the browser bundle; a private key there would be public.
 
+9. Set the release interlock (also server-only, also never `VITE_`):
+
+   ```bash
+   SYNC_WRITE_ENABLED=true
+   SYNC_ALLOWED_VERCEL_ENV=development
+   ```
+
+   Credentials existing on a deployment is deliberately **not** enough to write
+   to the event ledger. See *Production and event day* below.
+
+   Locally you must also supply `VERCEL_ENV` yourself when starting the server -
+   see *Testing it locally*.
+
 The server creates the two tabs it owns - **Badge Register** and **Held
 Registrations** - if they are missing, writes their header rows, freezes the
 header, hides the technical columns and formats the badge column - all in one
@@ -79,6 +92,75 @@ Note on `SYNC_ALLOWED_ORIGIN`: it stops another website's page from driving the
 endpoint, but it is **not user authentication** - any direct HTTP client can send
 whatever Origin header it likes. Before exposing this publicly, put the
 deployment behind access control or add a real authentication layer.
+
+## Production and event day
+
+Two documents carry the operational detail:
+
+- **[docs/PRODUCTION_RELEASE_CHECKLIST.md](docs/PRODUCTION_RELEASE_CHECKLIST.md)** -
+  the PASS/FAIL gates to work through before going live
+- **[docs/EVENT_DAY_RUNBOOK.md](docs/EVENT_DAY_RUNBOOK.md)** - what to do at the
+  desk, including every failure mode and read-only inspection helpers
+
+```bash
+pnpm release:check
+```
+
+is a local, read-only repository audit: required files, documented variable
+names, no `VITE_`-prefixed server secrets, no service-account JSON, no
+private-key block, no `process.env` in client code. It never writes, deploys,
+runs git or contacts Google.
+
+### The sync release interlock
+
+Two server-only variables gate every Sheet write:
+
+| Variable | Meaning |
+|---|---|
+| `SYNC_WRITE_ENABLED` | Must be **exactly** `true`. Unset, blank, `false`, `TRUE`, `1`, `yes` and padded values like `" true"` all mean **disabled**. Not trimmed, not case-folded. |
+| `SYNC_ALLOWED_VERCEL_ENV` | Exactly `development`, `preview` or `production`. Must exactly equal the runtime `VERCEL_ENV`, which is not trimmed either. |
+
+A whitespace or casing typo is a configuration failure to fix, not something the
+code repairs for you.
+
+Both must be satisfied, and `VERCEL_ENV` must be present at all. Otherwise the
+endpoint returns the existing `sync-not-configured` response, makes no Google
+API call, and reads no credentials. The browser keeps its rows queued, shows
+`Sync issue`, and registration carries on locally — nothing is lost.
+
+There is deliberately **no fallback that assumes `development`** when
+`VERCEL_ENV` is missing. Deployed Production and Preview runtimes get the value
+from Vercel itself; locally you supply it explicitly.
+
+This exists because the repository is connected to Vercel Git auto-deployment. A
+push can create a deployment before production credentials and access protection
+are intentionally ready. **Sheet writes must never become possible merely
+because credentials happen to exist.**
+
+### Environment policy
+
+| Environment | Policy |
+|---|---|
+| **Development** | `SYNC_ALLOWED_VERCEL_ENV=development`, `SYNC_WRITE_ENABLED=true`, pointed at a **disposable** test spreadsheet only. Locally, `VERCEL_ENV` must be supplied explicitly when starting the server. |
+| **Preview** | Preferred: **no** Google sync credentials at all, writes disabled. Git pushes create previews; a preview must never touch the final ledger. If preview testing is genuinely needed, use a disposable preview-only spreadsheet with `SYNC_ALLOWED_VERCEL_ENV=preview`. |
+| **Production** | `SYNC_ALLOWED_VERCEL_ENV=production`. `SYNC_WRITE_ENABLED` stays unset until **every** gate in the release checklist passes - deployment protection included. |
+
+> `SYNC_ALLOWED_ORIGIN` is a same-origin guard. **It is not authentication.** Any
+> direct HTTP client can set an Origin header. Before enabling production
+> writes, the deployment must be protected by Vercel Authentication, Password
+> Protection, or an explicitly approved authentication layer in a future phase.
+
+### Persistent storage
+
+Once the local database is ready the app asks the browser for persistent
+storage, which resists automatic eviction under storage pressure. The request
+never blocks startup or registration, is made at most once per session, and a
+refusal changes nothing.
+
+It is **not a backup**. It does not survive Clear Site Data, uninstalling the
+app, a wiped profile or a failed device. Google Sheets is the ledger for
+snapshots already acknowledged; anything still pending exists only on the
+device.
 
 ## Outbox synchronization
 
@@ -148,11 +230,26 @@ creates a second row.
 ### Testing it locally
 
 The endpoint is a Vercel Function, so plain `pnpm dev` does **not** serve it -
-use the Vercel CLI, which runs the function and the Vite dev server together:
+use the Vercel CLI, which runs the function and the Vite dev server together.
+
+Pull the Development-scoped variables from the Vercel project first, if you keep
+them there:
 
 ```bash
-pnpm dlx vercel@latest dev --listen 3001
+pnpm dlx vercel@latest env pull .env.development.local --environment=development
 ```
+
+Then start the server **with `VERCEL_ENV` supplied explicitly**:
+
+```bash
+env VERCEL_ENV=development pnpm dlx vercel@latest dev --listen 3001
+```
+
+The `env VERCEL_ENV=development` prefix is required. We verified in this project
+that `vercel dev` does **not** expose `VERCEL_ENV` to the server function, so
+without it the interlock correctly fails closed with `sync-not-configured` and
+no sync happens. That guard is intentional and is not weakened for local use -
+the server never assumes `development` when the value is absent.
 
 Set `SYNC_ALLOWED_ORIGIN=http://localhost:3001` to match. Google credentials
 stay server-side; the browser never holds them and never imports `googleapis`.

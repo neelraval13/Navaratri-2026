@@ -3,6 +3,7 @@ import type * as React from 'react'
 import ConnectivityStatus from '@/components/connectivity-status'
 import DatabaseGate from '@/components/database-gate'
 import RegistrationForm from '@/components/registration/registration-form'
+import StorageManager from '@/components/storage-manager'
 import SyncManager from '@/components/sync-manager'
 import SyncStatus from '@/components/sync-status'
 import ThemeToggle from '@/components/theme-toggle'
@@ -30,7 +31,9 @@ const App: React.FC = () => {
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
         <DatabaseGate>
-          {/* Starts only once bootstrap has succeeded. Renders nothing. */}
+          {/* Both start only once bootstrap has succeeded, and render nothing. */}
+          <StorageManager />
+
           <SyncManager />
 
           <RegistrationForm />
