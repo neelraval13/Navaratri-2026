@@ -1296,6 +1296,61 @@ Production must never seed test data: no test registrations, no test outbox
 rows, no test badge rows, no test phone numbers and no disposable spreadsheet
 id. EventConfig bootstrap defaults are the only automatic writes.
 
+### Operator Access
+
+The production API auth boundary is a first-party OPERATOR SESSION, not the
+platform login.
+
+`EVENT_OPERATOR_ACCESS_CODE` (min 12 characters) and `EVENT_SESSION_SECRET`
+(min 32 characters) are server-only and must NEVER be `VITE_` prefixed. Both are
+read exactly, never trimmed. Missing or too-short values fail closed.
+
+The session is a stateless HMAC-SHA256 token in a `__Host-` prefixed cookie:
+`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`, 14 days. There
+is NO session store, and none should be added — rotating `EVENT_SESSION_SECRET`
+is how every session is revoked at once.
+
+`/api/sync-registration` checks the session FIRST, before the release interlock,
+before the origin guard and before any configuration is read. An unauthenticated
+caller gets `unauthorized` and learns nothing about the deployment.
+
+Access-code comparison is constant time over SHA-256 digests, with a fixed
+delay before a rejection. That delay is not a rate limiter — the access code
+must be a strong passphrase, which the length minimum enforces.
+
+Origin restriction is NOT authentication. Only the signed cookie grants API
+access.
+
+The access code is NEVER stored client-side, logged, returned or exposed to
+browser code.
+
+### Unauthorized Is Attention And Global
+
+`unauthorized` retains its outbox row, is attention-class (no automatic retry)
+and global (stops the cycle). A 401 never acknowledges or deletes a snapshot.
+
+A successful unlock triggers a MANUAL cycle, because the attention hold is what
+manual retry exists to bypass.
+
+### Trusted Device Marker
+
+`localStorage` records only that this device completed a real unlock. It is NOT
+authentication: no token, no code, no API authority. Its sole purpose is offline
+continuity, because an HttpOnly cookie cannot be inspected offline.
+
+Offline startup makes NO auth request. A trusted device opens; a device that has
+never been unlocked is told to connect once.
+
+### Never Yank The Form
+
+An expired session on a trusted device shows a banner and keeps the application
+open. It NEVER replaces the registration form with a login screen, never clears
+local data and never blocks local registration. Only a device that has never
+been unlocked sees the hard gate.
+
+Lock is auth only: it clears the session cookie and the marker, and touches
+nothing in IndexedDB, the outbox, the config, `nextBadge` or the PWA cache.
+
 ### Server Runtime
 
 Vercel Functions run as NODE ESM. Node does not guess file extensions for

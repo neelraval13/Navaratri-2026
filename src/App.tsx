@@ -2,6 +2,9 @@ import type * as React from 'react'
 
 import ConnectivityStatus from '@/components/connectivity-status'
 import DatabaseGate from '@/components/database-gate'
+import LockDeviceButton from '@/components/operator/lock-device-button'
+import OperatorAccessBanner from '@/components/operator/operator-access-banner'
+import OperatorAccessGate from '@/components/operator/operator-access-gate'
 import RegistrationForm from '@/components/registration/registration-form'
 import StorageManager from '@/components/storage-manager'
 import SyncManager from '@/components/sync-manager'
@@ -25,19 +28,27 @@ const App: React.FC = () => {
             <SyncStatus />
 
             <ThemeToggle />
+
+            <LockDeviceButton />
           </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
-        <DatabaseGate>
-          {/* Both start only once bootstrap has succeeded, and render nothing. */}
-          <StorageManager />
+        {/* Only a device that has NEVER been unlocked is gated here. A trusted
+            device always renders the app, even with an expired session. */}
+        <OperatorAccessGate>
+          <OperatorAccessBanner />
 
-          <SyncManager />
+          <DatabaseGate>
+            {/* Both start only once bootstrap has succeeded, and render nothing. */}
+            <StorageManager />
 
-          <RegistrationForm />
-        </DatabaseGate>
+            <SyncManager />
+
+            <RegistrationForm />
+          </DatabaseGate>
+        </OperatorAccessGate>
       </main>
     </div>
   )

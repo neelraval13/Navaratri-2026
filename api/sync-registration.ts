@@ -1,3 +1,9 @@
+import { readOperatorSessionCookie } from '../server/auth/cookies.js'
+import {
+  OPERATOR_AUTH_LOG_MESSAGES,
+  readOperatorAuthEnvironment,
+} from '../server/auth/environment.js'
+import { verifyOperatorSessionToken } from '../server/auth/operator-session.js'
 import {
   readSyncEnvironment,
   SYNC_DISABLED_LOG_MESSAGES,
@@ -60,6 +66,38 @@ const success = (
  * the pending outbox row in place for Phase 5B to retry.
  */
 export async function POST(request: Request): Promise<Response> {
+  /**
+   * AUTHENTICATION FIRST, before the release interlock and before any
+   * configuration is read.
+   *
+   * The operator session is the production API auth boundary. Ordering it first
+   * means an unauthenticated caller learns nothing about how this deployment is
+   * configured — not whether writes are enabled, not which origin is allowed,
+   * not whether Google credentials exist — and never reaches Google client
+   * creation.
+   */
+  const operatorAuth = readOperatorAuthEnvironment()
+
+  if (!operatorAuth.ok) {
+    console.error(
+      `Navaratri sync: refused. ${OPERATOR_AUTH_LOG_MESSAGES[operatorAuth.reason]}`,
+    )
+
+    // Same answer as a bad session: a caller cannot probe configuration state.
+    return failure('unauthorized', 'Operator session required.', 401)
+  }
+
+  const sessionToken = readOperatorSessionCookie(request.headers.get('cookie'))
+
+  if (
+    !verifyOperatorSessionToken(
+      sessionToken,
+      operatorAuth.environment.sessionSecret,
+    )
+  ) {
+    return failure('unauthorized', 'Operator session required.', 401)
+  }
+
   /**
    * Read configuration first: the Origin check itself depends on it, and the
    * release interlock must be settled before anything else happens.

@@ -50,6 +50,8 @@ const SUSPICIOUS_CREDENTIAL_FILENAMES = new Set([
 ])
 
 const SERVER_ONLY_NAMES = [
+  'EVENT_OPERATOR_ACCESS_CODE',
+  'EVENT_SESSION_SECRET',
   'GOOGLE_SHEETS_SPREADSHEET_ID',
   'GOOGLE_SERVICE_ACCOUNT_EMAIL',
   'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY',
@@ -67,7 +69,13 @@ const REQUIRED_FILES = [
   'package.json',
   'vite.config.ts',
   'api/sync-registration.ts',
+  'api/operator-login.ts',
+  'api/operator-session.ts',
+  'api/operator-logout.ts',
   'server/sync/environment.ts',
+  'server/auth/environment.ts',
+  'server/auth/operator-session.ts',
+  'server/auth/cookies.ts',
   'docs/EVENT_DAY_RUNBOOK.md',
   'docs/PRODUCTION_RELEASE_CHECKLIST.md',
   'public/pwa-192x192.png',
@@ -369,12 +377,20 @@ for (const path of walk(srcRoot)) {
 
   const text = readText(path)
 
-  if (text === null || !text.includes('process.env')) {
+  if (text === null) {
     continue
   }
 
-  // A name in a comment or a shared type is fine; reading process.env is not.
-  clientProblems.push(`${rel(path)} reads process.env in client code`)
+  // A name in a comment or a shared type is fine; READING it is not.
+  if (text.includes('process.env')) {
+    clientProblems.push(`${rel(path)} reads process.env in client code`)
+  }
+
+  for (const name of SERVER_ONLY_NAMES) {
+    if (text.includes(`import.meta.env.${name}`)) {
+      clientProblems.push(`${rel(path)} reads ${name} in client code`)
+    }
+  }
 }
 
 addCheck(

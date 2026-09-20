@@ -8,6 +8,7 @@ import {
   type OutboxSnapshotRef,
 } from '@/db/outbox'
 import type { OutboxItem } from '@/db/types'
+import { reportOperatorSessionRejected } from '@/auth/operator-access-store'
 import {
   parseSyncRegistrationRequest,
   parseSyncRegistrationResponse,
@@ -93,6 +94,10 @@ const classifyStatus = (status: number): OutboxSyncErrorCode => {
     return 'invalid-request'
   }
 
+  if (status === 401) {
+    return 'unauthorized'
+  }
+
   if (status === 403) {
     return 'forbidden-origin'
   }
@@ -127,6 +132,12 @@ const postSnapshot = async (
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request),
       cache: 'no-store',
+      /**
+       * Explicit, because the operator session cookie is what authenticates
+       * this request. It changes nothing about the body or the exact-snapshot
+       * semantics — only that the cookie is attached.
+       */
+      credentials: 'same-origin',
       signal: controller.signal,
     })
 
@@ -384,6 +395,16 @@ const processSnapshot = async (
   }
 
   await recordSnapshotFailure(ref, outcome.code, outcome.message)
+
+  /**
+   * The row is KEPT — an auth failure means the server never looked at it. The
+   * UI switches to "operator access required" so the desk knows what to do,
+   * and `unauthorized` being global stops the cycle rather than replaying the
+   * same 401 for every queued row.
+   */
+  if (outcome.code === 'unauthorized') {
+    reportOperatorSessionRejected()
+  }
 
   return isGlobalFailure(outcome.code) ? 'stop' : 'continue'
 }

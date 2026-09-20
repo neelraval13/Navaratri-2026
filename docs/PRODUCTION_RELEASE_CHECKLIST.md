@@ -52,7 +52,20 @@ meant to be client-visible.
 | 3.2 | `SYNC_ALLOWED_ORIGIN` is set to the exact canonical production origin | ☐ |
 | 3.3 | You have acknowledged that Origin restriction is **not** authentication | ☐ |
 
-Acceptable protection, in order of preference:
+First-party **Operator Access** is the application's own authentication and is
+the production API auth boundary. Vercel Authentication stays enabled in front
+of it until operator access is proven on a real deployment, then is disabled
+manually.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.4 | `EVENT_OPERATOR_ACCESS_CODE` set, 12+ chars, a strong passphrase not a PIN | ☐ |
+| 3.5 | `EVENT_SESSION_SECRET` set, 32+ chars, unique to production | ☐ |
+| 3.6 | Unlock verified on a real device; `/api/sync-registration` returns `unauthorized` without a session | ☐ |
+
+Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
+
+Platform protection, in order of preference:
 
 1. **Vercel Authentication** — if it suits the operators/team
 2. **Password Protection** — if the Vercel plan supports it

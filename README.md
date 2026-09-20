@@ -111,6 +111,51 @@ names, no `VITE_`-prefixed server secrets, no service-account JSON, no
 private-key block, no `process.env` in client code. It never writes, deploys,
 runs git or contacts Google.
 
+### Operator access (application authentication)
+
+The production site is a normal origin:
+
+```
+https://navaratri.neelluu.com
+```
+
+First use on a new device shows an **Operator Access** screen. Entering the
+shared access code exchanges it, server-side, for a signed session stored in an
+HttpOnly cookie that lasts 14 days - long enough to cover the whole event
+without a second unlock.
+
+Two server-only variables configure it (never `VITE_` prefixed):
+
+| Variable | Meaning |
+|---|---|
+| `EVENT_OPERATOR_ACCESS_CODE` | The shared desk code. Minimum 12 characters, compared exactly. Use a strong passphrase, **not** a 6-digit PIN. |
+| `EVENT_SESSION_SECRET` | HMAC-SHA256 signing key, minimum 32 characters. **Rotating it revokes every existing session.** |
+
+Permanent facts about this layer:
+
+- **The operator session is the production API auth boundary.**
+  `/api/sync-registration` requires it, and the check runs *before* the release
+  interlock - an unauthenticated caller learns nothing about how the deployment
+  is configured.
+- **Origin restriction is not authentication.** Neither `SYNC_ALLOWED_ORIGIN`
+  nor the same-origin check on the auth routes identifies a user. Only the
+  signed cookie grants API access.
+- **The access code is never stored client-side** - not in IndexedDB, not in
+  localStorage, not in sessionStorage. It is sent once and discarded.
+- The browser cannot read the session cookie; it is `HttpOnly`, `Secure`,
+  `SameSite=Strict`, `Path=/`, `__Host-` prefixed and carries no `Domain`.
+- A **trusted-device marker** in localStorage records only that this device has
+  completed a real unlock. It holds no token and grants no API authority - it
+  exists so an already-unlocked desk can reopen the PWA offline.
+- **Offline registration still works** on a previously unlocked device.
+- **If the session expires, pending outbox rows are retained.** The form is
+  never replaced by a login screen mid-registration; a banner offers Unlock and
+  synchronization resumes after it.
+
+Vercel Authentication remains enabled in front of production until this layer is
+proven in a real deployment, and is then disabled manually. It is no longer
+required once first-party operator access is working.
+
 ### The sync release interlock
 
 Two server-only variables gate every Sheet write:

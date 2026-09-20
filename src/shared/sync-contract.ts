@@ -77,6 +77,11 @@ export type SyncSuccessOutcome =
   | 'completed-wins'
 
 export type SyncFailureOutcome =
+  /**
+   * No valid operator session. The request never reached any sync logic, so
+   * nothing remote was read or written and the local row must be retained.
+   */
+  | 'unauthorized'
   | 'invalid-request'
   | 'sync-not-configured'
   | 'forbidden-origin'
@@ -352,6 +357,7 @@ const SUCCESS_OUTCOMES: readonly SyncSuccessOutcome[] = [
 ]
 
 const FAILURE_OUTCOMES: readonly SyncFailureOutcome[] = [
+  'unauthorized',
   'invalid-request',
   'sync-not-configured',
   'forbidden-origin',

@@ -6,6 +6,9 @@ import type { OutboxSyncErrorCode } from '@/shared/sync-contract'
  * they stay pending until the operator presses Retry.
  */
 const ATTENTION_CODES: readonly OutboxSyncErrorCode[] = [
+  // Retrying without a session only produces the same 401 forever. The
+  // operator unlocks, and the unlock triggers a manual cycle.
+  'unauthorized',
   'invalid-request',
   'forbidden-origin',
   'sync-not-configured',
@@ -19,6 +22,7 @@ const ATTENTION_CODES: readonly OutboxSyncErrorCode[] = [
  * Hitting the next row would just produce the identical error.
  */
 const GLOBAL_CODES: readonly OutboxSyncErrorCode[] = [
+  'unauthorized',
   'forbidden-origin',
   'sync-not-configured',
   'sheet-shape-conflict',

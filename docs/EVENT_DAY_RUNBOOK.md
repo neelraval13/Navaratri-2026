@@ -136,6 +136,16 @@ The badge number in the Sheet already belongs to a **different** registration.
 - open the Badge Register and the local registration and compare them
 - this needs human reconciliation — the server deliberately refuses to guess
 
+### Unlock sync
+
+If the header or a banner asks you to unlock:
+
+**Enter the operator access code once; pending records remain safe and will
+retry.**
+
+Registration, Hold and Issue Badge keep working the whole time. Nothing is lost
+and nothing needs to be re-entered.
+
 ### `sheet-shape-conflict`
 
 The spreadsheet is not in the shape the app owns.
