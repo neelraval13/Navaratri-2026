@@ -3,22 +3,22 @@ import type {
   SyncHeldPayload,
   SyncRegistrationRequest,
   SyncSuccessOutcome,
-} from '../../src/shared/sync-contract'
+} from '../../src/shared/sync-contract.js'
 import {
   decideCompletedSync,
   decideHeldSync,
   findByRegistrationId,
   findDuplicateRegistrationId,
   type SheetRowView,
-} from './decisions'
-import type { SyncEnvironment } from './environment'
-import { createSheetsClient, type SheetsClient } from './google-sheets'
+} from './decisions.js'
+import type { SyncEnvironment } from './environment.js'
+import { createSheetsClient, type SheetsClient } from './google-sheets.js'
 import {
   buildCompletedSyncRequests,
   buildHeldSyncRequests,
   buildTabInitializationRequests,
   type SheetsRequest,
-} from './requests'
+} from './requests.js'
 import {
   BADGE_REGISTER_COLUMNS,
   BADGE_REGISTER_HEADERS,
@@ -29,7 +29,7 @@ import {
   HELD_REGISTRATIONS_RANGE,
   HELD_REGISTRATIONS_TITLE,
   checkTabShape,
-} from './sheet-contract'
+} from './sheet-contract.js'
 
 export type SyncExecutionResult =
   | { ok: true; outcome: SyncSuccessOutcome }

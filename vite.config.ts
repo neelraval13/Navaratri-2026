@@ -31,6 +31,18 @@ export default defineConfig({
       injectRegister: null,
       /** No development worker: stale dev caches are confusing. Test via preview. */
       devOptions: { enabled: false },
+      /**
+       * Emits `crossorigin="use-credentials"` on the manifest link.
+       *
+       * Production sits behind Vercel Authentication. Without credentials the
+       * manifest request is redirected to the SSO origin and then blocked by
+       * CORS, so the installed app loses its name, icons and standalone
+       * display even though the page itself authenticated fine.
+       *
+       * The fix is to send the session cookie with the manifest request, NOT
+       * to make the manifest public or to weaken the deployment protection.
+       */
+      useCredentials: true,
       // No includeAssets: globPatterns below already covers everything copied
       // from public/, and listing a file twice only risks a precache conflict.
       manifest: {

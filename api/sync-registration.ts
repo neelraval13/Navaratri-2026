@@ -1,14 +1,14 @@
 import {
   readSyncEnvironment,
   SYNC_DISABLED_LOG_MESSAGES,
-} from '../server/sync/environment'
-import { syncRegistration } from '../server/sync/sync-registration'
+} from '../server/sync/environment.js'
+import { syncRegistration } from '../server/sync/sync-registration.js'
 import {
   parseSyncRegistrationRequest,
   type SyncFailureResponse,
   type SyncRegistrationResponse,
   type SyncSuccessResponse,
-} from '../src/shared/sync-contract'
+} from '../src/shared/sync-contract.js'
 
 /**
  * One registration snapshot is a few hundred bytes. This endpoint accepts a

@@ -1296,6 +1296,34 @@ Production must never seed test data: no test registrations, no test outbox
 rows, no test badge rows, no test phone numbers and no disposable spreadsheet
 id. EventConfig bootstrap defaults are the only automatic writes.
 
+### Server Runtime
+
+Vercel Functions run as NODE ESM. Node does not guess file extensions for
+relative imports, so every relative specifier under `api/` and `server/` MUST
+carry an explicit `.js` extension in the TypeScript source. TypeScript resolves
+`./foo.js` back to `./foo.ts` for typechecking; the emitted runtime JavaScript
+keeps `.js`.
+
+An extensionless specifier crashes the deployed function at MODULE LOAD, before
+the handler runs — it is not caught by any test that only imports TypeScript.
+
+`tsconfig.server.json` uses `module` and `moduleResolution` of `NodeNext` so
+this fails typecheck. `release:check` enforces it independently. Do not relax
+either to `bundler`: that is what allowed the failure through.
+
+Package specifiers such as `googleapis` are unaffected. Browser code under
+`src/` is bundled by Vite and keeps extensionless imports.
+
+### Production Access And The Manifest
+
+Production is behind Vercel Authentication. The PWA manifest link is therefore
+emitted with `crossorigin="use-credentials"` (`useCredentials: true` in the
+VitePWA config), because an unauthenticated manifest request is redirected to
+the SSO origin and blocked by CORS.
+
+The fix is to send credentials, never to make the manifest public or to weaken
+deployment protection.
+
 ### release:check
 
 `pnpm release:check` is a READ-ONLY repository audit. It must never mutate a

@@ -17,6 +17,7 @@ here runs git, deploys, or contacts Google.
 | 1.1 | `pnpm lint` exits clean | ☐ |
 | 1.2 | `pnpm build` succeeds | ☐ |
 | 1.3 | `pnpm release:check` reports all checks passed | ☐ |
+| 1.3a | No stray credential file in the working tree (release:check flags these by path) | ☐ |
 | 1.4 | Working tree is in the state you intend to ship (inspect it yourself) | ☐ |
 | 1.5 | You know exactly which commit is being deployed | ☐ |
 

@@ -150,6 +150,27 @@ because credentials happen to exist.**
 > writes, the deployment must be protected by Vercel Authentication, Password
 > Protection, or an explicitly approved authentication layer in a future phase.
 
+### Server runtime notes
+
+Vercel Functions run as **Node ESM**, and Node does not guess file extensions
+for relative imports. Every relative specifier under `api/` and `server/`
+therefore carries an explicit `.js` extension in the TypeScript source -
+TypeScript resolves it back to the `.ts` file for typechecking:
+
+```ts
+import { readSyncEnvironment } from '../server/sync/environment.js'
+```
+
+`tsconfig.server.json` uses `NodeNext` module resolution so an extensionless
+relative import fails typecheck instead of crashing the deployed function at
+module load. `pnpm release:check` enforces the same rule independently.
+
+Production sits behind **Vercel Authentication**, so the PWA manifest link is
+emitted with `crossorigin="use-credentials"` (`useCredentials: true` in the
+VitePWA config). Without it the manifest request is redirected to the SSO origin
+and blocked by CORS, and the installed app loses its name, icons and standalone
+display.
+
 ### Persistent storage
 
 Once the local database is ready the app asks the browser for persistent

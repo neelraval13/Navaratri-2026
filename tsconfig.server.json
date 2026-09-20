@@ -6,8 +6,13 @@
     "types": ["node"],
     "skipLibCheck": true,
 
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    /* Node ESM semantics, matching how Vercel actually runs this code: the
+       function is transpiled to ESM JavaScript and Node does NOT guess file
+       extensions for relative imports. `bundler` resolution accepted
+       extensionless specifiers that crashed the deployed function at module
+       load, so the typecheck now enforces explicit `.js` specifiers. */
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,

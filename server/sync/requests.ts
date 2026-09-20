@@ -3,8 +3,8 @@ import type { sheets_v4 } from 'googleapis'
 import type {
   SyncCompletedPayload,
   SyncHeldPayload,
-} from '../../src/shared/sync-contract'
-import type { CompletedSyncDecision, HeldSyncDecision } from './decisions'
+} from '../../src/shared/sync-contract.js'
+import type { CompletedSyncDecision, HeldSyncDecision } from './decisions.js'
 import {
   BADGE_REGISTER_COLUMNS,
   HELD_REGISTRATIONS_COLUMNS,
@@ -13,7 +13,7 @@ import {
   buildHeaderRow,
   buildHeldRegistrationRow,
   type SheetCell,
-} from './sheet-contract'
+} from './sheet-contract.js'
 
 export type SheetsRequest = sheets_v4.Schema$Request
 

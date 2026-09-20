@@ -302,6 +302,62 @@ for (const path of scannableFiles) {
 
 addCheck('no-private-key-block', 'No private-key block in the repository', pemProblems)
 
+// --- G2. server relative imports are Node-ESM resolvable --------------------
+/**
+ * Vercel transpiles the function to ESM JavaScript and Node does NOT guess file
+ * extensions for relative imports. An extensionless specifier here crashes the
+ * deployed function at module load, before the handler ever runs:
+ *
+ *   ERR_MODULE_NOT_FOUND: Cannot find module '/var/task/server/sync/environment'
+ *
+ * Package specifiers are unrestricted; only relative ones need an extension.
+ */
+const RUNTIME_EXTENSIONS = ['.js', '.mjs', '.cjs', '.json', '.node']
+
+const SPECIFIER_PATTERNS = [
+  /(?:^|[\s;}])from\s*(['"])(\.[^'"]*)\1/g, // import/export ... from '...'
+  /(?:^|[\s;}])import\s*(['"])(\.[^'"]*)\1/g, // bare side-effect import
+  /\bimport\s*\(\s*(['"])(\.[^'"]*)\1\s*\)/g, // dynamic import('...')
+]
+
+const esmProblems = []
+
+for (const directory of ['api', 'server']) {
+  for (const path of walk(join(ROOT, directory))) {
+    if (!/\.(ts|tsx|mts|cts|js|mjs)$/.test(basename(path))) {
+      continue
+    }
+
+    const text = readText(path)
+
+    if (text === null) {
+      continue
+    }
+
+    for (const pattern of SPECIFIER_PATTERNS) {
+      pattern.lastIndex = 0
+
+      let match = pattern.exec(text)
+
+      while (match !== null) {
+        const specifier = match[2]
+
+        if (!RUNTIME_EXTENSIONS.some((ext) => specifier.endsWith(ext))) {
+          esmProblems.push(`${rel(path)} imports "${specifier}" without a runtime extension`)
+        }
+
+        match = pattern.exec(text)
+      }
+    }
+  }
+}
+
+addCheck(
+  'server-esm-imports',
+  'Server relative imports carry a runtime extension',
+  esmProblems,
+)
+
 // --- G. client code never reads a server-only variable ----------------------
 const clientProblems = []
 const srcRoot = join(ROOT, 'src')

@@ -1,6 +1,6 @@
 import { google, type sheets_v4 } from 'googleapis'
 
-import type { SyncEnvironment } from './environment'
+import type { SyncEnvironment } from './environment.js'
 
 /** The narrowest scope that can read and write the target spreadsheet. */
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'

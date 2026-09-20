@@ -3,7 +3,7 @@ import type {
   SyncGender,
   SyncHeldPayload,
   SyncPaymentMethod,
-} from '../../src/shared/sync-contract'
+} from '../../src/shared/sync-contract.js'
 
 /** The two application-owned tabs. No other tab is ever read or written. */
 export const BADGE_REGISTER_TITLE = 'Badge Register'
