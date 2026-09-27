@@ -51,6 +51,8 @@ const SUSPICIOUS_CREDENTIAL_FILENAMES = new Set([
 
 const SERVER_ONLY_NAMES = [
   'DATABASE_URL',
+  'EVENT_ADMIN_ACCESS_CODE',
+  'EVENT_ADMIN_SESSION_SECRET',
   'EVENT_OPERATOR_ACCESS_CODE',
   'EVENT_SESSION_SECRET',
   'GOOGLE_SHEETS_SPREADSHEET_ID',
@@ -80,6 +82,14 @@ const REQUIRED_FILES = [
   'server/db/client.ts',
   'server/db/environment.ts',
   'server/db/schema.ts',
+  'server/admin-auth/environment.ts',
+  'server/admin-auth/session.ts',
+  'server/admin-auth/cookies.ts',
+  'server/admin/registry.ts',
+  'api/admin-login.ts',
+  'api/admin-session.ts',
+  'api/admin-logout.ts',
+  'docs/ADMIN.md',
   'drizzle.config.ts',
   'docs/DATABASE.md',
   'scripts/verification/phase-7b.mjs',
@@ -448,6 +458,82 @@ addCheck(
   'Database stays server-side and migrations stay manual',
   databaseProblems,
 )
+
+// --- G4. the admin realm stays distinct and server-side --------------------
+const adminProblems = []
+
+const OPERATOR_COOKIE = '__Host-navaratri_operator_session'
+const ADMIN_COOKIE = '__Host-navaratri_admin_session'
+
+const adminCookieSource = readText(join(ROOT, 'server/admin-auth/cookies.ts'))
+const operatorCookieSource = readText(join(ROOT, 'server/auth/cookies.ts'))
+
+if (adminCookieSource === null || operatorCookieSource === null) {
+  adminProblems.push('a cookie module could not be read')
+} else {
+  // The two realms must never share a cookie: one credential satisfying both
+  // would make an unlocked event device an administrator.
+  if (!adminCookieSource.includes(ADMIN_COOKIE)) {
+    adminProblems.push('the admin cookie name is missing')
+  }
+
+  if (adminCookieSource.includes(OPERATOR_COOKIE)) {
+    adminProblems.push('the admin cookie module references the operator cookie')
+  }
+
+  if (operatorCookieSource.includes(ADMIN_COOKIE)) {
+    adminProblems.push('the operator cookie module references the admin cookie')
+  }
+}
+
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path)
+
+  if (text === null) {
+    continue
+  }
+
+  for (const name of ['EVENT_ADMIN_ACCESS_CODE', 'EVENT_ADMIN_SESSION_SECRET']) {
+    if (text.includes(name)) {
+      adminProblems.push(`${rel(path)} references ${name} in client code`)
+    }
+  }
+
+  if (/from\s+['"][^'"]*server\/admin/.test(text)) {
+    adminProblems.push(`${rel(path)} imports server/admin from client code`)
+  }
+}
+
+// The SPA must serve /admin on a direct visit, without a catch-all rewrite.
+const vercelConfig = readText(join(ROOT, 'vercel.json'))
+
+if (vercelConfig === null) {
+  adminProblems.push('vercel.json could not be read')
+} else {
+  let rewrites = []
+
+  try {
+    rewrites = JSON.parse(vercelConfig).rewrites ?? []
+  } catch {
+    adminProblems.push('vercel.json could not be parsed')
+  }
+
+  if (!rewrites.some((rule) => rule.source === '/admin')) {
+    adminProblems.push('vercel.json has no /admin rewrite')
+  }
+
+  for (const rule of rewrites) {
+    if (typeof rule.source === 'string' && /[*:()]/.test(rule.source)) {
+      adminProblems.push(`rewrite "${rule.source}" is a wildcard and could capture /api`)
+    }
+  }
+}
+
+addCheck('admin-realm', 'Admin is a separate server-side realm', adminProblems)
 
 // --- G. client code never reads a server-only variable ----------------------
 const clientProblems = []

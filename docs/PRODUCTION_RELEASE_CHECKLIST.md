@@ -66,6 +66,10 @@ manually.
 | 3.6 | Unlock verified on a real device; `/api/sync-registration` returns `unauthorized` without a session | ☐ |
 
 | 3.7 | Operator-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
+| 3.8 | `EVENT_ADMIN_ACCESS_CODE` set (8 char minimum; use a longer passphrase), distinct from the operator code | ☐ |
+| 3.9 | `EVENT_ADMIN_SESSION_SECRET` set, 32+ chars, and a different value from `EVENT_SESSION_SECRET` (recommended; isolation is enforced cryptographically regardless) | ☐ |
+| 3.10 | Admin-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
+| 3.11 | `/admin` verified to require its own sign-in, and an operator session does not reach it | ☐ |
 
 Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
 

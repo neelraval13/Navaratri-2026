@@ -165,6 +165,17 @@ const HomePage: React.FC = () => {
           description="Prize allocation and handover."
         />
       </div>
+
+      {/* Deliberately a subtle link, not a module card: Admin is a control
+          plane in its own security realm, not an event operation. */}
+      <p className="text-xs text-muted-foreground">
+        <Link
+          href={ROUTES.admin}
+          className="underline-offset-4 hover:underline"
+        >
+          Admin
+        </Link>
+      </p>
     </div>
   )
 }

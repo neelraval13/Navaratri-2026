@@ -56,7 +56,14 @@ check('  offers Back to Home', [unknown.html.includes('Back to Home'), hrefsIn(u
 const homeHrefs = hrefsIn(home.html)
 check('Home badge card routes correctly', homeHrefs.includes('/badge-registration'), true)
 check('Home device card routes correctly', homeHrefs.includes('/device-registration'), true)
-check('coming-soon cards do NOT navigate', homeHrefs, ['/badge-registration', '/device-registration'])
+// Home links to the two built modules plus the subtle Admin link. What must
+// never appear is a link behind a Coming soon card.
+check('Home links only to real destinations', homeHrefs.sort(),
+  ['/admin', '/badge-registration', '/device-registration'])
+check('coming-soon cards do NOT navigate',
+  homeHrefs.filter((href) => /dandiya|prize/i.test(href)), [])
+check('  Admin is a subtle link, not a module card',
+  /<a[^>]*href="\/admin"[^>]*>\s*Admin\s*<\/a>/.test(home.html), true)
 check('  they are marked and inert',
   [(home.html.match(/Coming soon/g) ?? []).length, home.html.includes('aria-disabled="true"')], [2, true])
 check('  no fake module routes exist',
@@ -78,7 +85,8 @@ check('router uses real pathnames, not hash URLs', /hashLocation|useHashLocation
 console.log('\n=== 10. API IS NEVER SWALLOWED BY THE SPA REWRITE ===')
 const vercelConfig = JSON.parse(read('vercel.json'))
 const rewriteSources = vercelConfig.rewrites.map((r) => r.source)
-check('rewrites are explicit, not a catch-all', rewriteSources, ['/badge-registration', '/device-registration'])
+check('rewrites are explicit, not a catch-all', rewriteSources.sort(),
+  ['/admin', '/badge-registration', '/device-registration'])
 check('  no wildcard or regex source', rewriteSources.some((s) => /[*:()]/.test(s)), false)
 for (const api of ['/api/operator-login', '/api/operator-session', '/api/operator-logout', '/api/sync-registration'])
   check(`  ${api} is not matched`, rewriteSources.includes(api), false)
@@ -162,10 +170,20 @@ check('  exactly three stores, no new index',
 check('  no route field added to the schema', /route|path|page/.test(storesBlock), false)
 
 console.log('\n=== 6. APP HIERARCHY ===')
-check('exactly one DatabaseGate', (appSource.match(/<DatabaseGate>/g) ?? []).length, 1)
-check('exactly one SyncManager', (appSource.match(/<SyncManager \/>/g) ?? []).length, 1)
-check('  SyncManager is inside DatabaseGate', appSource.indexOf('<DatabaseGate>') < appSource.indexOf('<SyncManager />'), true)
-check('  and OUTSIDE the router', appSource.indexOf('<SyncManager />') < appSource.indexOf('<AppRouter />'), true)
+/**
+ * Phase 9B moved the event shell out of App.tsx into EventAppGate, so that
+ * `/admin` can render outside Operator Access. The guarantees are unchanged:
+ * one gate, one sync processor, mounted once for every event route.
+ */
+const shellSource = read('src/components/event-app-gate.tsx')
+const routerSourceForShell = read('src/components/app-router.tsx')
+check('exactly one DatabaseGate', (shellSource.match(/<DatabaseGate>/g) ?? []).length, 1)
+check('exactly one SyncManager', (shellSource.match(/<SyncManager \/>/g) ?? []).length, 1)
+check('  SyncManager is inside DatabaseGate', shellSource.indexOf('<DatabaseGate>') < shellSource.indexOf('<SyncManager />'), true)
+check('  and OUTSIDE the page routes', shellSource.indexOf('<SyncManager />') < shellSource.indexOf('{children}'), true)
+check('  the shell mounts once for all event routes',
+  (routerSourceForShell.match(/<EventAppGate>/g) ?? []).length, 1)
+check('  App.tsx renders only the router', (appSource.match(/<AppRouter \/>/g) ?? []).length, 1)
 const featurePageSources = ['src/pages/home-page.tsx', 'src/pages/badge-registration-page.tsx',
   'src/pages/device-registration-page.tsx', 'src/pages/not-found-page.tsx',
   'src/components/app-router.tsx'].map((f) => stripComments(read(f))).join('\n')

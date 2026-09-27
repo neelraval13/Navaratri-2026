@@ -30,6 +30,40 @@ direct visit or refresh works while `/api/*` can never be captured by the SPA
 fallback. The service worker's navigation fallback serves the cached shell for
 deep links offline, with `/api/` denylisted.
 
+## Admin control plane
+
+`/admin` manages the **central device registry**: events, devices, device
+attributes and badge-range assignment. Full detail in
+**[docs/ADMIN.md](docs/ADMIN.md)**.
+
+Admin is a **separate security realm** from Operator Access — different
+cookie, different secret, different lifetime (12 hours vs 14 days). Neither
+credential satisfies the other, and the event application is never wrapped in
+Admin auth.
+
+It needs `DATABASE_URL`, `EVENT_ADMIN_ACCESS_CODE` (8+) and
+`EVENT_ADMIN_SESSION_SECRET` (32+). With any absent, `/admin` fails closed and
+the event application is unaffected.
+
+Admin signatures are domain-separated, so each realm rejects the other's token
+**even if the two secrets were identical** — separation is enforced in code,
+not by an operational rule. `/admin` does not sit behind Operator Access.
+
+Admin manages **devices, not attendees**, and is online-only: registry data is
+never cached in IndexedDB.
+
+Device capabilities are `registration` and `prizes`. **Registration includes
+physical badge issuance** — issuing is the last step of registering an
+attendee, so it is one permission, not two. The badge range stays separate
+data: `registration` says a device may run the workflow, `badge_assignments`
+says which physical numbers it owns.
+
+**Phase 9B deliberately stops short of:** device passwords, a heartbeat, and
+central enforcement of `enabled` — devices still use Operator Access, so
+disabling a device changes central state only. `/device-registration` remains
+the transitional local flow and is not yet linked to central records. Those
+connect in Phase 9C.
+
 ## Central database (Phase 9A — foundation only)
 
 A Neon PostgreSQL database holds **central operational metadata**: events,

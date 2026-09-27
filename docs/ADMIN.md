@@ -1,0 +1,292 @@
+# Admin Control Plane
+
+`/admin` is the central control plane: the device registry for an event, its
+device attributes, and badge-range assignment.
+
+It manages **devices, not attendees**. No attendee name, phone, age, gender or
+payment is ever visible here, because none of it exists in the central
+database.
+
+---
+
+## A separate security realm
+
+Admin and Operator Access are **two different realms**, deliberately:
+
+| | Operator Access | Admin Access |
+|---|---|---|
+| Unlocks | An event desk — registration, holds, badge issuance | `/admin` — the central registry |
+| Cookie | `__Host-navaratri_operator_session` | `__Host-navaratri_admin_session` |
+| Secret | `EVENT_SESSION_SECRET` | `EVENT_ADMIN_SESSION_SECRET` |
+| Code | `EVENT_OPERATOR_ACCESS_CODE` (12+) | `EVENT_ADMIN_ACCESS_CODE` (8+) |
+| Lifetime | 14 days — a desk must survive the event | 12 hours — a privileged online tool |
+| Works offline | Yes, on a trusted device | No, by design |
+
+**Neither credential satisfies the other, and that is enforced in code.**
+
+Admin signatures cover a domain-separation context prepended to the payload,
+so the two realms sign different messages even when handed the same key:
+
+```
+operator:  HMAC(secret, encodedPayload)
+admin:     HMAC(secret, "navaratri-admin-session-v1:" + encodedPayload)
+```
+
+So **even if the two secrets were accidentally identical**:
+
+- an operator token is rejected by the admin verifier
+- an admin token is rejected by the operator verifier
+
+The operator token format and verifier are untouched, so every operator
+session currently live stays valid. A distinct `t` claim on the admin token is
+kept as a second, independent barrier.
+
+> Distinct secrets are still **recommended** — rotating one realm should not
+> disturb the other, and a shared secret widens the blast radius of a leak.
+> But realm separation no longer depends on it.
+
+Only `/admin` is wrapped in the Admin gate. The event application is never
+behind it.
+
+---
+
+## Requirements
+
+Admin needs all three:
+
+- `DATABASE_URL`
+- `EVENT_ADMIN_ACCESS_CODE` (minimum 8 characters, compared exactly — not
+  trimmed, not case-folded)
+
+  8 is the floor, not a recommendation. A short admin code leans on the edge
+  rate limit for `POST /api/admin-login` (5 attempts per minute per IP) and
+  the fixed wrong-code delay; neither replaces entropy, so prefer a passphrase
+  well above the minimum.
+- `EVENT_ADMIN_SESSION_SECRET` (minimum 32 characters)
+
+With any of them absent, `/admin` fails closed with a clear message and **the
+event application is completely unaffected** — it still loads, authenticates,
+routes, registers devices, issues badges offline and syncs to Sheets.
+
+Every central-data endpoint verifies the admin session **first**, then
+validates the request, and only then touches the database. An unauthenticated
+caller cannot even determine whether a database exists.
+
+All Admin responses are `Cache-Control: no-store`.
+
+---
+
+## Events
+
+The central database may contain **zero events**, and nothing seeds one
+automatically.
+
+- **Zero events** → Event Setup, where an Admin creates the first one
+- **One event** → selected automatically
+- **Several events** → an event selector
+
+The Event Setup form suggests `Navaratri 2026` / `navaratri-2026` /
+`Asia/Kolkata`, but those are UI defaults an operator can change; the server
+validates whatever is submitted (slug shape, real IANA timezone, ordered
+dates), and the database constraints remain the final safety net.
+
+---
+
+## Devices
+
+Each device record carries:
+
+| Field | Notes |
+|---|---|
+| Device name | Required |
+| Login name | Optional today. Groundwork for Phase 9C sign-in. Unique within an event. |
+| Enabled | Central state |
+| Attributes | `registration`, `prizes` — any combination, including none |
+| Active badge range | At most one |
+| Last seen | Factual; usually *Never seen* |
+| Created at | |
+
+### Save Device is one operation
+
+Editing a device sends its fields **and** its exact attribute set in a single
+`PATCH /api/admin-devices`. The server authenticates, validates the whole
+body, loads the device, applies the active-range rule, and only then commits
+the fields and the attribute replacement as **one atomic batch**.
+
+This matters because it used to be two requests. A rename committed, then the
+attribute change was refused, and the operator was left with a half-applied
+edit they had performed as a single Save. Now a refusal writes nothing at all:
+the name and the attributes are both exactly as they were.
+
+The reply carries the **complete updated device**, so Admin updates that one
+card rather than reloading the registry.
+
+There is no separate attribute endpoint. A second, independently committed
+write path for the same data is how the partial edit happened.
+
+### Attributes
+
+The database stores plain **text** so future values need no type change, but
+the **application owns the allow-list**. Arbitrary free text is refused, and
+there is no `deviceType` — one device may serve several modules.
+
+| Attribute | Authorizes |
+|---|---|
+| `registration` | The whole registration desk, badge issuance included |
+| `prizes` | Future Prize functionality |
+
+**Registration includes physical badge issuance.** In the current event
+workflow a device issues the badge as the last step of registering an
+attendee, so it is one job and one permission: attendee entry, hold and
+resume, payment, owning a badge-number range, handing over the physical badge
+and advancing the local `nextBadge` offline. There is no separate badge
+capability, and none should be added while the flow stays combined.
+
+#### Permission and range are still separate
+
+The permission and the numbers remain different things:
+
+| | Says |
+|---|---|
+| `registration` | this device may run the workflow |
+| `badge_assignments` | which physical numbers this device owns |
+
+That distinction is sufficient. A registration device with no assignment
+simply has no numbers yet.
+
+#### Attributes and an active range
+
+A device with an **active badge range cannot lose `registration`** — that
+would leave it owning a physical range with nothing authorizing it to hand
+those badges out.
+
+Releasing a range safely is a reconciliation problem this phase does not
+solve.
+
+In Edit Device the Registration checkbox is therefore **locked on** while a
+range is active, with the range named beneath it — there is no valid action
+to take, so the operator is told immediately rather than after a round trip
+that could only fail. Create Device is unaffected: a new device owns no range.
+
+The lock is a courtesy, not the protection. The server refuses the removal
+independently, and both sides read the required attribute from the same
+shared constant so they cannot disagree.
+
+### No delete
+
+There is no Delete Device action. Operational history should not casually
+disappear. A device that should stop being used is **disabled**.
+
+---
+
+## Badge ranges
+
+Admin can assign a device its **first** badge range, when the device exists in
+the selected event, is enabled, has **`registration`**, and has no active
+range.
+
+There is deliberately **no edit, replace, release, transfer, extend or reset**.
+Changing a range while devices operate offline is how two attendees end up
+with the same physical badge. Once assigned, the range is shown read-only.
+
+PostgreSQL is authoritative — two Admins can race past any application check —
+and its constraint violations are translated into safe typed conflicts:
+
+| Constraint | Reported as |
+|---|---|
+| `badge_assignments_active_ranges_no_overlap` | `badge-range-overlap` |
+| `badge_assignments_one_active_per_device` | `badge-range-already-assigned` |
+| `badge_assignments_device_event_fk` | `device-event-mismatch` |
+| `devices_event_id_login_name_key` | `login-name-taken` |
+
+No raw SQL, connection data, driver stack or database URL is ever returned.
+Unknown failures give a generic message and log the operation plus SQLSTATE.
+
+---
+
+### Two ways a device will get its range
+
+Central pre-assignment is **one** of two intended models, and it stays:
+
+**A. Admin pre-assigns centrally** — what exists today. The Admin types the
+range on the device's behalf.
+
+**B. The device claims its own range** — Phase 9C. The Admin grants
+Registration and the device, once authenticated, enters the physical range in
+front of it.
+
+Model B is not implemented: there is no authenticated browser-to-device
+identity until Phase 9C.
+
+### Phase 9C: device self-claim (design, not implemented)
+
+1. Admin creates the device.
+2. Admin grants it **Registration**.
+3. The device authenticates with its own credentials.
+4. If no central badge assignment exists, the device may enter its physical
+   range.
+5. The device submits that range **online**.
+6. The server verifies the authenticated device actually has
+   `registration`.
+7. PostgreSQL **atomically reserves** the range.
+8. Overlap is rejected centrally by the exclusion constraint.
+9. The accepted range is cached into that device's IndexedDB.
+10. The local `nextBadge` starts at `range_start`.
+11. The device continues issuing badges **offline**, exactly as today.
+
+> ### A device may NEVER establish a new badge range purely offline.
+>
+> The first claim must be centrally accepted. Two disconnected desks each
+> inventing a range is precisely how two attendees end up holding the same
+> physical badge, and no local check can prevent it. After the claim, issuance
+> stays local and offline — the network is required once, to agree the range,
+> and never again to hand out a badge.
+
+## What Phase 9B deliberately does NOT do
+
+**There is no device password.** Login name is groundwork only. Device
+authentication, password hashing, session revocation and the range-claim API
+above are all Phase 9C.
+
+**`Enabled = false` is central state only.** It does **not** currently revoke
+an existing device's Operator Access, because devices do not authenticate
+centrally yet. The UI says so. That enforcement arrives with Phase 9C.
+
+**There is no heartbeat.** `last_seen_at` is displayed factually and will read
+*Never seen* for most devices. Admin never claims Online or Offline — without
+device authentication there is no trustworthy central device identity to
+report on.
+
+**Creating a device here does not touch any browser.** There is no
+authenticated mapping from a browser to a central device record yet, so
+creating *Registration Desk A* in Admin does not modify any device's
+IndexedDB, badge range or `nextBadge`.
+
+**The central event does not replace local EventConfig.** `eventName`,
+`timezone`, `amount`, UPI details and the local badge range are not rewritten
+from Postgres. The two systems are connected deliberately in later
+device-enrollment work.
+
+---
+
+## `/device-registration` is transitional
+
+The existing self-registration route keeps working exactly as it does today,
+and must not be removed yet: current devices do not use central
+authentication.
+
+- **Local device identity** (`/device-registration` → IndexedDB) is what the
+  event desks actually run on today.
+- **Central device records** (Admin → Postgres) are groundwork for Phase 9C.
+
+They are **not linked automatically**. Phase 9C introduces device sign-in and
+replaces the transitional self-registration flow.
+
+---
+
+## Rate limiting
+
+`POST /api/admin-login` should be rate limited at the Vercel edge. See
+[VERCEL_FIREWALL.md](VERCEL_FIREWALL.md). A 429 shows a generic *"Too many
+admin login attempts"* message that reveals no address, no counter and nothing
+about the submitted code.

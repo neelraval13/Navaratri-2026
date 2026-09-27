@@ -54,6 +54,27 @@ not a meaningful threat against a strong passphrase.
 
 ---
 
+## Admin login
+
+`POST /api/admin-login` is the second public, unauthenticated endpoint and
+needs its own rule. Admin is a higher-value credential and legitimate traffic
+is far lower, so the limit is tighter:
+
+| Setting | Value |
+|---|---|
+| **Condition — Path** | `/api/admin-login` |
+| **Condition — Method** | `POST` |
+| **Action** | Rate Limit |
+| **Key** | IP |
+| **Limit** | 5 |
+| **Window** | 60 seconds |
+| **Algorithm** | Fixed Window |
+
+Like the operator rule, this is **not created by application code** and must
+be configured manually in the Vercel Dashboard. Review it before production
+enablement. The client shows a generic *"Too many admin login attempts"*
+message on 429 and reveals no address, counter or code correctness.
+
 ## Scope: this endpoint only
 
 **Do not rate-limit:**

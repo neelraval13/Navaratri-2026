@@ -177,6 +177,13 @@ journaled migration (`0001_range_guards_and_touch.sql`) generated with
 
 ---
 
+## Who writes to it
+
+Only the **Admin control plane** (`/admin`) writes to this database today, and
+only to the registry tables. See [ADMIN.md](ADMIN.md). No event device writes
+to Postgres: desks remain offline-first on IndexedDB, and their badge
+allocation stays local.
+
 ## Development constraint smoke test
 
 `db:check` proves the constraints **exist**. This proves they actually

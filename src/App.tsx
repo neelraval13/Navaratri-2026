@@ -3,12 +3,7 @@ import { Link } from 'wouter'
 
 import AppRouter from '@/components/app-router'
 import ConnectivityStatus from '@/components/connectivity-status'
-import DatabaseGate from '@/components/database-gate'
 import LockDeviceButton from '@/components/operator/lock-device-button'
-import OperatorAccessBanner from '@/components/operator/operator-access-banner'
-import OperatorAccessGate from '@/components/operator/operator-access-gate'
-import StorageManager from '@/components/storage-manager'
-import SyncManager from '@/components/sync-manager'
 import SyncStatus from '@/components/sync-status'
 import ThemeToggle from '@/components/theme-toggle'
 import { ROUTES } from '@/app/routes'
@@ -22,6 +17,7 @@ import { ROUTES } from '@/app/routes'
  *
  * Nothing rendered in the header may read the database, because the header
  * renders OUTSIDE DatabaseGate and therefore before bootstrap has completed.
+ * It is also shown on `/admin`, which never mounts the database at all.
  */
 const App: React.FC = () => {
   return (
@@ -53,25 +49,11 @@ const App: React.FC = () => {
 
       <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
         {/*
-          Only a device that has NEVER been unlocked is gated here, and the
-          gate renders in place rather than navigating — so a deep link to
-          /badge-registration survives authentication and resumes at that same
-          URL once unlocked.
+          The router owns the security realms: `/admin` renders outside the
+          event shell behind its own gate, and the event routes render inside
+          EventAppGate behind Operator Access.
         */}
-        <OperatorAccessGate>
-          <OperatorAccessBanner />
-
-          <DatabaseGate>
-            {/* Both start only once bootstrap has succeeded, and render nothing. */}
-            <StorageManager />
-
-            {/* App-global, outside the router on purpose: a pending outbox row
-                must keep draining on Home and on every other module. */}
-            <SyncManager />
-
-            <AppRouter />
-          </DatabaseGate>
-        </OperatorAccessGate>
+        <AppRouter />
       </main>
     </div>
   )

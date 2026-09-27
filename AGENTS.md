@@ -1296,6 +1296,96 @@ Production must never seed test data: no test registrations, no test outbox
 rows, no test badge rows, no test phone numbers and no disposable spreadsheet
 id. EventConfig bootstrap defaults are the only automatic writes.
 
+## Admin Control Plane
+
+Admin auth is a SEPARATE realm from Operator/device auth: different cookie
+(`__Host-navaratri_admin_session`), different secret, 12-hour lifetime.
+
+Realm isolation is CRYPTOGRAPHIC, never a documentation-only invariant. Admin
+signatures cover the domain-separation context
+`navaratri-admin-session-v1:` prepended to the payload, so each realm rejects
+the other's token EVEN IF the two secrets are identical. Distinct secrets stay
+recommended, but separation must not depend on them. The operator token format
+and verifier must not be changed — doing so would invalidate live sessions.
+
+`EVENT_ADMIN_ACCESS_CODE` has a minimum of 8 characters, compared exactly —
+no trimming, no case folding. That is a floor, not a recommendation: a short
+admin code leans on the edge rate limit for `POST /api/admin-login` and the
+fixed wrong-code delay, and neither replaces entropy. `EVENT_ADMIN_SESSION_SECRET`
+stays at a 32-character minimum.
+
+`/admin` is NOT behind Operator Access and must never be. It is matched before
+the event routes and rendered outside the event shell, so it never mounts the
+offline registration workflow. Equally, the event application is never wrapped
+in Admin auth.
+
+The event shell — Operator Access, DatabaseGate, StorageManager, SyncManager —
+mounts ONCE against a single event-route pattern, so navigating between event
+pages never restarts the sync processor.
+
+Every Admin API verifies the session FIRST, then validates, then touches the
+database. An unauthenticated caller must not be able to learn whether a
+database exists. All Admin responses are `Cache-Control: no-store`.
+
+Admin is an ONLINE-ONLY control plane. Mutable registry data is never cached
+in IndexedDB.
+
+The Admin device registry is central Postgres state. It contains NO attendee
+PII, and creating a central record NEVER mutates any browser's IndexedDB —
+there is no authenticated browser-to-device mapping until Phase 9C.
+
+`enabled` is central state only. It does NOT revoke a legacy device's Operator
+Access, because devices do not authenticate centrally yet. Never imply
+otherwise in the UI.
+
+`last_seen_at` is FACTUAL. Never infer or display Online/Offline: without
+device authentication there is no trustworthy central heartbeat identity.
+
+There is NO device deletion — disable instead, so operational history survives.
+
+There is NO badge-range edit, replace, release, transfer, extend or reset in
+Admin. Only the first assignment. Changing a range while devices operate
+offline is how two attendees get the same badge.
+
+Device attributes are `registration` and `prizes`. The database stores TEXT
+for future extensibility, but the application owns the allow-list and free
+text is refused.
+
+`registration` IS the whole registration-desk workflow, physical badge
+issuance included: attendee entry, hold and resume, payment, owning a
+badge-number range, handing over the badge and advancing the local
+`nextBadge` offline. Issuing a badge is the last step of registering an
+attendee, not a separate job, so there is NO separate badge capability and
+none may be added while the flow stays combined.
+
+Permission and range remain separate DATA: `registration` says the device may
+run the workflow, `badge_assignments` says which physical numbers it owns.
+That distinction is sufficient.
+
+Assigning a badge range requires `registration`, and a device holding an
+active badge range may not lose it. Edit Device locks that checkbox on and
+names the range, but the client guard is a courtesy: the server refuses the
+removal independently, and both read `BADGE_RANGE_REQUIRED_ATTRIBUTE` from
+the shared module so they cannot disagree.
+
+Save Device is ONE operation. Device fields and the exact attribute set travel
+in a single `PATCH /api/admin-devices`, are validated together, and commit as
+one atomic `db.batch`. A refusal writes NOTHING — not the rename, not the
+attributes. There must never be a second independently committed write path
+for device configuration; splitting it is what let a rename persist while its
+attribute change was refused.
+
+Admin mutations return the COMPLETE updated entity, and the control plane
+replaces that one item in local state. A successful mutation never re-fetches
+the registry, never clears the selected event and never shows the full-screen
+loading state — that state belongs to the FIRST load only. An explicit Refresh
+keeps the current content on screen and shows its progress on the button
+itself. A failed refresh keeps what is already rendered rather than blanking
+it.
+
+A device may NEVER establish a new badge range purely offline. The first claim
+must be centrally accepted; after that, issuance stays local and offline.
+
 ## Central Database
 
 PostgreSQL (Neon) is the CENTRAL OPERATIONAL AUTHORITY: events, devices,

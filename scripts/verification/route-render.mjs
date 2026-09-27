@@ -16,6 +16,7 @@ const jiti = createJiti(import.meta.url, {
     '@/hooks/use-event-config': `${HERE}/fake-event-config.mjs`,
     '@/components/registration/registration-form': `${HERE}/fake-registration-form.mjs`,
     '@/db/database': `${HERE}/fake-db.mjs`,
+    '@/components/database-gate': `${HERE}/fake-database-gate.mjs`,
     '@': `${root}/src`,
   },
   interopDefault: true,
@@ -26,7 +27,19 @@ const React = await jiti.import('react')
 const { renderToStaticMarkup } = await jiti.import('react-dom/server')
 const { Router } = await jiti.import('wouter')
 const { state } = await jiti.import(`${HERE}/fake-event-config.mjs`)
+const adminStore = await jiti.import(`${root}/src/admin/admin-access-store.ts`)
+const operatorStore = await jiti.import(`${root}/src/auth/operator-access-store.ts`)
+
+/** Drives the OPERATOR realm independently, so the two can be tested apart. */
+export const setOperatorAccess = (phase, lockReason = null) => {
+  operatorStore.setOperatorAccess({ phase, lockReason })
+}
 const AppRouterMod = await jiti.import(`${root}/src/components/app-router.tsx`)
+
+/** Drives the admin realm for route tests, from the same module instance. */
+export const setAdminAccess = (phase, reason = null) => {
+  adminStore.setAdminAccess({ phase, reason })
+}
 const AppRouter = AppRouterMod.default ?? AppRouterMod
 
 export const renderRoute = (path, config = null, status = 'loaded') => {
