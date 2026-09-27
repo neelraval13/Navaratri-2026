@@ -307,7 +307,7 @@ check('  nor any delete API route',
 check('device + attributes are written atomically', /db\.batch\(/.test(registrySource), true)
 const editFunction = registrySource.slice(
   registrySource.indexOf('export const updateDeviceConfiguration'),
-  registrySource.indexOf('export const assignBadgeRange'),
+  registrySource.indexOf('export const setDevicePassword'),
 )
 check('Edit Device is ONE registry operation', editFunction.length > 0, true)
 check('  every refusal returns BEFORE the batch',
@@ -461,9 +461,10 @@ check('auth is verified BEFORE the database is consulted',
   httpSource.indexOf('verifyAdminSessionToken') < httpSource.indexOf('isDatabaseConfigured'), true)
 const adminRoutes = readdirSync(join(root, 'api')).filter((f) => f.startsWith('admin-'))
 check('admin API routes exist as Functions', adminRoutes.sort(),
-  ['admin-badge-assignment.ts', 'admin-devices.ts',
+  ['admin-badge-assignment.ts', 'admin-device-password.ts', 'admin-devices.ts',
    'admin-events.ts', 'admin-login.ts', 'admin-logout.ts', 'admin-session.ts'])
-for (const file of ['api/admin-events.ts', 'api/admin-devices.ts', 'api/admin-badge-assignment.ts']) {
+for (const file of ['api/admin-events.ts', 'api/admin-devices.ts', 'api/admin-badge-assignment.ts',
+  'api/admin-device-password.ts']) {
   const source = stripComments(read(file))
   check(`  ${file.replace('api/', '')} guards before touching the registry`,
     source.indexOf('guardAdminRequest') < source.indexOf('await '), true)
@@ -543,7 +544,8 @@ check('  one batch carried them', writes(),
   ['update devices', 'delete device_attributes', 'insert device_attributes', 'insert device_attributes'])
 check('  the reply is the COMPLETE updated device',
   Object.keys(saved.value).sort(),
-  ['activeBadgeRange', 'attributes', 'createdAt', 'enabled', 'eventId', 'id', 'lastSeenAt', 'loginName', 'name'])
+  ['activeBadgeRange', 'attributes', 'createdAt', 'credentialsConfigured', 'enabled',
+   'eventId', 'id', 'lastSeenAt', 'loginName', 'name'])
 check('  echoing what was stored',
   [saved.value.name, saved.value.attributes, saved.value.activeBadgeRange.rangeEnd],
   ['Renamed Desk', ['prizes', 'registration'], 200])
@@ -716,9 +718,19 @@ check('  and the offline prohibition is explicit',
   /NEVER establish a new badge range purely offline/.test(adminDoc), true)
 check('  both assignment models are described',
   [/Admin pre-assigns centrally/.test(adminDoc), /device claims its own range/i.test(adminDoc)], [true, true])
-check('none of Phase 9C is implemented',
-  spawnSync('grep', ['-rlE', 'claimBadgeRange|admin-badge-claim|device-login|deviceSession|password_hash|heartbeat(At|_at)',
-    join(root, 'src'), join(root, 'server'), join(root, 'api')], { encoding: 'utf8' }).stdout.trim(), '')
+/**
+ * Phase 9C-A stores credentials; the self-claim and the device login do not
+ * exist. `password_hash` is deliberately absent from this list now, and
+ * comments are stripped first — the files that must not implement a device
+ * login are the ones whose comments SAY there is no device login.
+ */
+check('none of the self-claim is implemented',
+  [join(root, 'src'), join(root, 'server'), join(root, 'api')]
+    .flatMap((dir) => walkSource(dir))
+    .filter((file) =>
+      /claimBadgeRange|admin-badge-claim|device-login|deviceSession|heartbeat(At|_at)/
+        .test(stripComments(readFileSync(file, 'utf8'))))
+    .map((file) => file.replace(`${root}/`, '')), [])
 
 console.log('\n=== CLIENT SAFETY ===')
 const clientFiles = walkSource(join(root, 'src')).map((f) => ({ file: f.replace(`${root}/src/`, ''), code: read(`src/${f.replace(`${root}/src/`, '')}`) }))
@@ -762,10 +774,13 @@ check('sync contract untouched by admin', /admin|drizzle|neon/i.test(read('src/s
 check('badge allocation remains local',
   [/nextBadge/.test(read('src/db/registrations.ts')), /server\/db|drizzle/.test(read('src/db/registrations.ts'))], [true, false])
 const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort()
-check('NO new migration was needed', migrations, ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
+// Phase 9B needed no migration of its own; 0002 belongs to Phase 9C-A.
+check('9B added no migration',
+  migrations.filter((file) => !file.startsWith('0002_')),
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
 const schemaSource = stripComments(read('server/db/schema.ts'))
-check('  no password/session/admin table added',
-  /password|session|admin_users|CREATE TABLE/i.test(schemaSource), false)
+check('  no admin, session or token TABLE added',
+  /CREATE TABLE|admin_users|device_sessions|refresh_tokens/i.test(schemaSource), false)
 check('  no next_badge added', /next_badge|nextBadge/.test(schemaSource), false)
 check('  no attendee column added', /phone|attendee|payment|gender/i.test(schemaSource), false)
 check('  the attribute column is free text, so the allow-list change needed no migration',

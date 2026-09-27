@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { and, asc, eq, isNull } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 
 import type { DeviceAttribute } from '../../src/shared/device-attributes.js'
 import { getDatabase } from '../db/client.js'
@@ -10,6 +10,7 @@ import {
   devices,
   events,
 } from '../db/schema.js'
+import { hashDevicePassword } from '../device-auth/password.js'
 import { mapDatabaseConflict, type AdminConflict } from './errors.js'
 import {
   checkAttributeRemovalAllowed,
@@ -18,6 +19,7 @@ import {
   type BadgeRangeInput,
   type CreateDeviceInput,
   type CreateEventInput,
+  type CredentialBlock,
   type DeviceConfigurationInput,
 } from './validation.js'
 
@@ -32,7 +34,13 @@ import {
 export type RegistryResult<T> =
   | { ok: true; value: T }
   | { ok: false; conflict: AdminConflict }
-  | { ok: false; blocked: BadgeAssignmentBlock | 'registration-required-by-badge-range' }
+  | {
+      ok: false
+      blocked:
+        | BadgeAssignmentBlock
+        | 'registration-required-by-badge-range'
+        | CredentialBlock
+    }
 
 export interface AdminEvent {
   id: string
@@ -50,6 +58,15 @@ export interface AdminBadgeRange {
   assignedAt: string
 }
 
+/**
+ * What Admin is allowed to see about a device.
+ *
+ * An EXPLICIT projection, never a serialized Drizzle row: `passwordHash` and
+ * `sessionVersion` live one field away in the table and must never reach a
+ * browser. Whether credentials exist is the only credential fact Admin needs,
+ * and it is reduced to a boolean here rather than derived client-side from
+ * anything sensitive.
+ */
 export interface AdminDevice {
   id: string
   eventId: string
@@ -60,6 +77,11 @@ export interface AdminDevice {
   createdAt: string
   attributes: DeviceAttribute[]
   activeBadgeRange: AdminBadgeRange | null
+  /**
+   * `password_hash IS NOT NULL`. It means PROVISIONED, nothing more — it does
+   * not say the device may sign in, because no device login exists yet.
+   */
+  credentialsConfigured: boolean
 }
 
 const toIso = (value: Date | null): string | null => {
@@ -175,6 +197,7 @@ export const listDevices = async (eventId: string): Promise<AdminDevice[]> => {
     createdAt: row.createdAt.toISOString(),
     attributes: (attributesByDevice.get(row.id) ?? []).sort(),
     activeBadgeRange: rangeByDevice.get(row.id) ?? null,
+    credentialsConfigured: row.passwordHash !== null,
   }))
 }
 
@@ -219,12 +242,17 @@ const hasActiveAssignment = async (deviceId: string): Promise<boolean> => {
 }
 
 /**
- * Creates a device and its initial attributes ATOMICALLY.
+ * Creates a device, its initial attributes and — when supplied — its
+ * credentials, ATOMICALLY.
  *
- * The id is generated here so both statements can be built up front and sent
+ * The id is generated here so every statement can be built up front and sent
  * as one Neon batch, which runs in a single transaction. The HTTP driver has
  * no interactive transactions, and a half-created device with no attributes
- * would be worse than a failed create.
+ * or with a login name but no password would be worse than a failed create.
+ *
+ * Credentials are part of the create, never a follow-up call to a password
+ * endpoint: a second independently committed write is how a partial device
+ * would appear. `session_version` starts at the column default of 1.
  */
 export const createDevice = async (
   eventId: string,
@@ -233,6 +261,14 @@ export const createDevice = async (
   const db = getDatabase()
   const deviceId = randomUUID()
 
+  /**
+   * Hashed BEFORE the batch is built, so a hashing failure means no device is
+   * created at all rather than one created without the credentials the Admin
+   * asked for. The plaintext never leaves this call.
+   */
+  const passwordHash =
+    input.password === null ? null : await hashDevicePassword(input.password)
+
   const statements = [
     db.insert(devices).values({
       id: deviceId,
@@ -240,6 +276,7 @@ export const createDevice = async (
       name: input.name,
       loginName: input.loginName,
       enabled: input.enabled,
+      passwordHash,
     }),
     ...input.attributes.map((attribute) =>
       db.insert(deviceAttributes).values({ deviceId, attribute }),
@@ -276,6 +313,7 @@ export const createDevice = async (
       createdAt: created.createdAt.toISOString(),
       attributes: [...input.attributes].sort(),
       activeBadgeRange: null,
+      credentialsConfigured: input.password !== null,
     },
   }
 }
@@ -375,8 +413,74 @@ export const updateDeviceConfiguration = async (
         ...(input.attributes ?? (currentAttributes as DeviceAttribute[])),
       ].sort(),
       activeBadgeRange,
+      credentialsConfigured: device.passwordHash !== null,
     },
   }
+}
+
+/**
+ * Sets or resets a device's password.
+ *
+ * Deliberately NOT part of Save Device. A blank field in an ordinary edit
+ * would be ambiguous — keep the password, clear it, or set an empty one — so
+ * credentials are their own explicit action with its own confirmation.
+ *
+ * Every precondition is checked before the password is hashed, so a refusal
+ * costs no work and writes nothing. There is no way to clear a password: once
+ * a device is provisioned the choices are reset it or disable the device.
+ *
+ * A disabled device may still be provisioned. Preparing a desk before opening
+ * it is normal, and `enabled` is enforced at login, not here.
+ */
+export const setDevicePassword = async (
+  eventId: string,
+  deviceId: string,
+  password: string,
+): Promise<RegistryResult<{ deviceId: string; credentialsConfigured: true }>> => {
+  const device = await readDevice(deviceId)
+
+  if (device === null) {
+    return { ok: false, blocked: 'device-not-found' }
+  }
+
+  if (device.eventId !== eventId) {
+    return { ok: false, blocked: 'device-event-mismatch' }
+  }
+
+  if (device.loginName === null) {
+    return { ok: false, blocked: 'device-has-no-login-name' }
+  }
+
+  const passwordHash = await hashDevicePassword(password)
+
+  try {
+    /**
+     * The hash and the version move together. `session_version` is
+     * incremented from its stored value on EVERY deliberate reset, without
+     * comparing the new password to the old one — the operator asked for a
+     * credential change, so every session issued under the previous one is
+     * considered revoked when Phase 9C-B begins checking.
+     */
+    await getDatabase()
+      .update(devices)
+      .set({
+        passwordHash,
+        sessionVersion: sql`${devices.sessionVersion} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(devices.id, deviceId))
+  } catch (error: unknown) {
+    const conflict = mapDatabaseConflict(error)
+
+    if (conflict === null) {
+      throw error
+    }
+
+    return { ok: false, conflict }
+  }
+
+  // Never the hash, never the session version, never the password.
+  return { ok: true, value: { deviceId, credentialsConfigured: true } }
 }
 
 /**

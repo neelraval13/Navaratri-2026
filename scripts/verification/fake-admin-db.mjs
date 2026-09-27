@@ -71,6 +71,25 @@ const project = (row, columns) => {
   return picked
 }
 
+const isSqlExpression = (value) =>
+  typeof value === 'object' && value !== null && value.op === 'sql'
+
+/**
+ * The only SQL expression the registry uses: `${column} + <n>`. Anything else
+ * throws rather than being quietly misread, so a new expression cannot pass a
+ * test by being ignored.
+ */
+const applyExpression = (row, expression) => {
+  const increment = /^\s*\+\s*(\d+)\s*$/.exec(expression.strings[1] ?? '')
+  const column = expression.values[0]?.column
+
+  if (expression.values.length !== 1 || increment === null || column === undefined) {
+    throw new Error(`unsupported SQL expression: ${JSON.stringify(expression)}`)
+  }
+
+  return (row[column] ?? 0) + Number(increment[1])
+}
+
 const guardFailure = () => {
   if (state.failNextWrite !== null) {
     const message = state.failNextWrite
@@ -166,6 +185,9 @@ const insertBuilder = (table) => {
 
           if (target === 'devices') {
             row.loginName ??= null
+            // The column defaults, as the migration declares them.
+            row.passwordHash ??= null
+            row.sessionVersion ??= 1
             row.enabled ??= true
             row.lastSeenAt ??= null
             row.createdAt ??= new Date('2026-01-01T00:00:00.000Z')
@@ -225,7 +247,10 @@ const updateBuilder = (table) => {
 
           for (const row of rowsOf(target)) {
             if (matches(row, condition)) {
-              Object.assign(row, patch)
+              for (const [key, value] of Object.entries(patch)) {
+                row[key] = isSqlExpression(value) ? applyExpression(row, value) : value
+              }
+
               changed.push(clone(row))
             }
           }

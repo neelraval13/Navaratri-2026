@@ -25,6 +25,17 @@ const EXPECTED_GUARANTEES = [
   ['badge_assignments_one_active_per_device', 'one active assignment per device'],
   ['badge_assignments_device_event_fk', 'a badge range cannot cross events'],
   ['devices_event_id_login_name_key', 'login name unique within an event'],
+  ['devices_session_version_positive', 'session version cannot drop below 1'],
+]
+
+/**
+ * Column METADATA only — never a credential value. This reads
+ * `information_schema`, so no `password_hash` is ever selected, printed or
+ * logged.
+ */
+const EXPECTED_COLUMNS = [
+  ['devices', 'password_hash', 'YES', 'device password hash (nullable = not provisioned)'],
+  ['devices', 'session_version', 'NO', 'device session version'],
 ]
 
 const databaseUrl = process.env.DATABASE_URL
@@ -69,6 +80,21 @@ try {
 
   for (const [name, description] of EXPECTED_GUARANTEES) {
     const ok = guarantees.has(name)
+    if (!ok) missing++
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${description}`)
+  }
+
+  const columns = await sql`
+    SELECT table_name, column_name, is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+  `
+
+  for (const [table, column, nullable, description] of EXPECTED_COLUMNS) {
+    const found = columns.find(
+      (row) => row.table_name === table && row.column_name === column,
+    )
+    const ok = found !== undefined && found.is_nullable === nullable
     if (!ok) missing++
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${description}`)
   }

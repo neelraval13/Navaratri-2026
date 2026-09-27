@@ -22,12 +22,17 @@ const load = async (path) => {
 
 const DeviceFormFields = await load('src/components/admin/device-form-fields.tsx')
 
-const BASE = { name: 'Desk A', loginName: 'desk-a', enabled: true, attributes: ['registration'] }
+const BASE = {
+  name: 'Desk A', loginName: 'desk-a', enabled: true, attributes: ['registration'],
+  password: '', confirmPassword: '',
+}
 
-/** The rendered Access section for one form configuration. */
-export const renderDeviceForm = ({ values = BASE, activeBadgeRange = null, idPrefix = 'edit-d1' } = {}) =>
+/** The rendered fields for one form configuration. */
+export const renderDeviceForm = ({
+  values = BASE, activeBadgeRange = null, idPrefix = 'edit-d1', showCredentials = false,
+} = {}) =>
   renderToStaticMarkup(
-    DeviceFormFields({ idPrefix, values, onChange: () => undefined, activeBadgeRange }),
+    DeviceFormFields({ idPrefix, values, onChange: () => undefined, activeBadgeRange, showCredentials }),
   )
 
 /** Every `<input type="checkbox">` in the markup, as parsed attributes. */

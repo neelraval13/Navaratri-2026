@@ -109,6 +109,39 @@ check and both commit.
 A released assignment (`released_at` set) stays as history and stops blocking
 new ranges.
 
+### Device credentials
+
+`devices` carries two credential columns, added in Phase 9C-A:
+
+| Column | Notes |
+|---|---|
+| `password_hash` | `text`, **nullable**. A scrypt-encoded hash — never a password, never a reversible ciphertext, never a temporary secret. |
+| `session_version` | `integer NOT NULL DEFAULT 1`, checked `>= 1`. |
+
+> **`password_hash IS NULL` means CREDENTIALS HAVE NOT BEEN PROVISIONED.**
+>
+> It must never be read as "this device may sign in without a password". The
+> Phase 9C-B login will reject a null hash outright, before any comparison.
+
+It is nullable because central devices already existed when the column was
+added, and the migration must preserve them exactly as they are. There is no
+way to set it back to `NULL`: once a device is provisioned the choices are
+resetting the password or disabling the device.
+
+`session_version` is groundwork for session revocation and is unused today.
+Every deliberate password set or reset increments it — `1 → 2` on the first
+set, `2 → 3` on the next — without comparing the new password to the old one.
+A future device session will carry the value it was issued under, so changing
+a password invalidates every session that device already holds. There is no
+session store to purge; the counter is the revocation.
+
+Neither column is ever exposed to a browser. Admin sees only a derived
+`credentialsConfigured` boolean.
+
+**Phase 9C-A stores credentials. It does not enable device login.** There is no
+`/api/device-login`, no device session, no cookie and no heartbeat. Devices
+still use Operator Access exactly as before.
+
 ### Attributes are text, not an enum
 
 `device_attributes.attribute` is plain text. Adding `prizes`, `dandiya` or
@@ -174,6 +207,19 @@ Some statements need raw SQL that Drizzle's DSL cannot express — the exclusion
 constraint, the extension and the triggers. Those live in a hand-written,
 journaled migration (`0001_range_guards_and_touch.sql`) generated with
 `drizzle-kit generate --custom`, version controlled like any other.
+
+### Applied migrations
+
+| File | Adds |
+|---|---|
+| `0000_central_foundation.sql` | The four tables |
+| `0001_range_guards_and_touch.sql` | `btree_gist`, the overlap exclusion constraint, the `set_updated_at` triggers |
+| `0002_device_credentials.sql` | `devices.password_hash`, `devices.session_version` and its `>= 1` check |
+
+`0002` is **additive only**: two `ADD COLUMN`s and two `ADD CONSTRAINT`s. It
+drops nothing, deletes nothing and rewrites no row. Every existing device keeps
+its data and comes out with `password_hash = NULL` — unprovisioned, which is
+the correct starting state — and `session_version = 1`.
 
 ---
 

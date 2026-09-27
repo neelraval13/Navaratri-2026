@@ -70,8 +70,22 @@ manually.
 | 3.9 | `EVENT_ADMIN_SESSION_SECRET` set, 32+ chars, and a different value from `EVENT_SESSION_SECRET` (recommended; isolation is enforced cryptographically regardless) | ☐ |
 | 3.10 | Admin-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
 | 3.11 | `/admin` verified to require its own sign-in, and an operator session does not reach it | ☐ |
+| 3.12 | `0002_device_credentials.sql` reviewed and applied to Development first, then Production, by hand | ☐ |
+| 3.13 | Device passwords recorded wherever the organizer keeps operational secrets — they are never shown again | ☐ |
+| 3.14 | No device password provisioned on a shared or reused passphrase | ☐ |
 
 Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
+
+### Device credentials (Phase 9C-A)
+
+Provisioning a device password **stores a credential; it does not enable a
+device login**. There is no device login endpoint, session or cookie yet, so
+nothing about the deployment's auth boundary changes: Operator Access is still
+the production API boundary and `/admin` is still its own realm.
+
+`password_hash = NULL` means *not provisioned*, never *passwordless*. A
+password is never displayed after it is set and cannot be recovered — only
+reset, which also revokes any future sessions issued under the old one.
 
 The login rate limit is a Vercel firewall rule configured by hand in the
 Dashboard — no application code creates it, and `release:check` cannot verify

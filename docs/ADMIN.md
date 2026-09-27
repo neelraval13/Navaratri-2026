@@ -172,6 +172,104 @@ The lock is a courtesy, not the protection. The server refuses the removal
 independently, and both sides read the required attribute from the same
 shared constant so they cannot disagree.
 
+## Device credentials
+
+Phase 9C-A lets Admin provision the credentials a device will eventually sign
+in with: its **login name** plus a **device password**.
+
+> **Storing a credential is not enabling a login.**
+>
+> There is no `/api/device-login`, no device session, no cookie and no
+> heartbeat. Devices still use Operator Access exactly as before, and
+> provisioning a password activates nothing. Setting one on a *disabled*
+> device is normal — preparing a desk before opening it.
+
+### What is stored
+
+Only a scrypt hash, in a self-describing record:
+
+```
+scrypt$v1$<N>$<r>$<p>$<saltBase64url>$<keyBase64url>
+```
+
+| | |
+|---|---|
+| Algorithm | Node's built-in `node:crypto` `scrypt`, asynchronous |
+| `N` / `r` / `p` | 32768 / 8 / 1 — about 32 MB and tens of milliseconds |
+| Derived key | 32 bytes |
+| Salt | 16 fresh `randomBytes` per password |
+| Comparison | `timingSafeEqual` over equal-length buffers |
+
+The algorithm, format version and every cost parameter travel *with* each
+hash, so the verifier never assumes today's constants and the parameters can be
+raised later without invalidating existing rows. A stored hash is treated as
+untrusted input: malformed encoding, an unsupported version and impossible or
+absurd parameters all return `false` before any work is done, and never throw.
+
+There is no bcrypt, no argon2 native build and no hashing service. A plaintext
+password is never stored, never logged, never returned and never written to
+IndexedDB, `localStorage` or `sessionStorage`.
+
+### The policy
+
+8–128 characters. No required uppercase, lowercase, digit or symbol, so long
+passphrases are welcome.
+
+The value is taken **exactly**: never trimmed, never case-folded, never Unicode
+normalised. Spaces are ordinary characters, so `"  my desk  "` and `"my desk"`
+are different passwords. Silently "helping" would lock someone out of a desk on
+event day.
+
+The rules live in `src/shared/device-password.ts` and are read by both the
+Admin browser form and the server, so the inline error and the actual refusal
+cannot disagree. The browser sends the plaintext over HTTPS; hashing in the
+browser instead would only turn the digest into a reusable password equivalent.
+
+### Credential status
+
+Admin sees one derived boolean:
+
+```
+Credentials
+Configured            or            Not configured
+[ Reset Password ]                  [ Set Password ]
+```
+
+The hash, its salt, its parameters and `session_version` never leave the
+server. Nothing reveals a password, a previous password or a generated secret
+after a save — if it is not recorded when it is set, it is reset.
+
+### Setting and resetting
+
+Credentials require a **login name**; one is never generated to make a request
+succeed, and the Set Password action is unavailable without one.
+
+**Create Device** may include a password. It is optional — inventory can be
+created first and provisioned later — and when supplied, the device row, its
+attributes and its password hash commit in one atomic batch. If anything fails,
+no device is created.
+
+**Editing** a device never shows a password field. A blank one inside Save
+Device would be ambiguous between keeping the password, clearing it and setting
+an empty one, so a reset is a deliberate separate action:
+`POST /api/admin-device-password`, which checks the Admin session, the origin,
+the body, the device, the event and the login name before hashing anything.
+
+There is **no Clear Password, Remove Credentials or Disable Password**. Once a
+device is provisioned the choices are resetting the password or disabling the
+device, because a null hash means "never provisioned" and must never become a
+route to a device without one.
+
+### `session_version`
+
+Groundwork for session revocation, unused today. Every deliberate password
+change increments it — `1 → 2`, then `2 → 3` — with no attempt to detect
+whether the new password equals the old one. A future device session will carry
+the value it was issued under, so a reset invalidates every session that device
+already holds.
+
+It is never exposed to Admin: it answers a question Admin does not ask.
+
 ### No delete
 
 There is no Delete Device action. Operational history should not casually

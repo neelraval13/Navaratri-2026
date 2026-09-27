@@ -86,7 +86,10 @@ const REQUIRED_FILES = [
   'server/admin-auth/session.ts',
   'server/admin-auth/cookies.ts',
   'server/admin/registry.ts',
+  'server/device-auth/password.ts',
+  'src/shared/device-password.ts',
   'api/admin-login.ts',
+  'api/admin-device-password.ts',
   'api/admin-session.ts',
   'api/admin-logout.ts',
   'docs/ADMIN.md',
@@ -534,6 +537,122 @@ if (vercelConfig === null) {
 }
 
 addCheck('admin-realm', 'Admin is a separate server-side realm', adminProblems)
+
+// --- G2. device credentials stay server-side --------------------------------
+/**
+ * Comments are stripped before these scans: the files that must not persist a
+ * password are precisely the ones whose comments EXPLAIN that they do not.
+ */
+const stripComments = (text) =>
+  text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+
+const credentialProblems = []
+const HASH_NAMES = ['passwordHash', 'password_hash', 'sessionVersion', 'session_version']
+
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path) === null ? null : stripComments(readText(path))
+
+  if (text === null) {
+    continue
+  }
+
+  for (const name of HASH_NAMES) {
+    if (text.includes(name)) {
+      credentialProblems.push(`${rel(path)} references ${name} in client code`)
+    }
+  }
+
+  if (/from\s+['"][^'"]*(server\/device-auth|node:crypto)/.test(text)) {
+    credentialProblems.push(`${rel(path)} imports server password code`)
+  }
+
+  // A password must never be persisted anywhere on the device.
+  if (/(localStorage|sessionStorage|indexedDB)[\s\S]{0,80}password/i.test(text)) {
+    credentialProblems.push(`${rel(path)} may persist a password on the device`)
+  }
+
+  if (/console\.(log|info|warn|error)\([^)]*password/i.test(text)) {
+    credentialProblems.push(`${rel(path)} may log a password`)
+  }
+}
+
+// Dexie schema: no credential field may join the offline store.
+const databaseSource = readText(join(ROOT, 'src/db/database.ts'))
+
+if (databaseSource === null) {
+  credentialProblems.push('src/db/database.ts could not be read')
+} else if (/password|credential|hash/i.test(stripComments(databaseSource))) {
+  credentialProblems.push('src/db/database.ts mentions a credential field')
+}
+
+for (const path of walk(join(ROOT, 'server'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path)
+
+  if (text !== null && /console\.(log|info|warn|error)\([^)]*\b(password|passwordHash|salt|derivedKey)\b/i.test(stripComments(text))) {
+    credentialProblems.push(`${rel(path)} may log a credential`)
+  }
+}
+
+// Node's own crypto only: no bcrypt, argon2 or hashing service.
+const packageManifest = readText(join(ROOT, 'package.json'))
+
+if (packageManifest === null) {
+  credentialProblems.push('package.json could not be read')
+} else {
+  const manifest = JSON.parse(packageManifest)
+  const declared = Object.keys({
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+  })
+
+  for (const name of declared) {
+    if (/bcrypt|argon2|scrypt-|pbkdf2|password-hash/i.test(name)) {
+      credentialProblems.push(`dependency ${name} replaces Node's built-in crypto`)
+    }
+  }
+}
+
+const passwordSource = readText(join(ROOT, 'server/device-auth/password.ts'))
+
+if (passwordSource === null) {
+  credentialProblems.push('server/device-auth/password.ts could not be read')
+} else if (!passwordSource.includes("from 'node:crypto'")) {
+  credentialProblems.push('server/device-auth/password.ts does not use node:crypto')
+}
+
+// Phase 9C-A stores credentials; it must NOT enable a device login.
+for (const name of ['device-login.ts', 'device-session.ts', 'device-logout.ts']) {
+  if (exists(join(ROOT, 'api', name))) {
+    credentialProblems.push(`api/${name} exists before its phase`)
+  }
+}
+
+// Migrations stay a deliberate operator action.
+if (!exists(join(ROOT, 'drizzle/0002_device_credentials.sql'))) {
+  credentialProblems.push('the device-credentials migration is missing')
+}
+
+const manifestScripts = packageManifest === null ? {} : JSON.parse(packageManifest).scripts
+
+for (const [name, command] of Object.entries(manifestScripts)) {
+  if (name !== 'db:migrate' && typeof command === 'string' && command.includes('drizzle-kit migrate')) {
+    credentialProblems.push(`script ${name} runs a migration automatically`)
+  }
+}
+
+addCheck(
+  'device-credentials',
+  'Device credentials are server-side only and login stays unbuilt',
+  credentialProblems,
+)
 
 // --- G. client code never reads a server-only variable ----------------------
 const clientProblems = []

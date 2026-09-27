@@ -1386,6 +1386,58 @@ it.
 A device may NEVER establish a new badge range purely offline. The first claim
 must be centrally accepted; after that, issuance stays local and offline.
 
+## Device Credentials
+
+Phase 9C-A STORES device credentials. It does NOT enable device login. There is
+no `/api/device-login`, no device session, no cookie and no heartbeat, and none
+may be added before its phase. Devices still use Operator Access. Provisioning
+a password ACTIVATES NOTHING — a disabled device may be provisioned, because
+preparing a desk before opening it is normal and `enabled` is enforced at login.
+
+`devices.password_hash` is a scrypt hash and NOTHING else: never a password,
+never a reversible ciphertext, never a temporary secret.
+
+`password_hash IS NULL` means CREDENTIALS HAVE NOT BEEN PROVISIONED. It must
+NEVER be read as "may sign in without a password"; the future login rejects a
+null hash before any comparison. It is nullable so the migration preserves
+existing devices. There is NO way to set it back to NULL — no Clear Password,
+no Remove Credentials, no Disable Password. Once provisioned, the choices are
+reset the password or disable the device.
+
+`session_version` starts at 1 and is incremented by EVERY deliberate password
+set or reset, with no comparison to the previous password. A future device
+session carries the value it was issued under, so a reset revokes every session
+that device holds. There is no session store, and none should be added.
+
+Hashing is Node's built-in `node:crypto` `scrypt`, asynchronous, in
+`server/device-auth/password.ts` — no bcrypt, no argon2, no hashing service,
+and no HTTP or database concern in that module. The encoded form is
+self-describing, `scrypt$v1$N$r$p$salt$key`, so parameters can be raised later.
+A STORED HASH IS UNTRUSTED INPUT: malformed encoding, an unsupported version
+and absurd parameters all return false before any work, bounded by
+`MAX_SCRYPT_MEMORY_BYTES`, and never throw for an ordinary bad credential.
+
+The policy is 8-128 characters, taken EXACTLY — never trimmed, never case
+folded, never Unicode normalised, spaces significant. It lives in
+`src/shared/device-password.ts` and is read by both the browser form and the
+server, so instant feedback and real enforcement cannot drift.
+
+The browser sends plaintext over HTTPS and the SERVER hashes it. Never hash in
+the browser: the digest would simply become a reusable password equivalent.
+
+Admin sees ONLY a derived `credentialsConfigured` boolean. `passwordHash`,
+`sessionVersion`, the salt and the derived key never leave the server, never
+appear in a response, never reach `src/` and are never logged. AdminDevice is
+an EXPLICIT projection — a raw Drizzle device row is never serialized to a
+browser.
+
+Create Device may include an OPTIONAL password, and the device row, its
+attributes and its hash commit in ONE atomic batch. Editing a device NEVER
+shows a password field: a blank one inside Save Device would be ambiguous
+between keeping, clearing and emptying the password, so a reset is its own
+deliberate action. Credentials always require a login name, and one is never
+generated to make a request succeed.
+
 ## Central Database
 
 PostgreSQL (Neon) is the CENTRAL OPERATIONAL AUTHORITY: events, devices,

@@ -3,6 +3,7 @@ import type * as React from 'react'
 import type { AdminDevice } from '@/admin/admin-api'
 import AssignRangeDialog from '@/components/admin/assign-range-dialog'
 import DeviceDialog from '@/components/admin/device-dialog'
+import DevicePasswordDialog from '@/components/admin/device-password-dialog'
 import { Badge } from '@/components/ui/badge'
 import { formatBadgeRange } from '@/db/device'
 import { formatEventDateTime } from '@/lib/datetime'
@@ -148,6 +149,36 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ eventId, device, onChanged }) =
               </span>
             </>
           )}
+        </Field>
+
+        {/*
+          Whether credentials EXIST. Never the hash, never the salt, never a
+          previous password, and never a generated secret echoed after a save.
+        */}
+        <Field label="Credentials">
+          {device.credentialsConfigured ? (
+            <span className="font-medium">
+              Configured
+            </span>
+          ) : (
+            <span className="text-muted-foreground">
+              Not configured
+            </span>
+          )}
+
+          <span className="mt-2 block">
+            {device.loginName === null ? (
+              <span className="text-xs text-muted-foreground">
+                Give this device a login name first.
+              </span>
+            ) : (
+              <DevicePasswordDialog
+                eventId={eventId}
+                device={device}
+                onSaved={onChanged}
+              />
+            )}
+          </span>
         </Field>
 
         <Field label="Last seen">

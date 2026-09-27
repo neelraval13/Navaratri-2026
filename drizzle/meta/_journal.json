@@ -15,6 +15,13 @@
       "when": 1790502080080,
       "tag": "0001_range_guards_and_touch",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790516706899,
+      "tag": "0002_device_credentials",
+      "breakpoints": true
     }
   ]
 }

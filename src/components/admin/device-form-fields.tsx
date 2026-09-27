@@ -1,6 +1,7 @@
 import type * as React from 'react'
 
 import type { AdminBadgeRange } from '@/admin/admin-api'
+import PasswordField from '@/components/admin/password-field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatBadgeRange } from '@/db/device'
@@ -17,6 +18,12 @@ export interface DeviceFormValues {
   loginName: string
   enabled: boolean
   attributes: DeviceAttribute[]
+  /**
+   * Create Device only, and optional. Held just long enough to send, then
+   * dropped — never echoed back by the server and never loaded on an edit.
+   */
+  password: string
+  confirmPassword: string
 }
 
 interface DeviceFormFieldsProps {
@@ -25,6 +32,12 @@ interface DeviceFormFieldsProps {
   onChange: (values: DeviceFormValues) => void
   /** Present only when editing a device that already owns badge numbers. */
   activeBadgeRange?: AdminBadgeRange | null
+  /**
+   * Create Device only. Editing a device never shows a password field: a
+   * blank one inside Save Device would be ambiguous between keeping,
+   * clearing and emptying the password, so a reset is its own action.
+   */
+  showCredentials?: boolean
 }
 
 /**
@@ -39,6 +52,7 @@ const DeviceFormFields: React.FC<DeviceFormFieldsProps> = ({
   values,
   onChange,
   activeBadgeRange = null,
+  showCredentials = false,
 }) => {
   /**
    * A device owning physical badge numbers must keep whatever authorizes it
@@ -121,6 +135,44 @@ const DeviceFormFields: React.FC<DeviceFormFieldsProps> = ({
           Enabled
         </span>
       </Label>
+
+      {!showCredentials ? null : (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">
+              Device Password
+            </p>
+
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Optional now. Required before this device can use device login.
+              {values.loginName.trim() === ''
+                ? ' A login name is needed first.'
+                : ''}
+            </p>
+          </div>
+
+          <PasswordField
+            id={`${idPrefix}-password`}
+            label="Password"
+            value={values.password}
+            onChange={(password) => {
+              onChange({ ...values, password })
+            }}
+            autoComplete="new-password"
+            hint="8–128 characters. Spaces count, and nothing is trimmed."
+          />
+
+          <PasswordField
+            id={`${idPrefix}-confirm-password`}
+            label="Confirm Password"
+            value={values.confirmPassword}
+            onChange={(confirmPassword) => {
+              onChange({ ...values, confirmPassword })
+            }}
+            autoComplete="new-password"
+          />
+        </div>
+      )}
 
       <div className="space-y-2">
         <p className="text-sm font-medium">

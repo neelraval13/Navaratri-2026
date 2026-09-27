@@ -58,11 +58,23 @@ attendee, so it is one permission, not two. The badge range stays separate
 data: `registration` says a device may run the workflow, `badge_assignments`
 says which physical numbers it owns.
 
-**Phase 9B deliberately stops short of:** device passwords, a heartbeat, and
-central enforcement of `enabled` — devices still use Operator Access, so
-disabling a device changes central state only. `/device-registration` remains
-the transitional local flow and is not yet linked to central records. Those
-connect in Phase 9C.
+Admin can also provision the credentials a device will eventually sign in
+with: a login name plus a device password, stored as a `node:crypto` scrypt
+hash. The policy is 8–128 characters, taken exactly — nothing is trimmed, case
+folded or Unicode normalised, and spaces count. Admin sees only whether
+credentials are `Configured`; the hash, its salt and the session version never
+leave the server, and a password is never shown again after it is set.
+
+> **Phase 9C-A stores credentials. It does not enable device login.**
+>
+> There is no device login endpoint, session or cookie. Devices still use
+> Operator Access, and provisioning a password activates nothing.
+> `password_hash = NULL` means *not provisioned* — never *passwordless*.
+
+**Still deliberately absent:** device login, a heartbeat, central enforcement
+of `enabled`, and badge-range self-claim. `/device-registration` remains the
+transitional local flow and is not yet linked to central records. Those
+connect in the later 9C phases.
 
 ## Central database (Phase 9A — foundation only)
 

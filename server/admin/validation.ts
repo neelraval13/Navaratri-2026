@@ -3,6 +3,7 @@ import {
   parseAttributeSet,
   type DeviceAttribute,
 } from '../../src/shared/device-attributes.js'
+import { checkPasswordPair } from '../../src/shared/device-password.js'
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -132,6 +133,35 @@ export interface CreateDeviceInput {
   loginName: string | null
   enabled: boolean
   attributes: DeviceAttribute[]
+  /** The plaintext to hash, or `null` to create the device unprovisioned. */
+  password: string | null
+}
+
+export type CredentialBlock = 'device-has-no-login-name' | 'password-mismatch'
+
+/**
+ * The shared credential rules for Create Device and Set Password.
+ *
+ * `password` absent, null or empty means NO CREDENTIALS — a device may be
+ * created as inventory and provisioned later. Once a password is supplied it
+ * must match its confirmation and satisfy the length policy.
+ *
+ * A device cannot hold credentials without a login name: the pair is what a
+ * future device login will present. A login name is never generated to make
+ * the request succeed.
+ */
+export const parseCredentialInput = (
+  body: Record<string, unknown>,
+  context: { hasLoginName: boolean; required: boolean },
+): ValidationResult<string | null> => {
+  const result = checkPasswordPair({
+    password: body.password,
+    confirmPassword: body.confirmPassword,
+    hasLoginName: context.hasLoginName,
+    required: context.required,
+  })
+
+  return result.ok ? { ok: true, value: result.password } : result
 }
 
 export const parseCreateDeviceInput = (
@@ -163,6 +193,15 @@ export const parseCreateDeviceInput = (
     return { ok: false, message: attributes.message }
   }
 
+  const password = parseCredentialInput(body, {
+    hasLoginName: loginName.value !== null,
+    required: false,
+  })
+
+  if (!password.ok) {
+    return password
+  }
+
   return {
     ok: true,
     value: {
@@ -170,6 +209,7 @@ export const parseCreateDeviceInput = (
       loginName: loginName.value,
       enabled: body.enabled ?? true,
       attributes: attributes.attributes,
+      password: password.value,
     },
   }
 }

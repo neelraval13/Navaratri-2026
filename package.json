@@ -11,7 +11,7 @@
     "release:check": "node scripts/release-check.mjs",
     "verify:7b": "node scripts/verification/phase-7b.mjs",
     "verify:prior": "node scripts/verification/prior-phases.mjs",
-    "verify": "pnpm verify:prior && pnpm verify:7b && pnpm verify:8a && pnpm verify:8b && pnpm verify:9a && pnpm verify:9b",
+    "verify": "pnpm verify:prior && pnpm verify:7b && pnpm verify:8a && pnpm verify:8b && pnpm verify:9a && pnpm verify:9b && pnpm verify:9ca",
     "verify:8a": "node scripts/verification/phase-8a.mjs",
     "verify:8b": "node scripts/verification/phase-8b.mjs",
     "db:generate": "drizzle-kit generate",
@@ -19,7 +19,8 @@
     "db:check": "node scripts/db-check.mjs",
     "verify:9a": "node scripts/verification/phase-9a.mjs",
     "db:smoke": "node scripts/db-constraint-smoke.mjs",
-    "verify:9b": "node scripts/verification/phase-9b.mjs"
+    "verify:9b": "node scripts/verification/phase-9b.mjs",
+    "verify:9ca": "node scripts/verification/phase-9ca.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

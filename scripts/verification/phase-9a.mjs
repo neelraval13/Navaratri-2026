@@ -53,8 +53,15 @@ check('  slug / name / timezone non-empty', ['events_slug_not_empty', 'events_na
 check('  ends_at >= starts_at when both present', /events_dates_ordered/.test(migrations), true)
 
 check('devices references events', /"devices_event_id_events_id_fk" FOREIGN KEY \("event_id"\) REFERENCES "public"\."events"\("id"\) ON DELETE restrict/.test(migrations), true)
-check('devices has NO password / hash / session column',
-  /password|hash|session|secret|token/i.test(stripComments(schemaSource).split('deviceAttributes')[0]), false)
+// Phase 9C-A added `password_hash` and `session_version`. Everything else on
+// this list is still forbidden.
+check('devices has NO secret, token or session table column',
+  /secret|token|plaintext|ciphertext/i.test(stripComments(schemaSource).split('deviceAttributes')[0]), false)
+check('  password_hash is NULLABLE, so existing devices survive',
+  /"password_hash" text;/.test(migrations), true)
+check('  session_version defaults to 1 and cannot go below it',
+  [/"session_version" integer DEFAULT 1 NOT NULL;/.test(migrations),
+   /"session_version" >= 1/.test(migrations)], [true, true])
 check('devices has NO deviceType', /deviceType|device_type/.test(stripComments(schemaSource)), false)
 check('login_name is nullable', /"login_name" text,/.test(migrations), true)
 check('  and non-empty when present', /devices_login_name_not_empty/.test(migrations), true)
@@ -95,7 +102,10 @@ for (const [label, pattern] of [
   ['payment column', /"(payment|payment_method|amount|paid)"/],
   ['central next_badge counter', /next_badge|nextBadge/],
   ['auth / session table', /CREATE TABLE "(sessions|device_sessions|credentials|passwords)"/],
-  ['password or hash column', /"(password|password_hash|secret|token|session_version)"/],
+  // `password_hash` and `session_version` arrived in Phase 9C-A; a reversible
+  // or plaintext credential column is still forbidden.
+  ['plaintext or reversible password column',
+    /"(password|password_plaintext|password_ciphertext|temporary_password|secret|token)"/],
   ['admin table', /CREATE TABLE "(admins|admin_users|users)"/],
   ['audit / activity table', /CREATE TABLE "(audit_log|activity|events_log)"/],
 ]) check(`no ${label}`, pattern.test(centralSurface), false)
@@ -138,9 +148,14 @@ check('  no disabled message leaks a value',
   Object.values(dbEnv.DATABASE_DISABLED_MESSAGES).some((m) => /postgres|:\/\/|@/.test(m)), false)
 
 console.log('\n=== 29-35. MIGRATIONS ===')
-check('migration files are version controlled', migrationFiles, ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
-check('  the journal tracks both', JSON.parse(read('drizzle/meta/_journal.json')).entries.map((e) => e.tag),
-  ['0000_central_foundation', '0001_range_guards_and_touch'])
+check('migration files are version controlled', migrationFiles,
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+check('  the journal tracks every one',
+  JSON.parse(read('drizzle/meta/_journal.json')).entries.map((e) => e.tag),
+  ['0000_central_foundation', '0001_range_guards_and_touch', '0002_device_credentials'])
+check('  and the earlier files were never edited',
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql']
+    .map((file) => /password|session_version/.test(read(`drizzle/${file}`))), [false, false])
 const pkg = JSON.parse(read('package.json'))
 check('db scripts exist', [pkg.scripts['db:generate'], pkg.scripts['db:migrate'], pkg.scripts['db:check']],
   ['drizzle-kit generate', 'drizzle-kit migrate', 'node scripts/db-check.mjs'])
@@ -153,8 +168,14 @@ check('no schema push from a Function',
   /push|sync\(\)|migrate\(/.test(stripComments(clientSource)), false)
 
 const dbCheckSource = stripComments(read('scripts/db-check.mjs'))
+// Scanned per SQL template, so a prose word like "drop" in a human-readable
+// label cannot be mistaken for a write.
 check('db:check is READ ONLY',
-  /INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE/i.test(dbCheckSource.replace(/EXPECTED_TABLES|information_schema|table_name|table_schema/g, '')), false)
+  [...dbCheckSource.matchAll(/sql`([^`]*)`/g)]
+    .map((match) => match[1])
+    .filter((statement) =>
+      !/^\s*SELECT\b/i.test(statement) ||
+      /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)\b/i.test(statement)), [])
 check('  it fails clearly without printing the URL',
   [dbCheckSource.includes('DATABASE_URL is not set'), /console\.(log|error)\([^)]*databaseUrl/.test(dbCheckSource)], [true, false])
 // Naming a file or a variable is not connecting; importing a driver or

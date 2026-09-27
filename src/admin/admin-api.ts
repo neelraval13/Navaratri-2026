@@ -11,6 +11,7 @@ const LOGOUT_ENDPOINT = '/api/admin-logout'
 const EVENTS_ENDPOINT = '/api/admin-events'
 const DEVICES_ENDPOINT = '/api/admin-devices'
 const BADGE_ENDPOINT = '/api/admin-badge-assignment'
+const PASSWORD_ENDPOINT = '/api/admin-device-password'
 
 const TIMEOUT_MS = 15_000
 
@@ -48,6 +49,13 @@ export interface AdminDevice {
   createdAt: string
   attributes: DeviceAttribute[]
   activeBadgeRange: AdminBadgeRange | null
+  /**
+   * Whether a device password has been provisioned. The hash itself, its
+   * salt, its parameters and the session version never leave the server.
+   *
+   * It does NOT mean the device can sign in: no device login exists yet.
+   */
+  credentialsConfigured: boolean
 }
 
 export type AdminResult<T> =
@@ -245,12 +253,21 @@ export const fetchDevices = async (eventId: string): Promise<AdminResult<AdminDe
     (body) => body.devices as AdminDevice[],
   )
 
+/**
+ * Credentials are optional here, and travel with the create so the device,
+ * its attributes and its password hash commit together.
+ *
+ * The plaintext is sent over HTTPS and hashed by the server. The caller drops
+ * it from React state as soon as this resolves.
+ */
 export const createDevice = async (input: {
   eventId: string
   name: string
   loginName: string | null
   enabled: boolean
   attributes: DeviceAttribute[]
+  password?: string
+  confirmPassword?: string
 }): Promise<AdminResult<AdminDevice>> =>
   json(DEVICES_ENDPOINT, mutation(input, 'POST'), (body) => body.device as AdminDevice)
 
@@ -269,6 +286,21 @@ export const updateDevice = async (input: {
   attributes: DeviceAttribute[]
 }): Promise<AdminResult<AdminDevice>> =>
   json(DEVICES_ENDPOINT, mutation(input, 'PATCH'), (body) => body.device as AdminDevice)
+
+/**
+ * Sets or resets ONE device's password.
+ *
+ * The reply carries only `credentialsConfigured`. Nothing is ever echoed
+ * back — not the password, not the hash, not the session version — and
+ * nothing is stored on this device.
+ */
+export const setDevicePassword = async (input: {
+  eventId: string
+  deviceId: string
+  password: string
+  confirmPassword: string
+}): Promise<AdminResult<true>> =>
+  json(PASSWORD_ENDPOINT, mutation(input, 'POST'), () => true)
 
 export const assignBadgeRange = async (input: {
   eventId: string

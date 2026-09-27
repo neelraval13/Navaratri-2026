@@ -85,11 +85,31 @@ export const devices = pgTable(
       .references(() => events.id, { onDelete: 'restrict' }),
     name: text('name').notNull(),
     /**
-     * Reserved for Phase 9C device authentication. It belongs to the registry
-     * and has a clear uniqueness rule, so it exists now — but there is no
-     * password, hash or session column, and authentication is unchanged.
+     * The future device username, per event. Still nullable: devices created
+     * before Phase 9C-A have none, and one is never generated silently.
      */
     loginName: text('login_name'),
+    /**
+     * The scrypt-encoded device password — NEVER a password, a plaintext
+     * copy, a reversible ciphertext or a temporary secret.
+     *
+     * NULL means CREDENTIALS HAVE NOT BEEN PROVISIONED. It must never be read
+     * as "this device may sign in without a password": the Phase 9C-B login
+     * will reject a null hash outright, before any comparison.
+     *
+     * Nullable because central devices already exist and the migration must
+     * preserve them exactly as they are.
+     */
+    passwordHash: text('password_hash'),
+    /**
+     * Groundwork for session revocation, unused in Phase 9C-A.
+     *
+     * Every deliberate password set or reset increments it. A future device
+     * session will carry the value it was issued under, so changing a
+     * password invalidates every session that device already holds. There is
+     * no session store to purge — the counter is the revocation.
+     */
+    sessionVersion: integer('session_version').notNull().default(1),
     enabled: boolean('enabled').notNull().default(true),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     ...timestamps,
@@ -115,6 +135,15 @@ export const devices = pgTable(
       'devices_login_name_not_empty',
       sql`${table.loginName} is null or length(btrim(${table.loginName})) > 0`,
     ),
+    check(
+      'devices_password_hash_not_empty',
+      sql`${table.passwordHash} is null or length(btrim(${table.passwordHash})) > 0`,
+    ),
+    /**
+     * A version below the initial 1 could only come from a bug, and would let
+     * a future session claim to predate every revocation.
+     */
+    check('devices_session_version_positive', sql`${table.sessionVersion} >= 1`),
   ],
 )
 

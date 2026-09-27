@@ -6,6 +6,7 @@ import { createDevice, updateDevice, type AdminDevice } from '@/admin/admin-api'
 import DeviceFormFields, {
   type DeviceFormValues,
 } from '@/components/admin/device-form-fields'
+import { checkPasswordPair } from '@/shared/device-password'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -24,11 +25,17 @@ interface DeviceDialogProps {
   onSaved: (device: AdminDevice) => void
 }
 
+/**
+ * An existing password is NEVER loaded. The server holds only a hash, and a
+ * blank field on an edit would be ambiguous — resetting is its own action.
+ */
 const toValues = (device?: AdminDevice): DeviceFormValues => ({
   name: device?.name ?? '',
   loginName: device?.loginName ?? '',
   enabled: device?.enabled ?? true,
   attributes: device?.attributes ?? [],
+  password: '',
+  confirmPassword: '',
 })
 
 /**
@@ -56,10 +63,30 @@ const DeviceDialog: React.FC<DeviceDialogProps> = ({ eventId, device, onSaved })
       return
     }
 
+    const loginName = values.loginName.trim() === '' ? null : values.loginName.trim()
+
+    /**
+     * Create Device only, and checked with the SAME rules the server applies,
+     * so a mismatch or a password without a login name is refused before a
+     * request that could only fail.
+     */
+    if (!isEdit) {
+      const credentials = checkPasswordPair({
+        password: values.password,
+        confirmPassword: values.confirmPassword,
+        hasLoginName: loginName !== null,
+        required: false,
+      })
+
+      if (!credentials.ok) {
+        setError(credentials.message)
+
+        return
+      }
+    }
+
     setIsSaving(true)
     setError(null)
-
-    const loginName = values.loginName.trim() === '' ? null : values.loginName.trim()
 
     /**
      * ONE request either way. Edit Device sends its fields and its exact
@@ -81,6 +108,8 @@ const DeviceDialog: React.FC<DeviceDialogProps> = ({ eventId, device, onSaved })
           loginName,
           enabled: values.enabled,
           attributes: values.attributes,
+          password: values.password,
+          confirmPassword: values.confirmPassword,
         })
 
     setIsSaving(false)
@@ -93,6 +122,8 @@ const DeviceDialog: React.FC<DeviceDialogProps> = ({ eventId, device, onSaved })
       return
     }
 
+    // The plaintext leaves React state the moment the save succeeds.
+    setValues(toValues(device))
     setIsOpen(false)
     onSaved(result.value)
   }
@@ -146,6 +177,7 @@ const DeviceDialog: React.FC<DeviceDialogProps> = ({ eventId, device, onSaved })
           values={values}
           onChange={setValues}
           activeBadgeRange={device?.activeBadgeRange ?? null}
+          showCredentials={!isEdit}
         />
 
         {error === null ? null : (

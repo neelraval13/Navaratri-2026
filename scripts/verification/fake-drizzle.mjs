@@ -18,7 +18,8 @@ export const events = tableOf('events', [
 ])
 
 export const devices = tableOf('devices', [
-  'id', 'eventId', 'name', 'loginName', 'enabled', 'lastSeenAt', 'createdAt', 'updatedAt',
+  'id', 'eventId', 'name', 'loginName', 'passwordHash', 'sessionVersion',
+  'enabled', 'lastSeenAt', 'createdAt', 'updatedAt',
 ])
 
 export const deviceAttributes = tableOf('device_attributes', ['deviceId', 'attribute'])
@@ -31,3 +32,6 @@ export const eq = (left, value) => ({ op: 'eq', column: left.column, value })
 export const isNull = (left) => ({ op: 'isNull', column: left.column })
 export const and = (...parts) => ({ op: 'and', parts: parts.filter(Boolean) })
 export const asc = (left) => ({ op: 'asc', column: left.column })
+
+/** A tagged template captured as a descriptor, never as real SQL. */
+export const sql = (strings, ...values) => ({ op: 'sql', strings: [...strings], values })
