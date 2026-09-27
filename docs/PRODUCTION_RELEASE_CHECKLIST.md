@@ -73,6 +73,9 @@ manually.
 | 3.12 | `0002_device_credentials.sql` reviewed and applied to Development first, then Production, by hand | ☐ |
 | 3.13 | Device passwords recorded wherever the organizer keeps operational secrets — they are never shown again | ☐ |
 | 3.14 | No device password provisioned on a shared or reused passphrase | ☐ |
+| 3.15 | `EVENT_DEVICE_SESSION_SECRET` set, 32+ chars, generated independently of the other two secrets | ☐ |
+| 3.16 | Device-login rate limit configured per `docs/VERCEL_FIREWALL.md`, **with the venue's NAT checked** | ☐ |
+| 3.17 | All three realms verified apart on the deployment: a device cookie reaches no Admin or operator API, and neither reaches `/api/device-session` | ☐ |
 
 Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
 
@@ -85,7 +88,23 @@ the production API boundary and `/admin` is still its own realm.
 
 `password_hash = NULL` means *not provisioned*, never *passwordless*. A
 password is never displayed after it is set and cannot be recovered — only
-reset, which also revokes any future sessions issued under the old one.
+reset, which since Phase 9C-B **immediately signs that device out of every
+browser it is logged into**.
+
+### Device authentication (Phase 9C-B)
+
+The device realm exists and works, but **the event application does not use
+it**: `/`, `/badge-registration` and `/device-registration` still sit behind
+Operator Access, and a device session unlocks none of them. Enabling
+`EVENT_DEVICE_SESSION_SECRET` in Production therefore changes nothing an
+operator sees — it only makes `POST /api/device-login` functional.
+
+Leaving it unset is a valid Production posture for this phase: device
+authentication simply reports itself unavailable, and everything else runs
+unchanged.
+
+Rotating it invalidates every device session at once. Per-device revocation is
+an Admin password reset or disabling the device.
 
 The login rate limit is a Vercel firewall rule configured by hand in the
 Dashboard — no application code creates it, and `release:check` cannot verify

@@ -177,12 +177,15 @@ shared constant so they cannot disagree.
 Phase 9C-A lets Admin provision the credentials a device will eventually sign
 in with: its **login name** plus a **device password**.
 
-> **Storing a credential is not enabling a login.**
+> **Provisioning a credential does not put a device into service.**
 >
-> There is no `/api/device-login`, no device session, no cookie and no
-> heartbeat. Devices still use Operator Access exactly as before, and
-> provisioning a password activates nothing. Setting one on a *disabled*
-> device is normal — preparing a desk before opening it.
+> Since Phase 9C-B these credentials do work: a device can sign in at
+> `POST /api/device-login` and hold its own session. But the **event
+> application still runs on Operator Access** — a device session unlocks none
+> of `/`, `/badge-registration` or `/device-registration`, and there is no
+> device login screen yet. Setting a password on a *disabled* device is
+> normal, and preparing a desk before opening it; a disabled device cannot
+> sign in.
 
 ### What is stored
 
@@ -262,11 +265,18 @@ route to a device without one.
 
 ### `session_version`
 
-Groundwork for session revocation, unused today. Every deliberate password
-change increments it — `1 → 2`, then `2 → 3` — with no attempt to detect
-whether the new password equals the old one. A future device session will carry
-the value it was issued under, so a reset invalidates every session that device
-already holds.
+The revocation mechanism. Every deliberate password change increments it —
+`1 → 2`, then `2 → 3` — with no attempt to detect whether the new password
+equals the old one.
+
+**Since Phase 9C-B this has an immediate effect.** A device session carries the
+version it was issued under, and every authenticated request compares it with
+the stored value. Resetting a password therefore signs that device out of every
+browser it is logged into, at once, with no logout and no session store. See
+`docs/DEVICE_AUTH.md`.
+
+Disabling a device has the same effect on its live sessions, and is the right
+action when a desk should stop being used rather than get new credentials.
 
 It is never exposed to Admin: it answers a question Admin does not ask.
 

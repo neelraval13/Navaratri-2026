@@ -1,4 +1,4 @@
-# Vercel Firewall — Operator Login Rate Limit
+# Vercel Firewall — Login Rate Limits
 
 `POST /api/operator-login` is the one public, unauthenticated endpoint in this
 application. It needs edge rate limiting.
@@ -74,6 +74,44 @@ Like the operator rule, this is **not created by application code** and must
 be configured manually in the Vercel Dashboard. Review it before production
 enablement. The client shows a generic *"Too many admin login attempts"*
 message on 429 and reveals no address, counter or code correctness.
+
+## Device login
+
+`POST /api/device-login` is the third public, unauthenticated endpoint.
+
+**The limit must be looser than it looks like it should be.** Several event
+devices normally share the venue's Wi-Fi and leave through **one NAT address**,
+so an IP-keyed rule sees every desk as one client. A tight limit would lock out
+the whole venue while an operator retypes a passphrase on one tablet.
+
+| Setting | Value |
+|---|---|
+| **Condition — Path** | `/api/device-login` |
+| **Condition — Method** | `POST` |
+| **Action** | Rate Limit |
+| **Key** | IP |
+| **Limit** | 30 |
+| **Window** | 60 seconds |
+| **Algorithm** | Fixed Window |
+
+This is a **starting point, not a setting to accept unexamined**. Before
+production, count the devices that will actually be at the venue and confirm
+whether they egress through a single address. A site with twenty desks
+provisioning on the morning of the event will exceed 30/minute legitimately.
+
+Like the other two, it is not created by application code and must be
+configured manually in the Vercel Dashboard.
+
+Rate limiting is a smaller part of the protection here than it is for the
+operator or Admin endpoints: every device login path — unknown event, unknown
+login name, unprovisioned device, wrong password — pays for a full scrypt
+derivation, so guessing is inherently expensive and every failure looks
+identical. See `docs/DEVICE_AUTH.md`.
+
+**Do not rate-limit `/api/device-session`**: it is called on startup and on
+reconnect, exactly like `/api/operator-session`, and blocking it would break
+a working desk rather than a guesser. **Do not rate-limit
+`/api/device-logout`** either.
 
 ## Scope: this endpoint only
 

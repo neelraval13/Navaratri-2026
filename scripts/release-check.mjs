@@ -53,6 +53,7 @@ const SERVER_ONLY_NAMES = [
   'DATABASE_URL',
   'EVENT_ADMIN_ACCESS_CODE',
   'EVENT_ADMIN_SESSION_SECRET',
+  'EVENT_DEVICE_SESSION_SECRET',
   'EVENT_OPERATOR_ACCESS_CODE',
   'EVENT_SESSION_SECRET',
   'GOOGLE_SHEETS_SPREADSHEET_ID',
@@ -87,7 +88,16 @@ const REQUIRED_FILES = [
   'server/admin-auth/cookies.ts',
   'server/admin/registry.ts',
   'server/device-auth/password.ts',
+  'server/device-auth/environment.ts',
+  'server/device-auth/session.ts',
+  'server/device-auth/cookies.ts',
+  'server/device-auth/same-origin.ts',
+  'server/device-auth/authenticate.ts',
   'src/shared/device-password.ts',
+  'api/device-login.ts',
+  'api/device-session.ts',
+  'api/device-logout.ts',
+  'docs/DEVICE_AUTH.md',
   'api/admin-login.ts',
   'api/admin-device-password.ts',
   'api/admin-session.ts',
@@ -628,8 +638,8 @@ if (passwordSource === null) {
   credentialProblems.push('server/device-auth/password.ts does not use node:crypto')
 }
 
-// Phase 9C-A stores credentials; it must NOT enable a device login.
-for (const name of ['device-login.ts', 'device-session.ts', 'device-logout.ts']) {
+// Phase 9C-C connects the device realm to the event app. Not yet.
+for (const name of ['device-claim-range.ts', 'device-heartbeat.ts', 'device-enroll.ts']) {
   if (exists(join(ROOT, 'api', name))) {
     credentialProblems.push(`api/${name} exists before its phase`)
   }
@@ -650,8 +660,106 @@ for (const [name, command] of Object.entries(manifestScripts)) {
 
 addCheck(
   'device-credentials',
-  'Device credentials are server-side only and login stays unbuilt',
+  'Device credentials are server-side only',
   credentialProblems,
+)
+
+// --- G3. the device auth realm is separate and not yet wired in ------------
+const deviceRealmProblems = []
+
+const deviceCookies = readText(join(ROOT, 'server/device-auth/cookies.ts'))
+const deviceSession = readText(join(ROOT, 'server/device-auth/session.ts'))
+
+if (deviceCookies === null || deviceSession === null) {
+  deviceRealmProblems.push('the device session modules could not be read')
+} else {
+  if (!deviceCookies.includes("'__Host-navaratri_device_session'")) {
+    deviceRealmProblems.push('the device cookie is not __Host-navaratri_device_session')
+  }
+
+  for (const foreign of ['navaratri_admin_session', 'navaratri_operator_session']) {
+    if (deviceCookies.includes(foreign)) {
+      deviceRealmProblems.push(`server/device-auth/cookies.ts references ${foreign}`)
+    }
+  }
+
+  for (const attribute of ['Secure', 'HttpOnly', 'SameSite=Strict', 'Path=/']) {
+    if (!deviceCookies.includes(attribute)) {
+      deviceRealmProblems.push(`the device cookie is missing ${attribute}`)
+    }
+  }
+
+  if (/Domain=/.test(deviceCookies)) {
+    deviceRealmProblems.push('the device cookie sets a Domain')
+  }
+
+  if (!deviceSession.includes("'navaratri-device-session-v1:'")) {
+    deviceRealmProblems.push('the device signing context is missing or renamed')
+  }
+
+  // Comments stripped: this file EXPLAINS the other realms' contexts.
+  if (/navaratri-admin-session-v1|admin-auth\/|server\/auth\//.test(stripComments(deviceSession))) {
+    deviceRealmProblems.push('server/device-auth/session.ts reuses another realm')
+  }
+}
+
+// The realms must not import each other's session code.
+for (const path of walk(join(ROOT, 'server/device-auth'))) {
+  const text = readText(path)
+
+  if (text !== null && /from\s+['"][^'"]*(admin-auth|\.\.\/auth)\//.test(text)) {
+    deviceRealmProblems.push(`${rel(path)} imports another realm's auth code`)
+  }
+}
+
+// Phase 9C-B is server-side only: no device UI, and the event app must not
+// call the session endpoint.
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path)
+
+  if (text === null) {
+    continue
+  }
+
+  const code = stripComments(text)
+
+  if (/device-login|device-session|device-logout/.test(code)) {
+    deviceRealmProblems.push(`${rel(path)} calls a device auth endpoint before its phase`)
+  }
+
+  if (/DeviceLoginForm|DeviceAccessGate|DeviceSessionGate/.test(code)) {
+    deviceRealmProblems.push(`${rel(path)} defines device login UI before its phase`)
+  }
+
+  if (/navaratri_device_session/.test(code)) {
+    deviceRealmProblems.push(`${rel(path)} references the device cookie in client code`)
+  }
+}
+
+// The event routes must still be the ones Operator Access protects.
+const routerSource = readText(join(ROOT, 'src/components/app-router.tsx'))
+const gateSource = readText(join(ROOT, 'src/components/event-app-gate.tsx'))
+
+if (routerSource === null || gateSource === null) {
+  deviceRealmProblems.push('the router or event gate could not be read')
+} else {
+  if (!gateSource.includes('OperatorAccessGate')) {
+    deviceRealmProblems.push('the event shell no longer uses OperatorAccessGate')
+  }
+
+  if (/Device(Access|Session|Login)/.test(stripComments(gateSource) + stripComments(routerSource))) {
+    deviceRealmProblems.push('a device gate has been wired into the event routes')
+  }
+}
+
+addCheck(
+  'device-realm',
+  'Device auth is a separate realm and is not yet wired into the event app',
+  deviceRealmProblems,
 )
 
 // --- G. client code never reads a server-only variable ----------------------

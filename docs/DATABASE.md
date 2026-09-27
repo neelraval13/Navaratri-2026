@@ -128,19 +128,24 @@ added, and the migration must preserve them exactly as they are. There is no
 way to set it back to `NULL`: once a device is provisioned the choices are
 resetting the password or disabling the device.
 
-`session_version` is groundwork for session revocation and is unused today.
-Every deliberate password set or reset increments it — `1 → 2` on the first
-set, `2 → 3` on the next — without comparing the new password to the old one.
-A future device session will carry the value it was issued under, so changing
-a password invalidates every session that device already holds. There is no
-session store to purge; the counter is the revocation.
+`session_version` is the device session revocation mechanism. Every deliberate
+password set or reset increments it — `1 → 2` on the first set, `2 → 3` on the
+next — without comparing the new password to the old one. A device session
+carries the value it was issued under, and every authenticated request compares
+the two, so changing a password invalidates every session that device already
+holds. **There is no session table to purge; the counter is the revocation,
+and no session table should be added.**
 
 Neither column is ever exposed to a browser. Admin sees only a derived
-`credentialsConfigured` boolean.
+`credentialsConfigured` boolean, and the device APIs return neither.
 
-**Phase 9C-A stores credentials. It does not enable device login.** There is no
-`/api/device-login`, no device session, no cookie and no heartbeat. Devices
-still use Operator Access exactly as before.
+`enabled`, `last_seen_at` and `events.active` are also read by device
+authentication: a disabled device or an inactive event cannot sign in and its
+existing sessions stop verifying, and a successful device login is the only
+thing that writes `last_seen_at`. See `docs/DEVICE_AUTH.md`.
+
+**The event application still runs on Operator Access.** A device session
+unlocks none of its routes; that is Phase 9C-C.
 
 ### Attributes are text, not an enum
 

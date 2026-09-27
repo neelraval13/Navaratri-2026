@@ -1438,6 +1438,49 @@ between keeping, clearing and emptying the password, so a reset is its own
 deliberate action. Credentials always require a login name, and one is never
 generated to make a request succeed.
 
+## Device Authentication
+
+Device auth is a THIRD independent security realm, alongside Operator Access
+and Admin. Its cookie is `__Host-navaratri_device_session`, its secret is
+`EVENT_DEVICE_SESSION_SECRET` (server-only, min 32, exact, never `VITE_`), and
+its signing context is `navaratri-device-session-v1:`.
+
+A Device cookie NEVER satisfies Admin or Operator auth, and neither of those
+ever authenticates a device. Separation is CRYPTOGRAPHIC: each realm signs a
+different message, so all three reject each other's tokens even with identical
+secrets. Never import one realm's session code into another.
+
+A device authenticates with `eventSlug` + `loginName` + `password`. Login names
+are unique PER EVENT, so the lookup is always event-scoped — never a bare
+`WHERE login_name = ?`.
+
+The token carries IDENTIFIERS AND A SESSION VERSION, never permissions: no
+password, hash, login name, device name, attributes, badge range, `enabled` or
+`lastSeenAt`. Those change centrally and are fetched FRESH from Postgres on
+every authenticated request, so an Admin change takes effect without a new
+cookie and without a password reset.
+
+`session_version` is the revocation mechanism, and there is NO session store.
+Every authenticated request verifies `token.sv === devices.session_version`; an
+Admin password reset increments it and instantly invalidates every cookie
+issued under the old value. Verifying the HMAC alone is NOT authorization.
+
+`enabled = false` and `events.active = false` each invalidate login and every
+existing session. `password_hash IS NULL` is never passwordless login.
+
+Every credential failure — unknown event, unknown login name, unprovisioned
+device, policy violation, wrong password — returns ONE generic 401 and does
+COMPARABLE password work, via a fixed timing-equalizer hash. Only after the
+password is proven may a typed 403 name `device-disabled` or `event-inactive`.
+
+`last_seen_at` is written ONLY by a successful device login. A session check
+never touches it, and there is NO heartbeat.
+
+Phase 9C-B builds the realm but does NOT wire it in. The event routes still use
+Operator Access, nothing in `src/` calls the device endpoints, there is no
+device login UI, and no device auth data reaches IndexedDB. Connecting them is
+9C-C/9C-D.
+
 ## Central Database
 
 PostgreSQL (Neon) is the CENTRAL OPERATIONAL AUTHORITY: events, devices,

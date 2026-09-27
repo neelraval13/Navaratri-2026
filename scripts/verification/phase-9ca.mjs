@@ -293,11 +293,15 @@ const registrySource = stripComments(read('server/admin/registry.ts'))
 check('no clear/remove/disable-password operation',
   /clearDevicePassword|removeCredentials|disablePassword|passwordHash: null/.test(registrySource), false)
 check('  nor any such API route',
-  readdirSync(join(root, 'api')).filter((f) => /clear|revoke|device-login|device-session/i.test(f)), [])
-check('  no device login endpoint exists',
-  ['device-login.ts', 'device-session.ts', 'device-logout.ts']
+  readdirSync(join(root, 'api')).filter((f) => /clear|revoke|password-remove/i.test(f)), [])
+// Phase 9C-B added the device realm. What must still NOT exist is the next
+// phase: enrollment, self-claim and a heartbeat.
+check('  no enrollment or self-claim endpoint exists',
+  ['device-enroll.ts', 'device-claim-range.ts', 'device-heartbeat.ts']
     .map((f) => existsSync(join(root, 'api', f))), [false, false, false])
-check('  no device session module exists', existsSync(join(root, 'server/device-auth/session.ts')), false)
+check('  and a password is still only ever set or reset',
+  /clearDevicePassword|removeCredentials|disablePassword/.test(
+    readdirSync(join(root, 'api')).map((f) => read(`api/${f}`)).join('\n')), false)
 check('  password.ts holds no HTTP or database concern',
   /Request|Response|getDatabase|drizzle|cookie/i.test(stripComments(read('server/device-auth/password.ts'))), false)
 

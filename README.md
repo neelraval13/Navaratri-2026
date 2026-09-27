@@ -71,10 +71,36 @@ leave the server, and a password is never shown again after it is set.
 > Operator Access, and provisioning a password activates nothing.
 > `password_hash = NULL` means *not provisioned* — never *passwordless*.
 
-**Still deliberately absent:** device login, a heartbeat, central enforcement
-of `enabled`, and badge-range self-claim. `/device-registration` remains the
-transitional local flow and is not yet linked to central records. Those
-connect in the later 9C phases.
+## Device authentication (Phase 9C-B — realm only)
+
+A central device can now authenticate with `eventSlug` + `loginName` +
+`password` against `POST /api/device-login`, and receives its own 14-day
+`__Host-navaratri_device_session` cookie.
+
+This is a **third independent realm**. A device session authorizes no Admin or
+operator API, and neither of those authenticates a device — each realm signs a
+different message, so they reject each other's tokens even with identical
+secrets.
+
+The token carries identifiers and a session version, never permissions.
+Attributes, the badge range, `enabled` and `events.active` are re-read from
+Postgres on every check, so an Admin change takes effect immediately without a
+new cookie. An Admin password reset increments `session_version` and revokes
+every existing device session at once — there is no session store.
+
+> **The event application does not use this yet.**
+>
+> `/`, `/badge-registration` and `/device-registration` still sit behind
+> Operator Access. A device cookie unlocks none of them, nothing in the app
+> calls these endpoints, and there is no device login screen.
+
+See `docs/DEVICE_AUTH.md`.
+
+**Still deliberately absent:** a device login UI, device enrollment, a
+heartbeat, offline device authorization, badge-range self-claim, and any
+mapping from an authenticated central device into IndexedDB.
+`/device-registration` remains the transitional local flow. Those connect in
+Phase 9C-C and 9C-D.
 
 ## Central database (Phase 9A — foundation only)
 
