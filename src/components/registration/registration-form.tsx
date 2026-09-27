@@ -26,7 +26,9 @@ import type {
   RegistrationStep,
 } from '@/components/registration/types'
 import { Card, CardContent } from '@/components/ui/card'
+import { formatBadgeRange } from '@/db/device'
 import { hasBadgeAvailable } from '@/db/event-config'
+import type { EventConfig } from '@/db/types'
 import { holdRegistration, issueBadge } from '@/db/registrations'
 import type { CompletedRegistration, HeldRegistration } from '@/db/types'
 import { useEventConfig } from '@/hooks/use-event-config'
@@ -43,6 +45,8 @@ const HOLD_ERROR_MESSAGES = {
   heldConflict:
     'This attendee is already on hold. Nothing was saved — resume the existing hold instead.',
   completedConflict: 'This attendee already has a badge. Nothing was saved.',
+  deviceNotConfigured:
+    'This device has not completed Device Setup, so nothing was saved.',
 } as const
 
 const ISSUE_ERROR_MESSAGES = {
@@ -59,11 +63,29 @@ const ISSUE_ERROR_MESSAGES = {
     "No badges remain in this desk's assigned range.",
   'badge-conflict':
     'The next badge number is already assigned. Badge was not issued.',
+  'device-not-configured':
+    'This device has not completed Device Setup. Badge was not issued.',
 } as const
 
-const BADGE_RANGE_EXHAUSTED_NOTICE: FormNoticeState = {
-  kind: 'error',
-  message: "No badges remaining in this desk's assigned range.",
+/**
+ * Names THIS desk's range, because the operator's next action is to go to a
+ * desk that still has badges — and they need to know which stack ran out.
+ */
+const buildBadgeRangeExhaustedNotice = (
+  config: EventConfig,
+): FormNoticeState => {
+  const range =
+    config.badgeEnd === undefined
+      ? null
+      : formatBadgeRange(config.badgeStart, config.badgeEnd)
+
+  return {
+    kind: 'error',
+    message:
+      range === null
+        ? 'Badge range exhausted. No more badges can be issued from this device.'
+        : `Badge range exhausted. This device was assigned ${range}. No more badges can be issued from this device. Hold Registration is still available — contact the organizer for another badge range.`,
+  }
 }
 
 /**
@@ -396,6 +418,15 @@ const RegistrationForm: React.FC = () => {
         return
       }
 
+      if (result.outcome === 'device-not-configured') {
+        setFormNotice({
+          kind: 'error',
+          message: HOLD_ERROR_MESSAGES.deviceNotConfigured,
+        })
+
+        return
+      }
+
       // A conflict only reaches here when the UI lookup was stale. Nothing was
       // written, and the draft is preserved.
       setFormNotice({
@@ -526,7 +557,7 @@ const RegistrationForm: React.FC = () => {
             className={cn(badgeRangeJitter === 'badge-range' && 'jitter')}
             onAnimationEnd={clearBadgeRangeJitter}
           >
-            <FormNotice notice={BADGE_RANGE_EXHAUSTED_NOTICE} />
+            <FormNotice notice={buildBadgeRangeExhaustedNotice(config)} />
           </div>
         )}
 

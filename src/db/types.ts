@@ -23,6 +23,19 @@ interface RegistrationAttendee {
   age: number
   gender: Gender
   amount: number
+  /**
+   * Which device produced this registration state.
+   *
+   * Snapshotted when the state is WRITTEN, never derived later at send time, so
+   * a queued outbox snapshot already carries its own provenance and a later
+   * device configuration change can never rewrite history behind the processor.
+   *
+   * Optional only for legacy compatibility with records written before Phase 7.
+   * Every new hold and issue requires both, because both require a configured
+   * device.
+   */
+  deviceId?: string
+  deviceName?: string
   /** ISO 8601 UTC, from `new Date().toISOString()`. */
   createdAt: string
   /** ISO 8601 UTC. */
@@ -74,9 +87,25 @@ export interface EventConfig {
   /** IANA zone used later to render human-facing Date and Time columns. */
   timezone: string
   badgeStart: number
-  /** Undefined until the operator supplies a badge range. */
+  /**
+   * Undefined until Device Setup assigns this desk a range. A CONFIGURED device
+   * always has a finite end: Phase 7 permits no open-ended range, because an
+   * open range is exactly how two offline desks issue the same physical badge.
+   */
   badgeEnd?: number
   nextBadge: number
+  /**
+   * Stable identity for this browser/device installation, generated once by
+   * `crypto.randomUUID()` at Device Setup and never regenerated in normal use.
+   *
+   * These live on the EXISTING config row: no new store, no new index, and
+   * therefore no Dexie version bump.
+   */
+  deviceId?: string
+  /** Operator-supplied label, e.g. `Registration Desk A`. */
+  deviceName?: string
+  /** ISO 8601 UTC, written on successful initial setup. */
+  deviceConfiguredAt?: string
   /** Undefined until the operator supplies the organizer UPI details. */
   upiId?: string
   payeeName?: string

@@ -179,6 +179,9 @@ Point it at a **disposable development spreadsheet** only.
 | 6.1 | Production app loaded on the event device **while online** | ☐ |
 | 6.2 | Installed as a PWA | ☐ |
 | 6.3 | `await navigator.storage.persisted()` returns `true`, or the refusal is accepted | ☐ |
+| 6.3a | **Device Setup** completed on this device | ☐ |
+| 6.3b | Its range does not overlap any other device's | ☐ |
+| 6.3c | The matching physical badge stack is at this device | ☐ |
 | 6.4 | `nextBadge` matches the first physical badge on the desk | ☐ |
 | 6.5 | Badge range (`badgeStart` / `badgeEnd`) is correct | ☐ |
 | 6.6 | UPI QR scanned: correct payee, ₹20 | ☐ |

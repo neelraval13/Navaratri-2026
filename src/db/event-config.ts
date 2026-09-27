@@ -1,4 +1,5 @@
 import { db } from '@/db/database'
+import { isDeviceConfigured } from '@/db/device'
 import { EVENT_CONFIG_ID, type EventConfig } from '@/db/types'
 
 /**
@@ -12,16 +13,21 @@ export const readEventConfig = async (): Promise<EventConfig | undefined> => {
 }
 
 /**
- * Whether a badge can still be allocated from this desk's configured range.
+ * Whether a badge can still be allocated from this desk's assigned range.
  *
- * `badgeEnd` is optional; when it is absent the range is open-ended. Allocation
- * never wraps back to `badgeStart`.
+ * An UNCONFIGURED device never has a badge available. Phase 7 permits no
+ * open-ended range: badge uniqueness across offline devices rests entirely on
+ * each desk owning a finite, non-overlapping slice, so a desk with no assigned
+ * end owns nothing and must issue nothing.
+ *
+ * Allocation never wraps back to `badgeStart` and never skips to another free
+ * number.
  *
  * The UI and the issuance transaction share this one rule so a stale UI can
  * never disagree with what the database will actually allow.
  */
 export const hasBadgeAvailable = (config: EventConfig): boolean => {
-  return config.badgeEnd === undefined || config.nextBadge <= config.badgeEnd
+  return isDeviceConfigured(config) && config.nextBadge <= config.badgeEnd
 }
 
 export interface UpiEnvironment {

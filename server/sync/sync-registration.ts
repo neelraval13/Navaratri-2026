@@ -17,15 +17,18 @@ import {
   buildCompletedSyncRequests,
   buildHeldSyncRequests,
   buildTabInitializationRequests,
+  buildTabUpgradeRequests,
   type SheetsRequest,
 } from './requests.js'
 import {
   BADGE_REGISTER_COLUMNS,
   BADGE_REGISTER_HEADERS,
+  BADGE_REGISTER_HEADERS_V1,
   BADGE_REGISTER_RANGE,
   BADGE_REGISTER_TITLE,
   HELD_REGISTRATIONS_COLUMNS,
   HELD_REGISTRATIONS_HEADERS,
+  HELD_REGISTRATIONS_HEADERS_V1,
   HELD_REGISTRATIONS_RANGE,
   HELD_REGISTRATIONS_TITLE,
   checkTabShape,
@@ -174,8 +177,16 @@ const loadTabs = async (
   const badgeValues = (ranges[0]?.values ?? []) as unknown[][]
   const heldValues = (ranges[1]?.values ?? []) as unknown[][]
 
-  const badgeShape = checkTabShape(badgeValues, BADGE_REGISTER_HEADERS)
-  const heldShape = checkTabShape(heldValues, HELD_REGISTRATIONS_HEADERS)
+  const badgeShape = checkTabShape(
+    badgeValues,
+    BADGE_REGISTER_HEADERS,
+    BADGE_REGISTER_HEADERS_V1,
+  )
+  const heldShape = checkTabShape(
+    heldValues,
+    HELD_REGISTRATIONS_HEADERS,
+    HELD_REGISTRATIONS_HEADERS_V1,
+  )
 
   if (badgeShape === 'conflicting') {
     return {
@@ -213,6 +224,34 @@ const loadTabs = async (
         HELD_REGISTRATIONS_COLUMNS.registrationId,
         HELD_REGISTRATIONS_COLUMNS.phone,
         null,
+      ),
+    )
+  }
+
+  /**
+   * A V1 tab is upgraded in place before anything is read from it. Existing
+   * rows are untouched; only the appended device headers and the hidden-column
+   * range change, so the first Phase 7 sync against the live Sheet does not
+   * fail merely because the device columns did not exist yet.
+   */
+  if (badgeShape === 'legacy') {
+    initializationRequests.push(
+      ...buildTabUpgradeRequests(
+        badgeSheetId,
+        BADGE_REGISTER_HEADERS,
+        BADGE_REGISTER_COLUMNS.legacyCount,
+        BADGE_REGISTER_COLUMNS.registrationId,
+      ),
+    )
+  }
+
+  if (heldShape === 'legacy') {
+    initializationRequests.push(
+      ...buildTabUpgradeRequests(
+        heldSheetId,
+        HELD_REGISTRATIONS_HEADERS,
+        HELD_REGISTRATIONS_COLUMNS.legacyCount,
+        HELD_REGISTRATIONS_COLUMNS.registrationId,
       ),
     )
   }

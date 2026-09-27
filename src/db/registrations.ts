@@ -1,4 +1,5 @@
 import { db } from '@/db/database'
+import { isDeviceConfigured } from '@/db/device'
 import { hasBadgeAvailable } from '@/db/event-config'
 import {
   EVENT_CONFIG_ID,
@@ -77,6 +78,7 @@ export type HoldRegistrationResult =
   | { outcome: 'held-conflict'; registration: HeldRegistration }
   | { outcome: 'completed-conflict'; registration: CompletedRegistration }
   | { outcome: 'missing-config' }
+  | { outcome: 'device-not-configured' }
 
 /**
  * One pending outbox row per registration: repeated local edits before a sync
@@ -120,6 +122,15 @@ export const holdRegistration = async (
         return { outcome: 'missing-config' }
       }
 
+      /**
+       * Defence in depth. UI gating is not enough: a stale tab or a direct call
+       * must not be able to create a registration on a device that has no
+       * assigned badge range and no identity to stamp on the snapshot.
+       */
+      if (!isDeviceConfigured(config)) {
+        return { outcome: 'device-not-configured' }
+      }
+
       const existing =
         input.registrationId === null
           ? undefined
@@ -156,6 +167,9 @@ export const holdRegistration = async (
         age: input.age,
         gender: input.gender,
         amount: config.amount,
+        // Provenance belongs to the snapshot, captured as it is written.
+        deviceId: config.deviceId,
+        deviceName: config.deviceName,
         status: 'held',
         paymentStatus: 'pending',
         ...(paymentMethod === undefined ? {} : { paymentMethod }),
@@ -226,6 +240,7 @@ export type IssueBadgeResult =
       config: EventConfig
     }
   | { outcome: 'missing-config' }
+  | { outcome: 'device-not-configured' }
   | { outcome: 'missing-active-registration' }
   | { outcome: 'completed-conflict'; registration: CompletedRegistration }
   | { outcome: 'held-conflict'; registration: HeldRegistration }
@@ -269,6 +284,10 @@ export const issueBadge = async (
         return { outcome: 'missing-config' }
       }
 
+      if (!isDeviceConfigured(config)) {
+        return { outcome: 'device-not-configured' }
+      }
+
       const badgeNumber = config.nextBadge
 
       // Enforced here too, so a stale UI can never push past the range.
@@ -276,8 +295,7 @@ export const issueBadge = async (
         return {
           outcome: 'badge-range-exhausted',
           badgeNumber,
-          // hasBadgeAvailable is only false when badgeEnd is defined.
-          badgeEnd: config.badgeEnd ?? badgeNumber,
+          badgeEnd: config.badgeEnd,
         }
       }
 
@@ -336,6 +354,9 @@ export const issueBadge = async (
         age: input.age,
         gender: input.gender,
         amount: config.amount,
+        // The CURRENT issuing device, snapshotted at completion.
+        deviceId: config.deviceId,
+        deviceName: config.deviceName,
         status: 'completed',
         paymentStatus: 'confirmed',
         paymentMethod: input.paymentMethod,

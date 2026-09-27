@@ -202,6 +202,59 @@ export const buildHeldSyncRequests = (
 }
 
 /**
+ * Upgrades a recognised V1 tab to V2, in ONE batch.
+ *
+ * Deliberately minimal. It writes ONLY the appended header cells and re-applies
+ * the hidden-column range so it reaches the new end column. It does not touch
+ * existing attendee rows, does not move a column, does not delete anything and
+ * never rewrites Registration ID or Updated At — existing rows simply end up
+ * with blank Device cells.
+ *
+ * Idempotent: running it against a tab that is already V2 rewrites the same
+ * header text and re-hides already-hidden columns, which changes nothing.
+ */
+export const buildTabUpgradeRequests = (
+  sheetId: number,
+  headers: readonly string[],
+  legacyColumnCount: number,
+  technicalStartColumn: number,
+): SheetsRequest[] => {
+  const appendedHeaders = headers.slice(legacyColumnCount)
+
+  if (appendedHeaders.length === 0) {
+    return []
+  }
+
+  return [
+    {
+      updateCells: {
+        range: {
+          sheetId,
+          startRowIndex: 0,
+          endRowIndex: 1,
+          startColumnIndex: legacyColumnCount,
+          endColumnIndex: headers.length,
+        },
+        rows: [toRowData(buildHeaderRow(appendedHeaders))],
+        fields: 'userEnteredValue',
+      },
+    },
+    {
+      updateDimensionProperties: {
+        range: {
+          sheetId,
+          dimension: 'COLUMNS',
+          startIndex: technicalStartColumn,
+          endIndex: headers.length,
+        },
+        properties: { hiddenByUser: true },
+        fields: 'hiddenByUser',
+      },
+    },
+  ]
+}
+
+/**
  * Initialises a genuinely blank tab in ONE batch: header values and every piece
  * of contract formatting together.
  *

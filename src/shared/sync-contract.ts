@@ -6,6 +6,8 @@
  * will import the same file, so the two can never disagree about the shape.
  */
 
+import { checkDeviceProvenance } from './device.js'
+
 export const SYNC_OPERATION = 'upsert'
 
 export type SyncOperation = typeof SYNC_OPERATION
@@ -25,6 +27,12 @@ export const buildPendingOutboxId = (registrationId: string): string => {
 interface SyncAttendeeFields {
   id: string
   name: string
+  /**
+   * Which device produced this snapshot. Both present or both absent: absent
+   * means a pre-Phase-7 legacy snapshot, which writes blank device cells.
+   */
+  deviceId?: string
+  deviceName?: string
   /** Comparison form. Carried for completeness; never written to the Sheet. */
   normalizedName?: string
   /** Raw 10 digits. Never +91, never display spacing. */
@@ -203,6 +211,12 @@ export const parseSyncRegistrationRequest = (body: unknown): ParseResult => {
 
   if (isPresent(payload, 'normalizedName') && typeof payload.normalizedName !== 'string') {
     return { ok: false, message: 'payload.normalizedName must be a string.' }
+  }
+
+  const deviceCheck = checkDeviceProvenance(payload.deviceId, payload.deviceName)
+
+  if (!deviceCheck.ok) {
+    return { ok: false, message: deviceCheck.message }
   }
 
   if (typeof payload.phone !== 'string' || !PHONE_PATTERN.test(payload.phone)) {

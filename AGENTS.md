@@ -1296,6 +1296,104 @@ Production must never seed test data: no test registrations, no test outbox
 rows, no test badge rows, no test phone numbers and no disposable spreadsheet
 id. EventConfig bootstrap defaults are the only automatic writes.
 
+## Multi-Device Badge Partitioning
+
+There is NO global badge allocator and NO shared `nextBadge` between clients.
+Devices must never coordinate badge numbers through an online counter: the
+application is offline-first, and a shared counter lets two disconnected desks
+issue the same physical badge.
+
+Every device owns a NON-OVERLAPPING physical badge range, held only in its own
+local `EventConfig`. That local range is the PRIMARY duplicate-prevention
+mechanism. Server-side badge-conflict detection stays a SECONDARY backstop, not
+the allocator — it fires after sync and cannot recall a badge already handed
+over.
+
+Badge ranges are NEVER read from environment variables or build-time config. One
+Vercel deployment serves every device, so a deployment-wide range is a
+contradiction. Ranges live only in local EventConfig.
+
+The organizer must physically place the matching badge stack at the matching
+device. The software cannot verify this.
+
+### Device Identity
+
+`deviceId`, `deviceName` and `deviceConfiguredAt` are properties on the EXISTING
+config row. Device provenance fields are properties on existing registration and
+outbox objects. No new store, no new index, no Dexie version bump — the database
+stays at version 1.
+
+`deviceId` is a `crypto.randomUUID()` generated ONCE at setup, never typed by an
+operator and never regenerated in normal use.
+
+A device is configured only when it has a valid `deviceId`, a valid
+`deviceName`, and a coherent finite range where
+`badgeStart <= nextBadge <= badgeEnd + 1`. The bootstrap defaults do NOT satisfy
+this, which is what makes an existing device show Device Setup rather than
+silently behaving as though it owned an open-ended range.
+
+A configured device always has a FINITE `badgeEnd`. Phase 7 permits no
+open-ended range.
+
+### Device Setup
+
+Initial setup FAILS CLOSED around existing data: it is refused when the
+registrations or outbox tables are non-empty. Device identity is never stamped
+onto historical data, and nothing is deleted or modified.
+
+Setup preserves every unrelated config field: `eventName`, `currency`, `amount`,
+`timezone`, `upiId`, `payeeName`.
+
+Range assignment is ONE-TIME in Phase 7A. There is no range edit, no next-badge
+reset and no device-id change. Changing a range while other devices operate
+offline creates physical duplicate issuance.
+
+Range exhaustion NEVER wraps to `badgeStart`, never picks another free number
+and never borrows another desk's range. Hold Registration stays available.
+
+### Device Provenance
+
+Every new held or completed registration SNAPSHOTS `deviceId` and `deviceName`
+from EventConfig at the moment the state is written. They are never derived
+later at HTTP send time, so a queued outbox snapshot already carries its
+provenance and a later configuration change can never mutate a snapshot behind
+the processor.
+
+`holdRegistration` and `issueBadge` verify device configuration INSIDE their own
+transactions. UI gating is not sufficient. A refusal writes nothing at all.
+
+Persisted and wire types keep the fields optional for legacy compatibility. The
+wire validator accepts both fields present and valid, or BOTH absent; exactly
+one present is rejected. Legacy local records are never mutated merely to add
+metadata.
+
+### Sheet V1 To V2 Migration
+
+Device columns are APPENDED so no existing column ever moves:
+
+- Badge Register `M` Device ID, `N` Device Name — `K:N` hidden, range `A1:N`
+- Held Registrations `L` Device ID, `M` Device Name — `J:M` hidden, range `A1:M`
+
+Shape detection is `empty` | `legacy` | `matching` | `conflicting`. A `legacy`
+tab carries the exact pre-Phase-7 header with the appended columns blank across
+the whole range; it is upgraded in place by writing ONLY the new header cells
+and re-hiding the technical range. Existing rows keep blank device cells and are
+never rewritten, moved or deleted. Migration is idempotent, and a conflicting
+shape still fails closed.
+
+The server still ignores every unrelated tab, including a human Device Range
+Plan.
+
+### Phase 7A Non-Goals
+
+Cross-device attendee duplicate detection is NOT solved. Duplicate detection
+reads local IndexedDB and is strong per device only.
+
+Cross-device Resume is NOT supported. A held registration resumes on the SAME
+device, because local IndexedDB owns the workflow state.
+
+---
+
 ### Operator Access
 
 The production API auth boundary is a first-party OPERATOR SESSION, not the

@@ -62,6 +62,25 @@ const OperatorAccessForm: React.FC<OperatorAccessFormProps> = ({
       }}
       className="space-y-4"
     >
+      {/*
+        Chrome warns that a password form should carry a username field, and
+        without one password managers cannot offer to save the code.
+
+        It is hidden, read-only and a constant. It is never read into state and
+        never sent to the API — the request body carries only `accessCode`, so
+        nothing about the security model changes.
+      */}
+      <input
+        type="text"
+        name="username"
+        autoComplete="username"
+        value="navaratri-operator"
+        readOnly
+        tabIndex={-1}
+        aria-hidden="true"
+        className="sr-only"
+      />
+
       <div className="space-y-2">
         <Label htmlFor={inputId}>
           Access code

@@ -111,6 +111,63 @@ names, no `VITE_`-prefixed server secrets, no service-account JSON, no
 private-key block, no `process.env` in client code. It never writes, deploys,
 runs git or contacts Google.
 
+### Multi-device badge partitioning
+
+The event runs on several registration devices. They do **not** coordinate badge
+numbers through a shared online counter — the app is offline-first, and a shared
+counter means two disconnected desks can hand out the same physical badge.
+
+Instead **every device owns a non-overlapping physical badge range**, stored
+locally in its own IndexedDB `EventConfig`:
+
+| Device | Range |
+|---|---|
+| Registration Desk A | #001-#250 |
+| Registration Desk B | #251-#500 |
+| Registration Desk C | #501-#750 |
+
+On first run a device shows **Device Setup**: a name, a badge range, and a
+mandatory confirmation that the matching physical badges are at that desk. It
+generates a stable `deviceId` and sets `nextBadge` to the range start.
+
+**The physical stack is authoritative.** The software cannot stop an organizer
+from handing two desks overlapping badge stacks. The server's badge-collision
+guard is a backstop that fires *after* sync and cannot un-hand two duplicate
+badges already given out offline.
+
+Setup **fails closed around existing data**: a device that already holds
+registrations or queued outbox rows is never stamped with an identity, and
+nothing is deleted.
+
+Range assignment is **one-time** in Phase 7A. There is no edit or reset control,
+deliberately: changing a range while other devices operate offline is exactly
+how duplicates happen. Emergency reassignment is separate future work.
+
+When a range runs out the desk says so, names its own range, and **Hold
+Registration keeps working** — the attendee can be sent to another desk.
+
+Every new registration snapshots `deviceId` and `deviceName` at write time, so
+the queued outbox row already carries its own provenance and both Sheet tabs
+record which desk issued what.
+
+#### What this does NOT solve
+
+- **Cross-device attendee duplicate detection.** Duplicate phone+name checking
+  reads local IndexedDB, so it is strong *per device*. Two desks do not share a
+  database, and the Sheet is a ledger, not a live client database. Badge
+  uniqueness is solved by range partitioning; attendee identity across devices
+  is a separate future concern.
+- **Cross-device Resume.** A held registration is resumable on the **same
+  device**, because local IndexedDB owns the workflow state. A hold appearing in
+  Google Sheets does not make it resumable elsewhere.
+
+#### Device Range Plan
+
+Keep a human range plan — for example, rename the unused `Sheet1` to
+`Device Range Plan` — with columns: Device Name · Range Start · Range End ·
+Physical Stack Confirmed · Notes. **The application never reads or writes this
+tab**; the server only ever touches Badge Register and Held Registrations.
+
 ### Operator access (application authentication)
 
 The production site is a normal origin:

@@ -33,6 +33,39 @@ its own.
 
 ---
 
+## A2. Device setup — FOR EVERY DEVICE
+
+Each device needs its own badge range. Do this once per device, before the
+event opens.
+
+| # | Check | Done |
+|---|---|---|
+| 1 | Unlock Operator Access on the device | ☐ |
+| 2 | Complete **Device Setup** | ☐ |
+| 3 | Verify the **Device Name** is right | ☐ |
+| 4 | Verify the **software range** matches the plan | ☐ |
+| 5 | Verify the **matching physical badge stack** is at that desk | ☐ |
+| 6 | Verify the displayed next badge equals the **first badge in the stack** | ☐ |
+| 7 | Verify **Online** and **Synced** | ☐ |
+| 8 | Install the PWA | ☐ |
+| 9 | Verify persistent storage | ☐ |
+| 10 | **Physically label the device with its range** | ☐ |
+
+Ranges must not overlap. Keep the plan somewhere central - for example a
+`Device Range Plan` tab in the spreadsheet - with Device Name, Range Start,
+Range End, Physical Stack Confirmed and Notes. The application never reads that
+tab.
+
+**The range is set once.** There is no edit control, on purpose: changing a
+range while other desks are offline is how two attendees end up with the same
+badge number.
+
+### If a device runs out of badges
+
+It says so and names its own range. **Hold Registration still works**, so take
+the attendee's details and send them to a desk that still has badges. Do not try
+to renumber anything.
+
 ## B. Event opening check
 
 In the app, confirm:

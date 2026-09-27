@@ -2,6 +2,8 @@ import type * as React from 'react'
 
 import ConnectivityStatus from '@/components/connectivity-status'
 import DatabaseGate from '@/components/database-gate'
+import DeviceLabel from '@/components/device/device-label'
+import DeviceSetupGate from '@/components/device/device-setup-gate'
 import LockDeviceButton from '@/components/operator/lock-device-button'
 import OperatorAccessBanner from '@/components/operator/operator-access-banner'
 import OperatorAccessGate from '@/components/operator/operator-access-gate'
@@ -44,9 +46,15 @@ const App: React.FC = () => {
             {/* Both start only once bootstrap has succeeded, and render nothing. */}
             <StorageManager />
 
+            {/* Outside DeviceSetupGate on purpose: a pending outbox row must
+                still be able to drain on a device awaiting setup. */}
             <SyncManager />
 
-            <RegistrationForm />
+            <DeviceSetupGate>
+              <DeviceLabel />
+
+              <RegistrationForm />
+            </DeviceSetupGate>
           </DatabaseGate>
         </OperatorAccessGate>
       </main>

@@ -20,10 +20,13 @@ export const quoteSheetTitle = (title: string): string => {
 }
 
 /**
- * A..J are the operator-facing ledger; K..L are technical and hidden.
- * Technical columns deliberately sit AFTER the human columns.
+ * The pre-Phase-7 layouts, kept verbatim.
+ *
+ * The live production Sheet already carries these headers, so they are not
+ * history: they are the shape a V1 tab must still be RECOGNISED as before it
+ * can be safely upgraded in place.
  */
-export const BADGE_REGISTER_HEADERS = [
+export const BADGE_REGISTER_HEADERS_V1 = [
   'Badge',
   'Name',
   'Phone',
@@ -38,8 +41,7 @@ export const BADGE_REGISTER_HEADERS = [
   'Updated At',
 ] as const
 
-/** A..I visible, J..K technical and hidden. */
-export const HELD_REGISTRATIONS_HEADERS = [
+export const HELD_REGISTRATIONS_HEADERS_V1 = [
   'Name',
   'Phone',
   'WhatsApp Link',
@@ -53,11 +55,33 @@ export const HELD_REGISTRATIONS_HEADERS = [
   'Updated At',
 ] as const
 
+/** Device provenance, appended so no existing column ever moves. */
+export const DEVICE_HEADERS = ['Device ID', 'Device Name'] as const
+
+/**
+ * A..J are the operator-facing ledger; K..N are technical and hidden.
+ * Technical columns deliberately sit AFTER the human columns, and new ones are
+ * only ever APPENDED — moving a column would silently rewrite every stored row.
+ */
+export const BADGE_REGISTER_HEADERS = [
+  ...BADGE_REGISTER_HEADERS_V1,
+  ...DEVICE_HEADERS,
+] as const
+
+/** A..I visible, J..M technical and hidden. */
+export const HELD_REGISTRATIONS_HEADERS = [
+  ...HELD_REGISTRATIONS_HEADERS_V1,
+  ...DEVICE_HEADERS,
+] as const
+
 export const BADGE_REGISTER_COLUMNS = {
   badge: 0,
   phone: 2,
   registrationId: 10,
   updatedAt: 11,
+  deviceId: 12,
+  deviceName: 13,
+  legacyCount: BADGE_REGISTER_HEADERS_V1.length,
   count: BADGE_REGISTER_HEADERS.length,
 } as const
 
@@ -65,12 +89,15 @@ export const HELD_REGISTRATIONS_COLUMNS = {
   phone: 1,
   registrationId: 9,
   updatedAt: 10,
+  deviceId: 11,
+  deviceName: 12,
+  legacyCount: HELD_REGISTRATIONS_HEADERS_V1.length,
   count: HELD_REGISTRATIONS_HEADERS.length,
 } as const
 
-export const BADGE_REGISTER_RANGE = `${quoteSheetTitle(BADGE_REGISTER_TITLE)}!A1:L`
+export const BADGE_REGISTER_RANGE = `${quoteSheetTitle(BADGE_REGISTER_TITLE)}!A1:N`
 
-export const HELD_REGISTRATIONS_RANGE = `${quoteSheetTitle(HELD_REGISTRATIONS_TITLE)}!A1:K`
+export const HELD_REGISTRATIONS_RANGE = `${quoteSheetTitle(HELD_REGISTRATIONS_TITLE)}!A1:M`
 
 /** The event runs on India time regardless of where the server happens to be. */
 const EVENT_TIME_ZONE = 'Asia/Kolkata'
@@ -161,6 +188,22 @@ export const buildWhatsAppCell = (phone: string): SheetCell => {
 }
 
 /**
+ * Device provenance cells.
+ *
+ * Literal strings, exactly like every other text cell: a device name is
+ * operator-supplied and must never be able to reach the formula grammar.
+ *
+ * A legacy snapshot carries neither field and writes two blank cells, so an
+ * old row keeps its shape without being rewritten.
+ */
+export const buildDeviceCells = (payload: {
+  deviceId?: string
+  deviceName?: string
+}): SheetCell[] => {
+  return [stringCell(payload.deviceId ?? ''), stringCell(payload.deviceName ?? '')]
+}
+
+/**
  * Badge is written as a NUMBER; the `"#"000` display format shown in the Sheet
  * is presentation only, so sorting and comparison stay numeric.
  *
@@ -184,6 +227,7 @@ export const buildBadgeRegisterRow = (
     stringCell(formatEventTime(payload.completedAt)),
     stringCell(payload.id),
     stringCell(payload.updatedAt),
+    ...buildDeviceCells(payload),
   ]
 }
 
@@ -207,6 +251,7 @@ export const buildHeldRegistrationRow = (
     stringCell(formatEventTime(payload.heldAt)),
     stringCell(payload.id),
     stringCell(payload.updatedAt),
+    ...buildDeviceCells(payload),
   ]
 }
 
@@ -232,7 +277,7 @@ export const isRangeBlank = (
   return (values ?? []).every((row) => (row ?? []).every(isBlankCell))
 }
 
-export type TabShape = 'empty' | 'matching' | 'conflicting'
+export type TabShape = 'empty' | 'legacy' | 'matching' | 'conflicting'
 
 /**
  * Decides whether a tab is safe to use, looking at the WHOLE range rather than
@@ -241,10 +286,17 @@ export type TabShape = 'empty' | 'matching' | 'conflicting'
  * A blank header over human data below it is the dangerous case: initialising
  * that tab would stamp a header onto somebody's spreadsheet and then append
  * beneath their records. Only a wholly blank range may be initialised.
+ *
+ * `legacy` is the live production Sheet: the pre-Phase-7 header EXACTLY, with
+ * nothing at all in the appended device columns. That tab can be upgraded in
+ * place by writing only the new header cells. Anything else — a partial,
+ * reordered or foreign header, or unexpected content sitting in the new
+ * columns — still fails closed as `conflicting`.
  */
 export const checkTabShape = (
   values: readonly (readonly unknown[])[] | undefined,
   expected: readonly string[],
+  legacyExpected?: readonly string[],
 ): TabShape => {
   const rows = values ?? []
   const header = (rows[0] ?? []).map((cell) => String(cell ?? '').trim())
@@ -253,7 +305,30 @@ export const checkTabShape = (
     return isRangeBlank(rows) ? 'empty' : 'conflicting'
   }
 
-  const matches = expected.every((value, index) => header[index] === value)
+  if (expected.every((value, index) => header[index] === value)) {
+    return 'matching'
+  }
 
-  return matches ? 'matching' : 'conflicting'
+  if (legacyExpected === undefined) {
+    return 'conflicting'
+  }
+
+  const matchesLegacy = legacyExpected.every(
+    (value, index) => header[index] === value,
+  )
+
+  if (!matchesLegacy) {
+    return 'conflicting'
+  }
+
+  /**
+   * The appended columns must be untouched across the WHOLE range, not just in
+   * row 1. Something already occupying them means this is not the layout this
+   * application wrote, and upgrading would relabel somebody else's data.
+   */
+  const appendedIsBlank = rows.every((row) =>
+    (row ?? []).slice(legacyExpected.length).every(isBlankCell),
+  )
+
+  return appendedIsBlank ? 'legacy' : 'conflicting'
 }
