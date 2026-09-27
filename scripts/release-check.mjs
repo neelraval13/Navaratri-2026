@@ -76,6 +76,8 @@ const REQUIRED_FILES = [
   'server/auth/environment.ts',
   'server/auth/operator-session.ts',
   'server/auth/cookies.ts',
+  'scripts/verification/phase-7b.mjs',
+  'scripts/verification/prior-phases.mjs',
   'docs/EVENT_DAY_RUNBOOK.md',
   'docs/PRODUCTION_RELEASE_CHECKLIST.md',
   'public/pwa-192x192.png',

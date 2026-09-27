@@ -29,7 +29,7 @@ const DeviceLabel: React.FC = () => {
   const config = eventConfig.config
 
   return (
-    <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
       <MonitorSmartphone className="size-4 shrink-0" />
 
       <span className="font-medium text-foreground">

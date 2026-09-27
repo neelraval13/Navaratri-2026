@@ -63,7 +63,13 @@ manually.
 | 3.5 | `EVENT_SESSION_SECRET` set, 32+ chars, unique to production | ☐ |
 | 3.6 | Unlock verified on a real device; `/api/sync-registration` returns `unauthorized` without a session | ☐ |
 
+| 3.7 | Operator-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
+
 Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
+
+The login rate limit is a Vercel firewall rule configured by hand in the
+Dashboard — no application code creates it, and `release:check` cannot verify
+it.
 
 Platform protection, in order of preference:
 
@@ -179,6 +185,7 @@ Point it at a **disposable development spreadsheet** only.
 | 6.1 | Production app loaded on the event device **while online** | ☐ |
 | 6.2 | Installed as a PWA | ☐ |
 | 6.3 | `await navigator.storage.persisted()` returns `true`, or the refusal is accepted | ☐ |
+| 6.3 | Provisioned per `docs/DEVICE_PROVISIONING.md`, against `docs/DEVICE_RANGE_PLAN.md` | ☐ |
 | 6.3a | **Device Setup** completed on this device | ☐ |
 | 6.3b | Its range does not overlap any other device's | ☐ |
 | 6.3c | The matching physical badge stack is at this device | ☐ |

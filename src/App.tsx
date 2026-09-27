@@ -3,6 +3,7 @@ import type * as React from 'react'
 import ConnectivityStatus from '@/components/connectivity-status'
 import DatabaseGate from '@/components/database-gate'
 import DeviceLabel from '@/components/device/device-label'
+import DeviceReadiness from '@/components/device/device-readiness'
 import DeviceSetupGate from '@/components/device/device-setup-gate'
 import LockDeviceButton from '@/components/operator/lock-device-button'
 import OperatorAccessBanner from '@/components/operator/operator-access-banner'
@@ -51,7 +52,16 @@ const App: React.FC = () => {
             <SyncManager />
 
             <DeviceSetupGate>
-              <DeviceLabel />
+              {/* Device identity and its diagnostics sit together, and both
+                  only after bootstrap AND Device Setup have succeeded. The
+                  readiness trigger is deliberately NOT in the global header:
+                  the header renders outside DatabaseGate, and nothing there
+                  may read Dexie before bootstrap completes. */}
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <DeviceLabel />
+
+                <DeviceReadiness />
+              </div>
 
               <RegistrationForm />
             </DeviceSetupGate>

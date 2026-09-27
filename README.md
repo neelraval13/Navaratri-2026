@@ -161,12 +161,42 @@ record which desk issued what.
   device**, because local IndexedDB owns the workflow state. A hold appearing in
   Google Sheets does not make it resumable elsewhere.
 
-#### Device Range Plan
+#### Device Readiness
 
-Keep a human range plan — for example, rename the unused `Sheet1` to
-`Device Range Plan` — with columns: Device Name · Range Start · Range End ·
-Physical Stack Confirmed · Notes. **The application never reads or writes this
-tab**; the server only ever touches Badge Register and Held Registrations.
+An unlocked, configured device has a **Device Readiness** panel behind the
+clipboard icon in the header. It is a **read-only** operational view: device
+identity and assigned range, local counts (completed / held / pending sync),
+and event-device state (network, service worker, app mode, persistent storage,
+operator access). A **Copy device summary** button puts the same facts on the
+clipboard for the range plan.
+
+Every dynamic value is read **fresh from IndexedDB** each time the panel opens,
+when *Refresh checks* is pressed, and when connectivity changes — never copied
+from another component's configuration hook, because `nextBadge` and the outbox
+count change while the desk works.
+
+It contains no control that edits a range, resets a badge number, changes a
+device id, clears data or logs out. Diagnostics observe; they never mutate.
+
+#### Device Range Plan and provisioning
+
+Three documents cover event-device setup:
+
+- **[docs/DEVICE_RANGE_PLAN.md](docs/DEVICE_RANGE_PLAN.md)** — the central
+  record of which range belongs to which device, plus the reserve-range policy
+- **[docs/DEVICE_PROVISIONING.md](docs/DEVICE_PROVISIONING.md)** — the
+  per-device workflow, including the offline test
+- **[docs/VERCEL_FIREWALL.md](docs/VERCEL_FIREWALL.md)** — the operator-login
+  rate-limit rule
+
+The range plan is a **human artifact**. The application never reads or writes
+it; the server only ever touches Badge Register and Held Registrations, so
+renaming an unused `Sheet1` to `Device Range Plan` is safe.
+
+Where enough badges exist, keep a **reserve range assigned to no device**, so a
+desk that exhausts its range early has somewhere to go. Transferring the
+reserve is not something the app can do today — the safe procedure has to
+account for badges already issued and rows not yet synced.
 
 ### Operator access (application authentication)
 

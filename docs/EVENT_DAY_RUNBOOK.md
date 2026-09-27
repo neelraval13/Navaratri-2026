@@ -33,6 +33,12 @@ its own.
 
 ---
 
+## A1. Provisioning
+
+Before any of the checks below, provision each physical device by following
+[`DEVICE_PROVISIONING.md`](DEVICE_PROVISIONING.md), against the ranges agreed in
+[`DEVICE_RANGE_PLAN.md`](DEVICE_RANGE_PLAN.md).
+
 ## A2. Device setup — FOR EVERY DEVICE
 
 Each device needs its own badge range. Do this once per device, before the
@@ -50,6 +56,9 @@ event opens.
 | 8 | Install the PWA | ☐ |
 | 9 | Verify persistent storage | ☐ |
 | 10 | **Physically label the device with its range** | ☐ |
+
+Use **Device Readiness** (clipboard icon in the header) for checks 3-9. It is
+read-only and safe to open at any time, including mid-event.
 
 Ranges must not overlap. Keep the plan somewhere central - for example a
 `Device Range Plan` tab in the spreadsheet - with Device Name, Range Start,

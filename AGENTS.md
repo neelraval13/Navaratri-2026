@@ -1384,6 +1384,55 @@ shape still fails closed.
 The server still ignores every unrelated tab, including a human Device Range
 Plan.
 
+### Diagnostics Are Read-Only
+
+Any device diagnostics or readiness view is STRICTLY READ-ONLY. It must never
+edit a range, reset `nextBadge`, change a device id, delete a registration,
+clear the outbox, clear storage or log out — not even as a side effect.
+
+Dynamic readiness values must be read FRESH from IndexedDB at the moment they
+are shown. They must never be copied from another component's `useEventConfig()`
+instance: `nextBadge` and the outbox count change while the desk works, and a
+second hook instance is not refreshed by the one the registration form updates
+after an issue. A stale diagnostic number is worse than none.
+
+Diagnostics must not call `navigator.storage.persist()`, register or replace a
+service worker, or call `skipWaiting`. StorageManager owns the single
+persistence request per session, and the PWA update policy is unchanged.
+
+Diagnostics must never display attendee names, phone numbers or any other
+personal data — counts only. A copied summary carries the same restriction, and
+no secret, token, cookie or credential.
+
+### Login Rate Limiting Is Edge Infrastructure
+
+There must be NO in-process rate limiter in any Vercel Function. Serverless
+instances share no memory, so a per-instance counter resets on every cold start
+and is bypassed by concurrency — it would look like a rate limiter without
+being one.
+
+Rate limiting for `POST /api/operator-login` belongs in the Vercel firewall,
+configured manually outside this repository and documented in
+`docs/VERCEL_FIREWALL.md`. Do not add Redis, a database or a KV store for it.
+
+It is an additional layer. The exact access-code comparison, constant-time
+digest comparison, fixed wrong-code delay, same-origin requirement and cookie
+attributes all remain authoritative and must not be weakened because a firewall
+rule exists.
+
+A rate-limited response must produce a generic operator-safe message. The
+client never renders server response text and never reveals an address, an
+attempt count, or whether the submitted code was correct.
+
+### Device Provisioning
+
+The Device Range Plan is a HUMAN artifact. The application never reads, writes
+or owns it, and the server keeps ignoring every tab except the two it owns.
+
+Provisioning a device must never clear local production state: no site data,
+no IndexedDB, no `nextBadge` reset, no reconfiguration of a device that already
+holds registrations.
+
 ### Phase 7A Non-Goals
 
 Cross-device attendee duplicate detection is NOT solved. Duplicate detection

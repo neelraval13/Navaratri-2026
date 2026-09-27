@@ -21,6 +21,14 @@ export const OPERATOR_ACCESS_MESSAGES = {
   incorrect: 'Access code is incorrect.',
   notConfigured: 'Operator access is not configured.',
   unreachable: 'Could not reach the server. Try again when online.',
+  /**
+   * Edge rate limiting lives in the Vercel firewall, not in application code.
+   * The operator is told to wait — never how many attempts remain, never their
+   * address, and never whether the code they typed was right.
+   */
+  tooManyAttempts: 'Too many unlock attempts. Wait a moment and try again.',
+  /** Any other unsuccessful status. Never the server's own response text. */
+  unavailable: 'Unable to unlock. Try again.',
 } as const
 
 export interface UnlockResult {
@@ -187,8 +195,22 @@ export const unlockOperatorAccess = async (
     return { ok: false, message: OPERATOR_ACCESS_MESSAGES.notConfigured }
   }
 
-  if (!response.ok) {
+  /**
+   * 429 comes from the edge rate limiter, which the endpoint itself knows
+   * nothing about. Reporting it as "Access code is incorrect" would be simply
+   * untrue and would send an operator hunting for a typo that is not there.
+   */
+  if (response.status === 429) {
+    return { ok: false, message: OPERATOR_ACCESS_MESSAGES.tooManyAttempts }
+  }
+
+  // Only a real rejection from the login endpoint means a bad code.
+  if (response.status === 401) {
     return { ok: false, message: OPERATOR_ACCESS_MESSAGES.incorrect }
+  }
+
+  if (!response.ok) {
+    return { ok: false, message: OPERATOR_ACCESS_MESSAGES.unavailable }
   }
 
   markDeviceTrusted()
