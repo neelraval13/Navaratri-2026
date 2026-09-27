@@ -1,25 +1,12 @@
 import { db } from '@/db/database'
-import { countRemainingBadges, isDeviceConfigured } from '@/db/device'
+import {
+  countRemainingBadges,
+  isBadgeDistributionConfigured,
+  isDeviceRegistered,
+} from '@/db/device'
 import { EVENT_CONFIG_ID } from '@/db/types'
 
 export type BadgeRangeStatus = 'available' | 'exhausted'
-
-/**
- * Exactly the device fields the readiness view needs — a deliberate projection
- * rather than the whole configuration row.
- *
- * `upiId`, `payeeName`, `amount` and the rest never enter the snapshot, so they
- * can never reach a copied summary or a diagnostics screenshot by accident.
- */
-export interface ReadinessDevice {
-  deviceId: string
-  deviceName: string
-  /** ISO 8601 UTC. Absent on a record configured before this field existed. */
-  deviceConfiguredAt?: string
-  badgeStart: number
-  badgeEnd: number
-  nextBadge: number
-}
 
 /** Counts only. No attendee name, phone, age or badge detail is ever read. */
 export interface LocalDataCounts {
@@ -28,25 +15,55 @@ export interface LocalDataCounts {
   pendingSync: number
 }
 
+/**
+ * Exactly the identity fields the readiness view needs — a deliberate
+ * projection rather than the whole configuration row.
+ *
+ * `upiId`, `payeeName`, `amount` and the rest never enter the snapshot, so
+ * they can never reach a copied summary or a diagnostics screenshot.
+ */
+export interface ReadinessDevice {
+  deviceId: string
+  deviceName: string
+  /** ISO 8601 UTC. Absent on a record registered before this field existed. */
+  deviceConfiguredAt?: string
+}
+
+/**
+ * The badge module's own state, kept SEPARATE from device identity.
+ *
+ * A registered prize or dandiya desk reports `configured: false` and is
+ * perfectly healthy. No range, next badge or remaining count is invented for
+ * it — an absent range is an absent range, never an open-ended one.
+ */
+export type ReadinessBadgeDistribution =
+  | { configured: false }
+  | {
+      configured: true
+      badgeStart: number
+      badgeEnd: number
+      nextBadge: number
+      remaining: number
+      status: BadgeRangeStatus
+    }
+
 export type LocalReadiness =
   | {
       ok: true
       /** ISO 8601 UTC of the moment these values were read. */
       readAt: string
       device: ReadinessDevice
-      rangeStatus: BadgeRangeStatus
-      remaining: number
+      badgeDistribution: ReadinessBadgeDistribution
       counts: LocalDataCounts
     }
   | {
       ok: false
       readAt: string
       /**
-       * `missing-config` means the row is absent entirely; `not-configured`
-       * means it exists but this device has never completed Device Setup, or
-       * its stored range no longer satisfies the configured-device rule.
+       * `missing-config` means the row is absent entirely; `not-registered`
+       * means this device has never completed device registration.
        */
-      reason: 'missing-config' | 'not-configured'
+      reason: 'missing-config' | 'not-registered'
       counts: LocalDataCounts
     }
 
@@ -78,10 +95,13 @@ export const readLocalReadiness = async (): Promise<LocalReadiness> => {
     return { ok: false, readAt, reason: 'missing-config', counts }
   }
 
-  // Fails closed: an unconfigured or incoherent range is reported as invalid
-  // rather than guessed at, and an open-ended range is never inferred.
-  if (!isDeviceConfigured(config)) {
-    return { ok: false, readAt, reason: 'not-configured', counts }
+  /**
+   * Fails closed on IDENTITY only. A registered device with no badge range is
+   * a normal, healthy device — a prize or dandiya desk — not a broken one, so
+   * readiness must work for it.
+   */
+  if (!isDeviceRegistered(config)) {
+    return { ok: false, readAt, reason: 'not-registered', counts }
   }
 
   return {
@@ -93,12 +113,17 @@ export const readLocalReadiness = async (): Promise<LocalReadiness> => {
       ...(config.deviceConfiguredAt === undefined
         ? {}
         : { deviceConfiguredAt: config.deviceConfiguredAt }),
-      badgeStart: config.badgeStart,
-      badgeEnd: config.badgeEnd,
-      nextBadge: config.nextBadge,
     },
-    rangeStatus: config.nextBadge > config.badgeEnd ? 'exhausted' : 'available',
-    remaining: countRemainingBadges(config),
+    badgeDistribution: isBadgeDistributionConfigured(config)
+      ? {
+          configured: true,
+          badgeStart: config.badgeStart,
+          badgeEnd: config.badgeEnd,
+          nextBadge: config.nextBadge,
+          remaining: countRemainingBadges(config),
+          status: config.nextBadge > config.badgeEnd ? 'exhausted' : 'available',
+        }
+      : { configured: false },
     counts,
   }
 }

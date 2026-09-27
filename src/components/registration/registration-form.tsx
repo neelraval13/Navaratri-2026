@@ -45,8 +45,8 @@ const HOLD_ERROR_MESSAGES = {
   heldConflict:
     'This attendee is already on hold. Nothing was saved — resume the existing hold instead.',
   completedConflict: 'This attendee already has a badge. Nothing was saved.',
-  deviceNotConfigured:
-    'This device has not completed Device Setup, so nothing was saved.',
+  badgeDistributionNotConfigured:
+    'This device has no assigned badge range, so nothing was saved.',
 } as const
 
 const ISSUE_ERROR_MESSAGES = {
@@ -63,8 +63,8 @@ const ISSUE_ERROR_MESSAGES = {
     "No badges remain in this desk's assigned range.",
   'badge-conflict':
     'The next badge number is already assigned. Badge was not issued.',
-  'device-not-configured':
-    'This device has not completed Device Setup. Badge was not issued.',
+  'badge-distribution-not-configured':
+    'This device has no assigned badge range. Badge was not issued.',
 } as const
 
 /**
@@ -418,10 +418,10 @@ const RegistrationForm: React.FC = () => {
         return
       }
 
-      if (result.outcome === 'device-not-configured') {
+      if (result.outcome === 'badge-distribution-not-configured') {
         setFormNotice({
           kind: 'error',
-          message: HOLD_ERROR_MESSAGES.deviceNotConfigured,
+          message: HOLD_ERROR_MESSAGES.badgeDistributionNotConfigured,
         })
 
         return

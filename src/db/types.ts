@@ -104,8 +104,15 @@ export interface EventConfig {
   deviceId?: string
   /** Operator-supplied label, e.g. `Registration Desk A`. */
   deviceName?: string
-  /** ISO 8601 UTC, written on successful initial setup. */
+  /** ISO 8601 UTC, written when the device itself was registered. */
   deviceConfiguredAt?: string
+  /**
+   * ISO 8601 UTC, written when this device was assigned a badge range.
+   *
+   * Absent on a legacy Phase 7 device that was configured before the field
+   * existed; its absence must never invalidate that device's badge ownership.
+   */
+  badgeConfiguredAt?: string
   /** Undefined until the operator supplies the organizer UPI details. */
   upiId?: string
   payeeName?: string

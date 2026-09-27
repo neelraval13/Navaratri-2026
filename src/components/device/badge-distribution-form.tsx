@@ -5,10 +5,9 @@ import type * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { configureDevice, formatBadgeRange } from '@/db/device'
-import { DEVICE_NAME_MAX_LENGTH } from '@/shared/device'
+import { configureBadgeDistribution, formatBadgeRange } from '@/db/device'
 
-interface DeviceSetupFormProps {
+interface BadgeDistributionFormProps {
   onConfigured: () => void
 }
 
@@ -23,15 +22,17 @@ const parseBadgeNumber = (value: string): number | null => {
 }
 
 /**
- * One-time Device Setup.
+ * One-time badge-range assignment for an ALREADY-REGISTERED device.
  *
- * The badge range entered here must match the PHYSICAL badge stack placed at
- * this desk. The software cannot verify that, which is why the confirmation is
- * mandatory rather than advisory: two desks given overlapping physical stacks
- * will hand out duplicate badges no matter what the application does.
+ * It asks nothing about device identity — that already exists. The range
+ * entered here must match the PHYSICAL badge stack placed at this desk. The
+ * software cannot verify that, which is why the confirmation is mandatory
+ * rather than advisory: two desks given overlapping physical stacks will hand
+ * out duplicate badges no matter what the application does.
  */
-const DeviceSetupForm: React.FC<DeviceSetupFormProps> = ({ onConfigured }) => {
-  const [deviceName, setDeviceName] = useState('')
+const BadgeDistributionForm: React.FC<BadgeDistributionFormProps> = ({
+  onConfigured,
+}) => {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [confirmed, setConfirmed] = useState(false)
@@ -53,12 +54,6 @@ const DeviceSetupForm: React.FC<DeviceSetupFormProps> = ({ onConfigured }) => {
       return
     }
 
-    if (deviceName.trim() === '') {
-      setError('Enter a device name.')
-
-      return
-    }
-
     if (!isRangeValid) {
       setError('Enter a valid badge range. The start must not be after the end.')
 
@@ -74,10 +69,10 @@ const DeviceSetupForm: React.FC<DeviceSetupFormProps> = ({ onConfigured }) => {
     setIsSaving(true)
     setError(null)
 
-    const result = await configureDevice({
-      deviceName,
+    const result = await configureBadgeDistribution({
       badgeStart: startNumber,
       badgeEnd: endNumber,
+      physicalStackConfirmed: confirmed,
     })
 
     setIsSaving(false)
@@ -88,16 +83,14 @@ const DeviceSetupForm: React.FC<DeviceSetupFormProps> = ({ onConfigured }) => {
       return
     }
 
-    if (result.outcome === 'existing-data') {
-      setError(
-        'This device already contains registration data and cannot be initialized automatically. Reconciliation is required.',
-      )
+    if (result.outcome === 'device-not-registered') {
+      setError('Register this device before assigning it a badge range.')
 
       return
     }
 
-    if (result.outcome === 'invalid-name') {
-      setError(`Enter a device name of 1-${String(DEVICE_NAME_MAX_LENGTH)} characters.`)
+    if (result.outcome === 'stack-not-confirmed') {
+      setError('Confirm the matching physical badges are at this device.')
 
       return
     }
@@ -118,24 +111,6 @@ const DeviceSetupForm: React.FC<DeviceSetupFormProps> = ({ onConfigured }) => {
       }}
       className="space-y-6"
     >
-      <div className="space-y-2">
-        <Label htmlFor="device-name">
-          Device name
-        </Label>
-
-        <Input
-          id="device-name"
-          type="text"
-          placeholder="Registration Desk A"
-          maxLength={DEVICE_NAME_MAX_LENGTH}
-          value={deviceName}
-          onChange={(event) => {
-            setDeviceName(event.target.value)
-          }}
-          className="h-12"
-        />
-      </div>
-
       <div className="space-y-2">
         <p className="text-sm font-medium">
           Badge range
@@ -219,13 +194,13 @@ const DeviceSetupForm: React.FC<DeviceSetupFormProps> = ({ onConfigured }) => {
       <Button
         type="submit"
         disabled={isSaving}
-        className="h-12 w-full sm:w-auto sm:min-w-48"
+        className="h-12 w-full sm:w-auto sm:min-w-64"
       >
         <Save data-icon="inline-start" />
-        {isSaving ? 'Saving…' : 'Save Device Setup'}
+        {isSaving ? 'Saving…' : 'Configure Badge Distribution'}
       </Button>
     </form>
   )
 }
 
-export default DeviceSetupForm
+export default BadgeDistributionForm

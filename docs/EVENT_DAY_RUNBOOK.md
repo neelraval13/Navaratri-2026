@@ -39,6 +39,18 @@ Before any of the checks below, provision each physical device by following
 [`DEVICE_PROVISIONING.md`](DEVICE_PROVISIONING.md), against the ranges agreed in
 [`DEVICE_RANGE_PLAN.md`](DEVICE_RANGE_PLAN.md).
 
+## A1b. Where things live
+
+| Route | What it is |
+|---|---|
+| `/` | Home — the module launcher |
+| `/badge-registration` | The registration desk workflow |
+| `/device-registration` | This device's provisioning and readiness |
+
+Tap **Navaratri 2026** in the header to get Home from anywhere. Deep links
+work: opening `/badge-registration` directly is fine, and if the device is
+locked you unlock first and land back on that same page.
+
 ## A2. Device setup — FOR EVERY DEVICE
 
 Each device needs its own badge range. Do this once per device, before the
@@ -47,7 +59,8 @@ event opens.
 | # | Check | Done |
 |---|---|---|
 | 1 | Unlock Operator Access on the device | ☐ |
-| 2 | Complete **Device Setup** | ☐ |
+| 2 | Register the device at `/device-registration` | ☐ |
+| 2a | *Badge desks only:* assign the badge range at `/badge-registration` | ☐ |
 | 3 | Verify the **Device Name** is right | ☐ |
 | 4 | Verify the **software range** matches the plan | ☐ |
 | 5 | Verify the **matching physical badge stack** is at that desk | ☐ |

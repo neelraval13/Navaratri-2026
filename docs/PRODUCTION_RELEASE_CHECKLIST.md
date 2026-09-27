@@ -37,6 +37,8 @@ does **not** check anything about your Vercel project or your spreadsheet.
 | 2.3 | Production secrets exist **only** in the Vercel **Production** environment | ☐ |
 | 2.4 | Preview environment has **no** production Sheet credentials | ☐ |
 | 2.5 | No server variable anywhere carries a `VITE_` prefix | ☐ |
+| 2.6 | `DATABASE_URL` set per environment; Development and Production on **different** Neon branches | ☐ |
+| 2.7 | Migrations applied deliberately with `pnpm db:migrate`, development branch first, then verified with `pnpm db:check` | ☐ |
 
 Anything named `VITE_*` is compiled into the browser bundle. A private key there
 is published, not protected. Only `VITE_UPI_ID` and `VITE_UPI_PAYEE_NAME` are
@@ -183,10 +185,13 @@ Point it at a **disposable development spreadsheet** only.
 | # | Step | Pass |
 |---|---|---|
 | 6.1 | Production app loaded on the event device **while online** | ☐ |
+| 6.1a | `/`, `/badge-registration` and `/device-registration` all open by direct URL | ☐ |
+| 6.1b | `/api/operator-session` still returns JSON, not the SPA shell | ☐ |
 | 6.2 | Installed as a PWA | ☐ |
 | 6.3 | `await navigator.storage.persisted()` returns `true`, or the refusal is accepted | ☐ |
 | 6.3 | Provisioned per `docs/DEVICE_PROVISIONING.md`, against `docs/DEVICE_RANGE_PLAN.md` | ☐ |
-| 6.3a | **Device Setup** completed on this device | ☐ |
+| 6.3a | Device **registered** at `/device-registration` | ☐ |
+| 6.3a1 | *Badge desks only:* badge range assigned at `/badge-registration` | ☐ |
 | 6.3b | Its range does not overlap any other device's | ☐ |
 | 6.3c | The matching physical badge stack is at this device | ☐ |
 | 6.4 | `nextBadge` matches the first physical badge on the desk | ☐ |

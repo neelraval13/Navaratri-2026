@@ -1296,6 +1296,77 @@ Production must never seed test data: no test registrations, no test outbox
 rows, no test badge rows, no test phone numbers and no disposable spreadsheet
 id. EventConfig bootstrap defaults are the only automatic writes.
 
+## Central Database
+
+PostgreSQL (Neon) is the CENTRAL OPERATIONAL AUTHORITY: events, devices,
+device attributes and badge-range assignments. Google Sheets remains the
+attendee ledger. IndexedDB remains the offline workflow state.
+
+ATTENDEE PII IS NEVER STORED CENTRALLY — no name, phone, age, gender, payment,
+held or completed registration — unless a later explicit architecture change
+says otherwise.
+
+The central badge assignment owns the RANGE, never a live `nextBadge`. A
+central counter would make issuing a badge require the network, which is the
+one thing this application is built to avoid. `nextBadge` stays local.
+
+Active badge ranges may not overlap within an event, and a device may hold at
+most one active assignment. Both are enforced by the DATABASE — a GiST
+exclusion constraint and a partial unique index — because two concurrent
+writers can each pass an application check and still both commit.
+
+`DATABASE_URL` is SERVER-ONLY and must never be `VITE_` prefixed. All database
+code lives under `server/db/`. A client module may NEVER import `server/db`,
+and `src/` must never read `DATABASE_URL`.
+
+MIGRATIONS NEVER RUN AUTOMATICALLY. Not in a build, a start command, a Function
+invocation, app bootstrap or `release:check`. A human runs `pnpm db:migrate`
+deliberately, one environment at a time; `pnpm db:check` is read-only.
+
+The database client is LAZY: importing it connects to nothing and validates
+nothing. A module-load connection would turn a missing `DATABASE_URL` into a
+deployment-wide crash instead of a failure confined to the call that needed it.
+Connection strings are credentials and never appear in a log, an error or a
+response.
+
+Development and Production must never share a database branch.
+
+Attributes are TEXT, not a Postgres enum, and there is no `deviceType`: one
+device may serve several modules.
+
+## Application Shell And Routing
+
+This is a MULTI-MODULE single-page application on one origin, not a single
+screen.
+
+- `/` is Home, the module launcher
+- `/badge-registration` owns the attendee badge workflow
+- `/device-registration` owns physical device provisioning and readiness
+
+Routing is presentation work. An internal route must NEVER create a new
+database, store, storage namespace or origin: IndexedDB, the trusted-device
+marker, the session cookie and the service worker belong to the origin, and
+changing the pathname resets nothing.
+
+`SyncManager` is APP-GLOBAL. It mounts once, inside DatabaseGate and outside
+the router, so a pending registration keeps draining while the operator is on
+Home or any other module. Never mount one per route, and never mount a second
+DatabaseGate.
+
+API routes must NEVER be captured by the SPA fallback. Rewrites are explicit
+per known route rather than a catch-all, and the service worker's navigation
+fallback denylists `/api/`.
+
+Initial Device Setup has exactly ONE writer and one transaction. A second
+device-configuration writer must never be added, whatever route calls it.
+
+Routing must preserve deep-link intent through Operator Access: the access gate
+renders IN PLACE and never navigates, so unlocking resumes at the requested
+URL rather than redirecting Home.
+
+Internal navigation uses the router. `window.location` is for genuinely leaving
+the application, never for moving between modules.
+
 ## Multi-Device Badge Partitioning
 
 There is NO global badge allocator and NO shared `nextBadge` between clients.
@@ -1315,6 +1386,41 @@ contradiction. Ranges live only in local EventConfig.
 
 The organizer must physically place the matching badge stack at the matching
 device. The software cannot verify this.
+
+### Device Identity Is Not Badge Ownership
+
+A registered physical device is NOT tied to one feature. Identity and badge
+ownership are separate questions, asked by separate helpers:
+
+- `isDeviceRegistered(config)` — valid `deviceId` + `deviceName`. Nothing else.
+  `deviceConfiguredAt` may be absent on a legacy device and must not invalidate
+  it.
+- `isBadgeDistributionConfigured(config)` — registered PLUS a finite coherent
+  range (`badgeStart <= nextBadge <= badgeEnd + 1`).
+
+Never model this as a single `deviceType`. One physical device may serve
+several modules, so each module attaches its own optional configuration to the
+one stable identity. Do not build a generic capability registry for this;
+keep it concrete.
+
+Badge ownership is NEVER inferred from device identity, and never from the
+bootstrap defaults `badgeStart: 1` / `nextBadge: 1` / no `badgeEnd`.
+
+There are exactly TWO writers, and each is the only one of its kind:
+
+- `registerDevice({ deviceName })` — the only device-identity writer. It never
+  reads or writes `badgeStart`, `badgeEnd` or `nextBadge`.
+- `configureBadgeDistribution({ badgeStart, badgeEnd, physicalStackConfirmed })`
+  — the only badge-range writer. It requires an already-registered device, a
+  mandatory physical-stack confirmation, and refuses a second run.
+
+`holdRegistration`, `issueBadge` and `hasBadgeAvailable` require BADGE
+distribution, not mere registration. A registered prize or dandiya desk must
+never be able to create a badge registration.
+
+A legacy Phase 7 device with identity and a range satisfies both immediately.
+It must never be forced through either setup again, and `badgeConfiguredAt`
+being absent must not invalidate it.
 
 ### Device Identity
 

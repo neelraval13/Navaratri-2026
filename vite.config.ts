@@ -84,8 +84,19 @@ export default defineConfig({
          * here — it lives in IndexedDB and only in IndexedDB.
          */
         globPatterns: ['**/*.{html,js,css,png,svg,ico,webp,woff2}'],
-        /** Reloading `/` while offline serves the precached shell. */
+        /**
+         * Reloading any application route while offline serves the precached
+         * shell, which is what makes `/badge-registration` open on an
+         * installed device with no network.
+         */
         navigateFallback: 'index.html',
+        /**
+         * Belt and braces. A navigation to `/api/...` is not something the app
+         * ever performs — API calls are fetches, which the NavigationRoute
+         * does not match — but an explicit denylist means the fallback can
+         * never serve the shell in place of a Function response.
+         */
+        navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,
         /** Never seize control of a page that is already open. */
         clientsClaim: false,

@@ -54,6 +54,15 @@ export const PERSISTENCE_LABELS: Record<
   unsupported: { value: 'Unsupported', tone: 'warning' },
 }
 
+const environmentLines = (environment: DeviceEnvironment): string[] => {
+  return [
+    `Network: ${environment.network === 'online' ? 'Online' : 'Offline'}`,
+    `PWA: ${DISPLAY_MODE_LABELS[environment.displayMode].value}`,
+    `Persistent Storage: ${PERSISTENCE_LABELS[environment.persistentStorage].value}`,
+    `Service Worker: ${SERVICE_WORKER_LABELS[environment.serviceWorker].value}`,
+  ]
+}
+
 /**
  * The clipboard summary for the Device Range Plan.
  *
@@ -64,25 +73,34 @@ export const PERSISTENCE_LABELS: Record<
 export const buildDeviceSummary = (snapshot: ReadinessSnapshot): string => {
   const { local, environment } = snapshot
 
-  const identity = local.ok
-    ? [
-        `Device: ${local.device.deviceName}`,
-        `Device ID: ${local.device.deviceId}`,
-        `Badge Range: ${formatBadgeRange(local.device.badgeStart, local.device.badgeEnd)}`,
-        `Next Badge: ${formatBadgeNumber(local.device.nextBadge)}`,
-        `Remaining: ${String(local.remaining)}`,
-      ]
-    : ['Device: NOT CONFIGURED']
+  if (!local.ok) {
+    return [
+      'Navaratri 2026',
+      'Device: NOT REGISTERED',
+      `Completed: ${String(local.counts.completed)}`,
+      `Held: ${String(local.counts.held)}`,
+      `Pending Sync: ${String(local.counts.pendingSync)}`,
+      ...environmentLines(environment),
+    ].join('\n')
+  }
+
+  const badge = local.badgeDistribution
 
   return [
     'Navaratri 2026',
-    ...identity,
+    `Device: ${local.device.deviceName}`,
+    `Device ID: ${local.device.deviceId}`,
+    ...(badge.configured
+      ? [
+          'Badge Distribution: Configured',
+          `Badge Range: ${formatBadgeRange(badge.badgeStart, badge.badgeEnd)}`,
+          `Next Badge: ${formatBadgeNumber(badge.nextBadge)}`,
+          `Remaining: ${String(badge.remaining)}`,
+        ]
+      : ['Badge Distribution: Not configured']),
     `Completed: ${String(local.counts.completed)}`,
     `Held: ${String(local.counts.held)}`,
     `Pending Sync: ${String(local.counts.pendingSync)}`,
-    `Network: ${environment.network === 'online' ? 'Online' : 'Offline'}`,
-    `PWA: ${DISPLAY_MODE_LABELS[environment.displayMode].value}`,
-    `Persistent Storage: ${PERSISTENCE_LABELS[environment.persistentStorage].value}`,
-    `Service Worker: ${SERVICE_WORKER_LABELS[environment.serviceWorker].value}`,
+    ...environmentLines(environment),
   ].join('\n')
 }

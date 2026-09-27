@@ -77,20 +77,20 @@ let r = await readiness.readLocalReadiness()
 check('configured device identity read', [r.ok, r.device.deviceName, r.device.deviceId], [true, 'Registration Desk A', DEVICE_ID])
 check('  configuredAt read', r.device.deviceConfiguredAt, '2026-09-27T06:00:00.000Z')
 check('  readAt stamped', typeof r.readAt === 'string' && r.readAt.endsWith('Z'), true)
-check('badge range formatting', device.formatBadgeRange(r.device.badgeStart, r.device.badgeEnd), '#001–#250')
+check('badge range formatting', device.formatBadgeRange(r.badgeDistribution.badgeStart, r.badgeDistribution.badgeEnd), '#001–#250')
 check('  1000 not truncated', device.formatBadgeRange(1, 1000), '#001–#1000')
-check('range available at start', [r.rangeStatus, r.remaining], ['available', 250])
+check('range available at start', [r.badgeDistribution.status, r.badgeDistribution.remaining], ['available', 250])
 
 // nextBadge advances in the DB only; the read must follow it.
 state.config = { ...CONFIGURED, nextBadge: 137 }
 r = await readiness.readLocalReadiness()
-check('nextBadge read FRESH from IndexedDB', r.device.nextBadge, 137)
-check('  remaining recomputed', r.remaining, 114)
+check('nextBadge read FRESH from IndexedDB', r.badgeDistribution.nextBadge, 137)
+check('  remaining recomputed', r.badgeDistribution.remaining, 114)
 state.config = { ...CONFIGURED, nextBadge: 250 }
-check('last badge still available', (await readiness.readLocalReadiness()).rangeStatus, 'available')
+check('last badge still available', (await readiness.readLocalReadiness()).badgeDistribution.status, 'available')
 state.config = { ...CONFIGURED, nextBadge: 251 }
 r = await readiness.readLocalReadiness()
-check('exhausted range reports 0 remaining', [r.rangeStatus, r.remaining], ['exhausted', 0])
+check('exhausted range reports 0 remaining', [r.badgeDistribution.status, r.badgeDistribution.remaining], ['exhausted', 0])
 
 reset()
 addRegistration('c1', { status: 'completed', badgeNumber: 1, paymentStatus: 'confirmed', paymentMethod: 'cash', completedAt: 'x' })
@@ -110,12 +110,21 @@ check('re-read picks up a new registration', (await readiness.readLocalReadiness
 
 reset(BOOTSTRAP)
 r = await readiness.readLocalReadiness()
-check('unconfigured device fails closed', [r.ok, r.reason], [false, 'not-configured'])
+check('unregistered device fails closed', [r.ok, r.reason], [false, 'not-registered'])
 check('  counts still reported', r.counts, { completed: 0, held: 0, pendingSync: 0 })
 reset(null)
 check('missing config fails closed', (await readiness.readLocalReadiness()).reason, 'missing-config')
-reset({ ...CONFIGURED, badgeEnd: undefined })
-check('open-ended range is never inferred', (await readiness.readLocalReadiness()).ok, false)
+/**
+ * A registered device with no badge range is HEALTHY, not broken: readiness
+ * must work for a prize or dandiya desk. It simply reports the badge module
+ * as unconfigured, and invents no range.
+ */
+reset({ ...CONFIGURED, badgeEnd: undefined, badgeStart: 1, nextBadge: 1 })
+r = await readiness.readLocalReadiness()
+check('registered device with NO badge range still reads ok', r.ok, true)
+check('  badge distribution reported unconfigured', r.badgeDistribution, { configured: false })
+check('  open-ended range is never inferred',
+  ['badgeStart', 'badgeEnd', 'nextBadge', 'remaining'].some((k) => k in r.badgeDistribution), false)
 
 reset()
 addRegistration('c1', { status: 'completed', badgeNumber: 1, paymentStatus: 'confirmed', paymentMethod: 'cash', completedAt: 'x' })
@@ -123,9 +132,9 @@ const serialised = JSON.stringify(await readiness.readLocalReadiness())
 check('no attendee name in the readiness data', /Aarav|Sharma/.test(serialised), false)
 check('no phone number in the readiness data', /9876543210/.test(serialised), false)
 check('no UPI details in the readiness data', /organizer@upi|Organizer/.test(serialised), false)
-check('  snapshot carries ONLY the device projection',
+check('  snapshot device projection is identity ONLY',
   Object.keys(JSON.parse(serialised).device).sort(),
-  ['badgeEnd', 'badgeStart', 'deviceConfiguredAt', 'deviceId', 'deviceName', 'nextBadge'])
+  ['deviceConfiguredAt', 'deviceId', 'deviceName'])
 
 console.log('\n=== 13-24. BROWSER CAPABILITIES ===')
 let persistCalls = 0
@@ -207,8 +216,8 @@ const summarySnapshot = {
   local: {
     ok: true, readAt: 'x',
     device: { deviceId: DEVICE_ID, deviceName: 'Registration Desk A',
-      deviceConfiguredAt: '2026-09-27T06:00:00.000Z', badgeStart: 1, badgeEnd: 250, nextBadge: 1 },
-    rangeStatus: 'available', remaining: 250,
+      deviceConfiguredAt: '2026-09-27T06:00:00.000Z' },
+    badgeDistribution: { configured: true, badgeStart: 1, badgeEnd: 250, nextBadge: 1, remaining: 250, status: 'available' },
     counts: { completed: 0, held: 0, pendingSync: 0 },
   },
   environment: { network: 'online', serviceWorker: 'active', displayMode: 'standalone', persistentStorage: 'granted' },
@@ -219,9 +228,14 @@ check('  includes the Device ID', text.includes(DEVICE_ID), true)
 check('  excludes attendee data', /Aarav|Sharma|9876543210/.test(text), false)
 check('  excludes UPI + secrets', /organizer@upi|EVENT_SESSION_SECRET|accessCode|cookie|__Host-/i.test(text), false)
 check('  reports capabilities', [text.includes('PWA: Installed / standalone'), text.includes('Service Worker: Active')], [true, true])
-check('unconfigured summary says so, without inventing a range',
-  summary.buildDeviceSummary({ ...summarySnapshot, local: { ok: false, readAt: 'x', reason: 'not-configured', counts: { completed: 0, held: 0, pendingSync: 0 } } })
-    .includes('Device: NOT CONFIGURED'), true)
+check('unregistered summary says so, without inventing a range',
+  summary.buildDeviceSummary({ ...summarySnapshot, local: { ok: false, readAt: 'x', reason: 'not-registered', counts: { completed: 0, held: 0, pendingSync: 0 } } })
+    .includes('Device: NOT REGISTERED'), true)
+const noBadgeSummary = summary.buildDeviceSummary({ ...summarySnapshot,
+  local: { ...summarySnapshot.local, badgeDistribution: { configured: false } } })
+check('registered-without-badges summary is honest',
+  [noBadgeSummary.includes('Badge Distribution: Not configured'),
+   /Badge Range|Next Badge|Remaining/.test(noBadgeSummary)], [true, false])
 
 console.log('\n=== 41. LOGIN 429 HANDLING ===')
 const loginStatus = (status) => {
@@ -258,9 +272,18 @@ check('  no firewall/redis/kv dependency added',
 console.log('\n=== MOUNT ORDER: NO DEXIE BEFORE DatabaseGate ===')
 const appSource = readFileSync(join(root, 'src/App.tsx'), 'utf8')
 const headerSource = appSource.slice(appSource.indexOf('<header'), appSource.indexOf('</header>'))
+const badgePageSource = readFileSync(join(root, 'src/pages/badge-registration-page.tsx'), 'utf8')
+const devicePageSource = readFileSync(join(root, 'src/pages/device-registration-page.tsx'), 'utf8')
 check('readiness trigger is NOT in the global header', /<DeviceReadiness/.test(headerSource), false)
-check('  it renders inside DatabaseGate', appSource.indexOf('<DatabaseGate>') < appSource.indexOf('<DeviceReadiness'), true)
-check('  and inside DeviceSetupGate', appSource.indexOf('<DeviceSetupGate>') < appSource.indexOf('<DeviceReadiness'), true)
+/**
+ * Phase 8A moved the router under DatabaseGate, so every page — and therefore
+ * every readiness trigger — mounts only after bootstrap has succeeded.
+ */
+check('  the router mounts inside DatabaseGate', appSource.indexOf('<DatabaseGate>') < appSource.indexOf('<AppRouter />'), true)
+check('  badge page gates readiness behind DeviceRequiredGate',
+  badgePageSource.indexOf('<DeviceRequiredGate>') < badgePageSource.indexOf('<DeviceReadiness'), true)
+check('  device page shows it only for a registered device',
+  devicePageSource.indexOf('isDeviceRegistered(config)') < devicePageSource.indexOf('<DeviceReadiness'), true)
 check('readiness reads no config hook to decide visibility',
   /useEventConfig/.test(panelSource), false)
 
@@ -279,9 +302,11 @@ const dbTouching = HEADER_COMPONENTS.filter((file) =>
     readFileSync(join(root, file), 'utf8')))
 check('no header component reads the database', dbTouching, [])
 check('  every useEventConfig consumer is inside DatabaseGate',
-  spawnSync('grep', ['-rl', 'useEventConfig', join(root, 'src/components')], { encoding: 'utf8' })
-    .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/components/`, '')).sort(),
-  ['device/device-label.tsx', 'device/device-setup-gate.tsx', 'registration/registration-form.tsx'])
+  spawnSync('grep', ['-rl', 'useEventConfig', join(root, 'src/components'), join(root, 'src/pages')], { encoding: 'utf8' })
+    .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort(),
+  ['components/device/badge-distribution-gate.tsx', 'components/device/device-label.tsx',
+   'components/device/device-registered-gate.tsx', 'components/registration/registration-form.tsx',
+   'pages/device-registration-page.tsx', 'pages/home-page.tsx'].sort())
 
 console.log('\n=== DIALOG PRIMITIVE AUDIT ===')
 const dialogSource = readFileSync(join(root, 'src/components/ui/dialog.tsx'), 'utf8')

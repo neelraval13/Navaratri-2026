@@ -1,11 +1,15 @@
 import { MonitorSmartphone } from 'lucide-react'
 import type * as React from 'react'
 
-import { formatBadgeRange, isDeviceConfigured } from '@/db/device'
+import { formatBadgeRange, isBadgeDistributionConfigured } from '@/db/device'
 import { useEventConfig } from '@/hooks/use-event-config'
 
 /**
  * A restrained line naming this desk and the range it owns.
+ *
+ * BADGE-MODULE CONTEXT. It renders only for a device that actually owns a
+ * badge range — a registered prize or dandiya desk has no range to show, and
+ * generic device registration must not depend on this component.
  *
  * STATIC ASSIGNMENT METADATA ONLY. `deviceName`, `badgeStart` and `badgeEnd`
  * never change after setup, so they are safe to render from this component's
@@ -22,7 +26,10 @@ import { useEventConfig } from '@/hooks/use-event-config'
 const DeviceLabel: React.FC = () => {
   const eventConfig = useEventConfig()
 
-  if (eventConfig.config === null || !isDeviceConfigured(eventConfig.config)) {
+  if (
+    eventConfig.config === null ||
+    !isBadgeDistributionConfigured(eventConfig.config)
+  ) {
     return null
   }
 

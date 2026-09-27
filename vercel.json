@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/badge-registration", "destination": "/index.html" },
+    { "source": "/device-registration", "destination": "/index.html" }
+  ]
+}

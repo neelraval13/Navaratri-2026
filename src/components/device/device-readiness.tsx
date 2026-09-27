@@ -96,7 +96,16 @@ const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) =
  * whether to appear, which is exactly the kind of pre-bootstrap database work
  * a component outside DatabaseGate must never do.
  */
-const DeviceReadiness: React.FC = () => {
+interface DeviceReadinessProps {
+  /**
+   * `icon` is the compact trigger beside the device label on the badge page;
+   * `button` is the labelled action on the device registration page. Only the
+   * trigger differs — the panel and its reads are identical.
+   */
+  trigger?: 'icon' | 'button'
+}
+
+const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) => {
   const access = useOperatorAccess()
   const network = useNetworkStatus()
 
@@ -162,15 +171,26 @@ const DeviceReadiness: React.FC = () => {
     >
       <DialogTrigger
         render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Device readiness"
-            title="Device readiness"
-          >
-            <ClipboardCheck />
-          </Button>
+          trigger === 'button' ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-12 w-full sm:w-auto sm:min-w-52"
+            >
+              <ClipboardCheck data-icon="inline-start" />
+              Open Device Readiness
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Device readiness"
+              title="Device readiness"
+            >
+              <ClipboardCheck />
+            </Button>
+          )
         }
       />
 
@@ -210,49 +230,82 @@ const DeviceReadiness: React.FC = () => {
                   />
 
                   <ReadinessRow
-                    label="Configured"
+                    label="Registered"
                     value={
                       formatEventDateTime(
                         snapshot.local.device.deviceConfiguredAt ?? '',
                       ) || 'Unknown'
                     }
                   />
+                </>
+              ) : (
+                <ReadinessRow
+                  label="Device registration"
+                  value="Not registered"
+                  tone="attention"
+                  hint={
+                    snapshot.local.reason === 'missing-config'
+                      ? 'No event configuration was found on this device.'
+                      : 'This physical device has not been registered.'
+                  }
+                />
+              )}
+            </section>
+
+            {/*
+              The badge module's own state, kept separate from identity. A
+              registered device that distributes no badges is healthy, so
+              nothing here invents a range, a next badge or a remaining count
+              for it.
+            */}
+            <section className="space-y-1">
+              <SectionHeading>
+                Badge distribution
+              </SectionHeading>
+
+              {!snapshot.local.ok || !snapshot.local.badgeDistribution.configured ? (
+                <ReadinessRow
+                  label="Badge distribution"
+                  value="Not configured"
+                  tone="neutral"
+                  hint="This device has not been assigned a badge range."
+                />
+              ) : (
+                <>
+                  <ReadinessRow
+                    label="Badge distribution"
+                    value="Configured"
+                    tone="good"
+                  />
 
                   <ReadinessRow
                     label="Assigned badges"
                     value={formatBadgeRange(
-                      snapshot.local.device.badgeStart,
-                      snapshot.local.device.badgeEnd,
+                      snapshot.local.badgeDistribution.badgeStart,
+                      snapshot.local.badgeDistribution.badgeEnd,
                     )}
                   />
 
                   <ReadinessRow
                     label="Next badge"
-                    value={formatBadgeNumber(snapshot.local.device.nextBadge)}
+                    value={formatBadgeNumber(snapshot.local.badgeDistribution.nextBadge)}
                   />
 
                   <ReadinessRow
                     label="Remaining"
-                    value={String(snapshot.local.remaining)}
-                    tone={snapshot.local.rangeStatus === 'exhausted' ? 'warning' : 'good'}
+                    value={String(snapshot.local.badgeDistribution.remaining)}
+                    tone={
+                      snapshot.local.badgeDistribution.status === 'exhausted'
+                        ? 'warning'
+                        : 'good'
+                    }
                     hint={
-                      snapshot.local.rangeStatus === 'exhausted'
+                      snapshot.local.badgeDistribution.status === 'exhausted'
                         ? 'Range exhausted. Hold Registration still works.'
                         : undefined
                     }
                   />
                 </>
-              ) : (
-                <ReadinessRow
-                  label="Device configuration"
-                  value="Invalid"
-                  tone="attention"
-                  hint={
-                    snapshot.local.reason === 'missing-config'
-                      ? 'No event configuration was found on this device.'
-                      : 'Device Setup has not been completed on this device.'
-                  }
-                />
               )}
             </section>
 

@@ -106,27 +106,31 @@ check('Hold still allowed when exhausted',
   (await reg.holdRegistration({ ...attendee('9000070005', 'Holdable'), paymentMethod: null })).outcome, 'created')
 
 reset({ deviceId: undefined, deviceName: undefined, badgeEnd: undefined })
-check('unconfigured device: hold fails closed',
-  (await reg.holdRegistration({ ...attendee('9000070006', 'X'), paymentMethod: null })).outcome, 'device-not-configured')
-check('unconfigured device: issue fails closed',
-  (await reg.issueBadge({ ...attendee('9000070006', 'X'), paymentMethod: 'cash' })).outcome, 'device-not-configured')
+check('unregistered device: hold fails closed',
+  (await reg.holdRegistration({ ...attendee('9000070006', 'X'), paymentMethod: null })).outcome, 'badge-distribution-not-configured')
+check('unregistered device: issue fails closed',
+  (await reg.issueBadge({ ...attendee('9000070006', 'X'), paymentMethod: 'cash' })).outcome, 'badge-distribution-not-configured')
 check('  nothing written', [state.registrations.size, state.outbox.size], [0, 0])
 check('  and no badge is considered available', eventConfig.hasBadgeAvailable(state.config), false)
 
 const BOOTSTRAP = { ...CONFIGURED, deviceId: undefined, deviceName: undefined, badgeEnd: undefined, nextBadge: 1 }
-check('bootstrap defaults are NOT configured', device.isDeviceConfigured(BOOTSTRAP), false)
-check('exhausted range is still configured', device.isDeviceConfigured({ ...CONFIGURED, nextBadge: 1001 }), true)
-check('nextBadge past badgeEnd+1 is NOT', device.isDeviceConfigured({ ...CONFIGURED, nextBadge: 1002 }), false)
+check('bootstrap defaults are NOT badge-configured', device.isBadgeDistributionConfigured(BOOTSTRAP), false)
+check('exhausted range is still badge-configured', device.isBadgeDistributionConfigured({ ...CONFIGURED, nextBadge: 1001 }), true)
+check('nextBadge past badgeEnd+1 is NOT', device.isBadgeDistributionConfigured({ ...CONFIGURED, nextBadge: 1002 }), false)
 reset(BOOTSTRAP)
-r = await device.configureDevice({ deviceName: '  Registration Desk A  ', badgeStart: 1, badgeEnd: 250 })
-check('device setup configures', [r.outcome, r.config.deviceName, r.config.nextBadge], ['configured', 'Registration Desk A', 1])
+r = await device.registerDevice({ deviceName: '  Registration Desk A  ' })
+check('device registration succeeds', [r.outcome, r.config.deviceName], ['registered', 'Registration Desk A'])
 check('  preserves unrelated config', [r.config.eventName, r.config.amount, r.config.timezone], ['Navaratri 2026', 20, 'Asia/Kolkata'])
+r = await device.configureBadgeDistribution({ badgeStart: 1, badgeEnd: 250, physicalStackConfirmed: true })
+check('badge distribution configures', [r.outcome, r.config.nextBadge, r.config.badgeEnd], ['configured', 1, 250])
 reset(BOOTSTRAP)
 state.registrations.set('old', { id: 'old', status: 'completed', badgeNumber: 5, name: 'X' })
-check('setup refuses around existing data', (await device.configureDevice({ deviceName: 'D', badgeStart: 1, badgeEnd: 9 })).outcome, 'existing-data')
+check('registration refuses around existing data', (await device.registerDevice({ deviceName: 'D' })).outcome, 'existing-data')
 check('  nothing stamped', state.config.deviceId, undefined)
 reset()
-check('already configured refuses again', (await device.configureDevice({ deviceName: 'D', badgeStart: 1, badgeEnd: 9 })).outcome, 'already-configured')
+check('already registered refuses again', (await device.registerDevice({ deviceName: 'D' })).outcome, 'already-registered')
+check('already badge-configured refuses again',
+  (await device.configureBadgeDistribution({ badgeStart: 5, badgeEnd: 9, physicalStackConfirmed: true })).outcome, 'already-configured')
 
 console.log('\n=== 3B. UPI ===')
 check('URI exact', upi.buildUpiPaymentUri({ upiId: 'example@upi', payeeName: 'Example Name', amount: 20, eventName: 'Navaratri 2026' }),
@@ -308,7 +312,7 @@ check('session + enabled + {} -> 400 invalid-request', [res.status, (await res.j
 setEnv({ ...FULL, SYNC_ALLOWED_ORIGIN: 'https://other.test' })
 check('auth precedes the origin guard', (await route.POST(post())).status, 401)
 
-console.log('\n=== 7A. GATE FAILS CLOSED + LABEL IS STATIC ===')
+console.log('\n=== 7A/8A. DEVICE GATE FAILS CLOSED + LABEL IS STATIC ===')
 const rendered = JSON.parse(spawnSync('node', [`${HERE}/component-render.mjs`], { cwd: root, encoding: 'utf8' }).stdout.trim())
 const showsForm = (v) => v.text.includes('__REGISTRATION_FORM__')
 const textOf = (v) => v.text.join(' ')
@@ -317,14 +321,20 @@ check('  delegates to the loading gate', rendered.gate.loading.delegated, [{ nam
 check('failed does NOT render RegistrationForm', showsForm(rendered.gate.failed), false)
 check('  delegates to the failed gate with Retry', rendered.gate.failed.delegated, [{ name: 'EventConfigGate', status: 'failed', hasRetry: true }])
 check('loaded-but-null also fails closed', rendered.gate.loadedNull.delegated, [{ name: 'EventConfigGate', status: 'failed', hasRetry: true }])
-check('unconfigured shows Device Setup, not the form',
-  [textOf(rendered.gate.unconfigured).includes('Device Setup'), showsForm(rendered.gate.unconfigured)], [true, false])
+// Phase 8A moved provisioning to its own route, so the gate now sends the
+// operator there instead of embedding the setup form mid-workflow.
+check('unregistered sends the operator to device registration, not the form',
+  [textOf(rendered.gate.unconfigured).includes('This device is not registered'),
+   textOf(rendered.gate.unconfigured).includes('Register This Device'),
+   showsForm(rendered.gate.unconfigured)], [true, true, false])
 check('configured renders RegistrationForm', showsForm(rendered.gate.configured), true)
 check('device label shows name + range', textOf(rendered.label.configured), 'Registration Desk A · Badges  #001\u2013#250')
 check('  renders NO remaining count', /remaining/i.test(textOf(rendered.label.configured)), false)
 check('  identical after nextBadge advances', textOf(rendered.label.afterIssue), textOf(rendered.label.configured))
 check('  identical when exhausted', textOf(rendered.label.exhausted), textOf(rendered.label.configured))
-check('  hidden on an unconfigured device', rendered.label.unconfigured.components.length, 0)
+check('  hidden on an unregistered device', rendered.label.unconfigured.components.length, 0)
+check('  hidden on a registered device with NO badge range',
+  rendered.label.registeredNoBadges.components.length, 0)
 
 console.log('\n=== RELEASE CHECK ===')
 const release = JSON.parse(spawnSync('node', [join(root, 'scripts/release-check.mjs'), '--root', root, '--json'], { encoding: 'utf8' }).stdout)

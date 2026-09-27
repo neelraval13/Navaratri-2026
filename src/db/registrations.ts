@@ -1,5 +1,5 @@
 import { db } from '@/db/database'
-import { isDeviceConfigured } from '@/db/device'
+import { isBadgeDistributionConfigured } from '@/db/device'
 import { hasBadgeAvailable } from '@/db/event-config'
 import {
   EVENT_CONFIG_ID,
@@ -78,7 +78,7 @@ export type HoldRegistrationResult =
   | { outcome: 'held-conflict'; registration: HeldRegistration }
   | { outcome: 'completed-conflict'; registration: CompletedRegistration }
   | { outcome: 'missing-config' }
-  | { outcome: 'device-not-configured' }
+  | { outcome: 'badge-distribution-not-configured' }
 
 /**
  * One pending outbox row per registration: repeated local edits before a sync
@@ -123,12 +123,13 @@ export const holdRegistration = async (
       }
 
       /**
-       * Defence in depth. UI gating is not enough: a stale tab or a direct call
-       * must not be able to create a registration on a device that has no
-       * assigned badge range and no identity to stamp on the snapshot.
+       * Defence in depth, and deliberately the BADGE check rather than the
+       * device one. A registered prize or dandiya desk is a real device with a
+       * real identity, and it must still not be able to create a badge
+       * registration — only a device that owns a badge range may.
        */
-      if (!isDeviceConfigured(config)) {
-        return { outcome: 'device-not-configured' }
+      if (!isBadgeDistributionConfigured(config)) {
+        return { outcome: 'badge-distribution-not-configured' }
       }
 
       const existing =
@@ -240,7 +241,7 @@ export type IssueBadgeResult =
       config: EventConfig
     }
   | { outcome: 'missing-config' }
-  | { outcome: 'device-not-configured' }
+  | { outcome: 'badge-distribution-not-configured' }
   | { outcome: 'missing-active-registration' }
   | { outcome: 'completed-conflict'; registration: CompletedRegistration }
   | { outcome: 'held-conflict'; registration: HeldRegistration }
@@ -284,8 +285,8 @@ export const issueBadge = async (
         return { outcome: 'missing-config' }
       }
 
-      if (!isDeviceConfigured(config)) {
-        return { outcome: 'device-not-configured' }
+      if (!isBadgeDistributionConfigured(config)) {
+        return { outcome: 'badge-distribution-not-configured' }
       }
 
       const badgeNumber = config.nextBadge

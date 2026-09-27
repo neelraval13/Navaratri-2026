@@ -50,6 +50,7 @@ const SUSPICIOUS_CREDENTIAL_FILENAMES = new Set([
 ])
 
 const SERVER_ONLY_NAMES = [
+  'DATABASE_URL',
   'EVENT_OPERATOR_ACCESS_CODE',
   'EVENT_SESSION_SECRET',
   'GOOGLE_SHEETS_SPREADSHEET_ID',
@@ -76,6 +77,11 @@ const REQUIRED_FILES = [
   'server/auth/environment.ts',
   'server/auth/operator-session.ts',
   'server/auth/cookies.ts',
+  'server/db/client.ts',
+  'server/db/environment.ts',
+  'server/db/schema.ts',
+  'drizzle.config.ts',
+  'docs/DATABASE.md',
   'scripts/verification/phase-7b.mjs',
   'scripts/verification/prior-phases.mjs',
   'docs/EVENT_DAY_RUNBOOK.md',
@@ -366,6 +372,81 @@ addCheck(
   'server-esm-imports',
   'Server relative imports carry a runtime extension',
   esmProblems,
+)
+
+// --- G3. the database stays server-side, and migrations stay manual ---------
+const databaseProblems = []
+
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path)
+
+  if (text === null) {
+    continue
+  }
+
+  // `server/db` is Node-only: it imports a driver and reads a credential.
+  if (/from\s+['"][^'"]*server\/db/.test(text) || text.includes('server/db/')) {
+    databaseProblems.push(`${rel(path)} imports server/db from client code`)
+  }
+}
+
+/**
+ * A migration must never run as a side effect of shipping or serving. It is a
+ * deliberate operator action, so no lifecycle script may invoke it.
+ */
+const packageJson = readText(join(ROOT, 'package.json'))
+
+if (packageJson !== null) {
+  let scripts = {}
+
+  try {
+    scripts = JSON.parse(packageJson).scripts ?? {}
+  } catch {
+    databaseProblems.push('package.json could not be parsed')
+  }
+
+  /**
+   * `db:smoke` WRITES rows, so it belongs in the same prohibition as a
+   * migration: never a side effect of shipping, serving or verifying.
+   */
+  const MIGRATION_PATTERN = /drizzle-kit\s+(migrate|push)|db:migrate|db:push|db:smoke|db-constraint-smoke/
+
+  for (const name of ['build', 'start', 'postinstall', 'prepare', 'preview', 'dev', 'vercel-build', 'release:check', 'verify']) {
+    const command = scripts[name]
+
+    if (typeof command === 'string' && MIGRATION_PATTERN.test(command)) {
+      databaseProblems.push(`the "${name}" script performs a database write`)
+    }
+  }
+}
+
+/**
+ * A committed connection string. Local env files are excluded elsewhere, so a
+ * hit here is a credential in a tracked file.
+ */
+const POSTGRES_URL_PATTERN = /postgres(?:ql)?:\/\/[^\s'"<>]*:[^\s'"<>]*@/
+
+for (const path of scannableFiles) {
+  const text = readText(path)
+
+  if (text !== null && POSTGRES_URL_PATTERN.test(text)) {
+    // The path only. The matched string is never printed.
+    databaseProblems.push(`PostgreSQL connection string with credentials: ${rel(path)}`)
+  }
+}
+
+if (walk(join(ROOT, 'drizzle')).filter((p) => p.endsWith('.sql')).length === 0) {
+  databaseProblems.push('no version-controlled migration files in drizzle/')
+}
+
+addCheck(
+  'database-boundary',
+  'Database stays server-side and migrations stay manual',
+  databaseProblems,
 )
 
 // --- G. client code never reads a server-only variable ----------------------

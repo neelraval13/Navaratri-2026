@@ -7,6 +7,60 @@ Currently, two official plugins are available:
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
+## Application routes
+
+One origin, real pathnames, one storage namespace:
+
+| Route | Module |
+|---|---|
+| `/` | Home — event operations launcher |
+| `/badge-registration` | Attendee badge workflow |
+| `/device-registration` | Provision and inspect this physical device |
+
+Dandiya and Prizes are shown on Home as **Coming soon** and are inert — there
+are no routes behind them yet.
+
+Routing is presentation only. Changing the pathname creates no second database
+or storage namespace: IndexedDB, the trusted-device marker, the operator
+session cookie, the service worker, the device identity, the badge range,
+registrations and the outbox all belong to the origin, not the path.
+
+`vercel.json` carries **explicit** rewrites for the two non-root routes, so a
+direct visit or refresh works while `/api/*` can never be captured by the SPA
+fallback. The service worker's navigation fallback serves the cached shell for
+deep links offline, with `/api/` denylisted.
+
+## Central database (Phase 9A — foundation only)
+
+A Neon PostgreSQL database holds **central operational metadata**: events,
+devices, device attributes and badge-range assignments. Full detail in
+**[docs/DATABASE.md](docs/DATABASE.md)**.
+
+**Nothing in the live application depends on it yet.** With `DATABASE_URL`
+absent the app still loads, authenticates, routes, registers devices,
+configures badge distribution, works offline, issues badges and syncs to
+Google Sheets. Only a deliberate database call fails, and it fails closed.
+
+| Store | Owns |
+|---|---|
+| IndexedDB | The offline workflow, and the live `nextBadge` counter |
+| Google Sheets | The attendee ledger |
+| PostgreSQL | Events, devices, attributes, badge-range assignments |
+
+**No attendee data is stored centrally** — no name, phone, age, gender or
+payment. **No central badge counter**: Postgres owns which *range* a device
+holds, `nextBadge` stays local so a disconnected desk keeps issuing.
+
+```bash
+pnpm db:generate   # author SQL from the schema; needs no database
+pnpm db:migrate    # apply it, deliberately, one environment at a time
+pnpm db:check      # read-only: connection, tables, guarantees
+```
+
+Migrations are never automatic — not in the build, the start command, a
+Function, app bootstrap or `release:check`. Development and Production must
+never share a database branch.
+
 ## Local UPI setup
 
 The payment QR pays the organizer's **personal** UPI ID. Real values are
@@ -160,6 +214,35 @@ record which desk issued what.
 - **Cross-device Resume.** A held registration is resumable on the **same
   device**, because local IndexedDB owns the workflow state. A hold appearing in
   Google Sheets does not make it resumable elsewhere.
+
+#### Device registration is not badge distribution
+
+These are two different things, and the distinction matters:
+
+| Concept | Means | Required for |
+|---|---|---|
+| **Device registration** | This physical device has a name and a stable `deviceId`. | Every event device, whatever it does |
+| **Badge distribution** | This device additionally owns a finite, non-overlapping badge range. | Only devices that hand out badges |
+
+A prize desk or a dandiya desk is a fully registered device that owns no badge
+range at all, and that is a healthy state — not a half-finished setup. One
+device may later serve several modules, which is why this is **not** modelled
+as a single `deviceType`: identity is stable, and each module attaches its own
+optional configuration to it.
+
+So:
+
+- `/device-registration` asks only for a **device name**. No badge fields.
+- `/badge-registration` has three states: register the device → assign a badge
+  range → run the workflow. Badge setup lives at the front of the badge module
+  because owning badges is that module's concern.
+- `holdRegistration` and `issueBadge` require **badge distribution**, not mere
+  registration, enforced inside their own transactions.
+- An existing Phase 7 device with identity *and* a range already satisfies
+  both, and is never sent through either setup again.
+
+Future modules attach their own local configuration to the same stable device
+identity. There is deliberately no generic capability framework yet.
 
 #### Device Readiness
 

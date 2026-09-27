@@ -43,6 +43,12 @@ Ten attempts per minute per IP leaves an operator who fat-fingers the code
 plenty of room, while making online guessing against a 12+ character passphrase
 pointless.
 
+> **The final IP threshold must be confirmed once the expected device count and
+> the venue network topology are known.** Several event devices may sit behind
+> one NAT public address, in which case they share the limit — a venue with
+> many desks on one uplink needs a higher number than a single device would.
+> Do not weaken application authentication to compensate.
+
 A fixed window is sufficient here. The burst a sliding window would prevent is
 not a meaningful threat against a strong passphrase.
 

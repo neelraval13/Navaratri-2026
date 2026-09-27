@@ -1,0 +1,49 @@
+/**
+ * Renders the real router at a given path with react-dom/server, so route
+ * resolution and the device gates are genuinely exercised rather than grepped.
+ *
+ * The registration form is stubbed with a marker: this harness verifies which
+ * page a path resolves to, not the workflow inside it.
+ */
+import { createJiti } from 'jiti'
+import { resolve } from 'node:path'
+
+const HERE = import.meta.dirname
+const root = resolve(HERE, '../..')
+
+const jiti = createJiti(import.meta.url, {
+  alias: {
+    '@/hooks/use-event-config': `${HERE}/fake-event-config.mjs`,
+    '@/components/registration/registration-form': `${HERE}/fake-registration-form.mjs`,
+    '@/db/database': `${HERE}/fake-db.mjs`,
+    '@': `${root}/src`,
+  },
+  interopDefault: true,
+  jsx: { runtime: 'automatic' },
+})
+
+const React = await jiti.import('react')
+const { renderToStaticMarkup } = await jiti.import('react-dom/server')
+const { Router } = await jiti.import('wouter')
+const { state } = await jiti.import(`${HERE}/fake-event-config.mjs`)
+const AppRouterMod = await jiti.import(`${root}/src/components/app-router.tsx`)
+const AppRouter = AppRouterMod.default ?? AppRouterMod
+
+export const renderRoute = (path, config = null, status = 'loaded') => {
+  state.status = status
+  state.config = config
+  // `ssrPath` is wouter's documented server-rendering entry point; it needs
+  // no location hook and gives the tree a stable snapshot.
+  try {
+    return {
+      html: renderToStaticMarkup(
+        React.createElement(Router, { ssrPath: path }, React.createElement(AppRouter)),
+      ),
+    }
+  } catch (error) {
+    return { html: '', error: error.message.split('\n')[0] }
+  }
+}
+
+/** Every href the rendered page offers, in order. */
+export const hrefsIn = (html) => [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])

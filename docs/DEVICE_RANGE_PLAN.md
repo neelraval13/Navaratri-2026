@@ -11,6 +11,14 @@ well, and the sync server ignores every tab except *Badge Register* and
 
 ---
 
+## Which devices need a row
+
+**Only devices that will hand out badges.**
+
+Every event device is *registered* — it gets a name and an id — but a prize
+desk or a dandiya desk owns no badge range and needs no row here. Registering a
+device does not make it a badge distributor.
+
 ## The plan
 
 Fill one row per physical device while provisioning it.
@@ -52,6 +60,9 @@ The ranges above are an EXAMPLE. Nothing in the application hard-codes them.
   operators does not change it; reinstalling or clearing site data does.
 - **Never clear browser or site data during the event.** That destroys the local
   device identity, its range, and any registration not yet synchronized.
+- **Registration and badge assignment are separate steps.** A device is
+  registered at `/device-registration`; a badge range is assigned at
+  `/badge-registration`, where the physical-stack confirmation also belongs.
 
 ---
 

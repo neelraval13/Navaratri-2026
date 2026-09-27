@@ -1,6 +1,10 @@
 # Device Provisioning
 
-Run this once per physical registration device, before the event.
+Run this once per physical event device, before the event.
+
+**Every** device is registered. Only devices that will hand out badges are also
+given a badge range — a prize or dandiya desk stops after device registration
+and needs no row in the range plan.
 
 Fill in [`DEVICE_RANGE_PLAN.md`](DEVICE_RANGE_PLAN.md) as you go — decide the
 ranges there **first**, then provision each device against that plan.
@@ -13,9 +17,10 @@ ranges there **first**, then provision each device against that plan.
 |---|---|---|
 | 1 | Open the production app **while online** | ☐ |
 | 2 | Unlock Operator Access | ☐ |
-| 3 | Complete **Device Setup** using the range from the central plan | ☐ |
-| 4 | Confirm the matching physical badge stack is at this desk | ☐ |
-| 5 | Open **Device Readiness** (clipboard icon in the header) | ☐ |
+| 3 | Open **`/device-registration`** and register the device with its name | ☐ |
+| 3a | *Badge-distributing devices only:* open **`/badge-registration`** and assign the range from the central plan | ☐ |
+| 4 | *Badge-distributing devices only:* confirm the matching physical badge stack is at this desk | ☐ |
+| 5 | Go to **`/device-registration`** and open **Device Readiness** | ☐ |
 | 6 | Copy the **Device ID** into the Device Range Plan | ☐ |
 | 7 | Verify: readiness range == plan range == physical stack | ☐ |
 | 8 | Verify **Next badge** equals the range start | ☐ |
