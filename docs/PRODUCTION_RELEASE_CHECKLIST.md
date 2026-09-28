@@ -95,6 +95,13 @@ the profile.
 |---|---|---|
 | 3.21 | `pnpm build` run on a clean checkout, not an incremental tree | ☐ |
 | 3.22 | `pnpm verify:parity` green | ☐ |
+| 3.23 | `pnpm typecheck:vercel-functions` green — the platform compiles each `api/*.ts` separately after our build finishes | ☐ |
+
+A deployment can still fail after a green build: Vercel typechecks every
+function on its own, against the ROOT `tsconfig.json`'s `compilerOptions`. If
+that happens, reproduce it by adjusting `scripts/vercel-function-typecheck.mjs`
+to match the platform's options and fix the source — never widen the model to
+make the error disappear.
 
 ### Device credentials (Phase 9C-A)
 

@@ -1906,6 +1906,64 @@ pinned by name; a new one fails the parity suite.
 `packageManager` pins pnpm exactly, because the platform selects its pnpm from
 that field and a different major would resolve the lockfile differently.
 
+### The Platform Compiles Each Function Separately
+
+After OUR build succeeds, Vercel compiles every `api/*.ts` entrypoint ON ITS
+OWN: it reads the nearest `tsconfig.json`, CLEARS `files` and `include`, KEEPS
+the root `compilerOptions`, applies a ts-node-style normalisation, and asks for
+semantic diagnostics per entrypoint.
+
+So `tsconfig.json` is a PRODUCTION COMPILER INPUT, not a solution file that
+compiles nothing. And a whole-project `tsc` cannot stand in for that check: one
+program shares every global its files' dependency graphs contribute, while a
+per-entrypoint program gets only what THAT function imports. A green
+`tsc -b` has already shipped functions that did not compile.
+
+`pnpm typecheck:vercel-functions` models it with the real TypeScript compiler
+API — `scripts/vercel-function-typecheck.mjs`, one Program per entrypoint,
+genuine syntactic and semantic diagnostics. It never shells out to the Vercel
+CLI and makes no network request: the cloud runs its own CLI version, so the
+documented compilation algorithm is the stable thing to model. `pnpm build`
+runs it, and it must keep running it.
+
+Functions are written against the WEB-standard `Request`, `Response`, `Headers`
+and `URL`. That is the runtime's real API and must NOT be migrated to
+`VercelRequest`/`VercelResponse` or an Express-style handler.
+
+Those globals are why the root `lib` names `DOM` and `DOM.Iterable`. Without a
+DOM lib they come only from `@types/node`'s `web-globals/fetch.d.ts`, which
+declares them as
+
+    type _Request = typeof globalThis extends { onmessage: any } ? {} : undici.Request
+
+— a HEURISTIC that infers "is a DOM lib loaded?" from an unrelated global. When
+it guesses wrong the type collapses to `{}` and every `request.headers` fails
+with `Property 'headers' does not exist on type 'Request'`. Naming `DOM`
+explicitly removes the guess. The per-function check asserts the surface
+directly, so a future collapse is caught rather than inferred.
+
+The root baseline is NOT the browser project. `tsconfig.app.json` keeps
+`types: ["vite/client"]`, and server code must still never touch `window`,
+`document`, `localStorage`, `sessionStorage` or `navigator` — the compiler can
+no longer catch that, so `release:check` does.
+
+### Google Sheets Client
+
+`google.sheets('v4')` — the STRING overload, which has exactly one signature.
+Never `google.sheets({ version, auth })`: that object overload resolves `auth`
+against `GlobalOptions`, whose type comes from the transitive
+`google-auth-library`, and where that package does not resolve the call matches
+neither overload and fails with TS2769.
+
+The credential therefore travels on EACH request as `auth: sheets.auth`. Never
+`google.options({ auth })` — that is process-global mutable state, and a
+serverless instance serves concurrent invocations, so one request's credential
+could be observed by another.
+
+The auth type is `InstanceType<typeof google.auth.JWT>`, queried from the
+constructor actually used. `google-auth-library` is a transitive dependency and
+importing its types directly would be a phantom dependency.
+
 ### release:check
 
 `pnpm release:check` is a READ-ONLY repository audit. It must never mutate a

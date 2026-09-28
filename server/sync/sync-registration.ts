@@ -11,8 +11,10 @@ import {
   findDuplicateRegistrationId,
   type SheetRowView,
 } from './decisions.js'
+import type { sheets_v4 } from 'googleapis'
+
 import type { SyncEnvironment } from './environment.js'
-import { createSheetsClient, type SheetsClient } from './google-sheets.js'
+import { createSheetsAccess, type SheetsAccess } from './google-sheets.js'
 import {
   buildCompletedSyncRequests,
   buildHeldSyncRequests,
@@ -97,7 +99,7 @@ const toRowViews = (
 }
 
 const runBatch = async (
-  sheets: SheetsClient,
+  sheets: SheetsAccess,
   spreadsheetId: string,
   requests: SheetsRequest[],
 ): Promise<void> => {
@@ -105,7 +107,9 @@ const runBatch = async (
     return
   }
 
-  await sheets.spreadsheets.batchUpdate({
+  await sheets.client.spreadsheets.batchUpdate({
+    // Per request, never through process-global `google.options`.
+    auth: sheets.auth,
     spreadsheetId,
     requestBody: { requests },
   })
@@ -119,22 +123,25 @@ const runBatch = async (
  * ID twice. Unrelated tabs are never read, modified or deleted.
  */
 const loadTabs = async (
-  sheets: SheetsClient,
+  sheets: SheetsAccess,
   spreadsheetId: string,
 ): Promise<
   | { ok: true; badgeRegister: TabState; heldRegistrations: TabState }
   | { ok: false; message: string }
 > => {
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId })
+  const spreadsheet = await sheets.client.spreadsheets.get({
+    auth: sheets.auth,
+    spreadsheetId,
+  })
   const existing = spreadsheet.data.sheets ?? []
 
   const resolveSheetId = (
-    sheetList: typeof existing,
+    sheetList: readonly sheets_v4.Schema$Sheet[],
     title: string,
   ): number | undefined => {
     return (
-      sheetList.find((sheet) => sheet.properties?.title === title)?.properties
-        ?.sheetId ?? undefined
+      sheetList.find((sheet: sheets_v4.Schema$Sheet) => sheet.properties?.title === title)
+        ?.properties?.sheetId ?? undefined
     )
   }
 
@@ -145,7 +152,8 @@ const loadTabs = async (
   if (missingTitles.length > 0) {
     // A newly created tab is genuinely blank, so if initialisation below fails
     // a retry simply finds a blank tab and initialises it safely.
-    await sheets.spreadsheets.batchUpdate({
+    await sheets.client.spreadsheets.batchUpdate({
+      auth: sheets.auth,
       spreadsheetId,
       requestBody: {
         requests: missingTitles.map((title) => ({
@@ -157,7 +165,8 @@ const loadTabs = async (
 
   const refreshed =
     missingTitles.length > 0
-      ? ((await sheets.spreadsheets.get({ spreadsheetId })).data.sheets ?? [])
+      ? ((await sheets.client.spreadsheets.get({ auth: sheets.auth, spreadsheetId }))
+          .data.sheets ?? [])
       : existing
 
   const badgeSheetId = resolveSheetId(refreshed, BADGE_REGISTER_TITLE)
@@ -167,7 +176,8 @@ const loadTabs = async (
     return { ok: false, message: 'Required tabs could not be created.' }
   }
 
-  const values = await sheets.spreadsheets.values.batchGet({
+  const values = await sheets.client.spreadsheets.values.batchGet({
+    auth: sheets.auth,
     spreadsheetId,
     ranges: [BADGE_REGISTER_RANGE, HELD_REGISTRATIONS_RANGE],
     valueRenderOption: 'UNFORMATTED_VALUE',
@@ -299,7 +309,7 @@ const loadTabs = async (
 }
 
 const syncHeld = async (
-  sheets: SheetsClient,
+  sheets: SheetsAccess,
   spreadsheetId: string,
   heldSheetId: number,
   payload: SyncHeldPayload,
@@ -334,7 +344,7 @@ const syncHeld = async (
 }
 
 const syncCompleted = async (
-  sheets: SheetsClient,
+  sheets: SheetsAccess,
   spreadsheetId: string,
   badgeSheetId: number,
   heldSheetId: number,
@@ -389,7 +399,7 @@ export const syncRegistration = async (
   request: SyncRegistrationRequest,
   environment: SyncEnvironment,
 ): Promise<SyncExecutionResult> => {
-  const sheets = createSheetsClient(environment)
+  const sheets = createSheetsAccess(environment)
 
   const tabs = await loadTabs(sheets, environment.spreadsheetId)
 

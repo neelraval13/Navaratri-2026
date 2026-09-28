@@ -15,8 +15,33 @@
    * silently stops discriminated unions narrowing through `if (!result.ok)`.
    * That is exactly how a build could pass here and fail there.
    *
-   * Keeping the baseline here costs the real projects nothing and means the
-   * weakest plausible reader still gets a correct environment.
+   * This is therefore a PRODUCTION COMPILER INPUT, not decoration. Vercel
+   * compiles every `api/*.ts` entrypoint on its own against these options,
+   * which `pnpm typecheck:vercel-functions` reproduces.
+   *
+   * WHY `DOM` IS HERE, in a config that also says `types: ["node"]`:
+   *
+   * Vercel Functions are written against the WEB-standard `Request`,
+   * `Response`, `Headers` and `URL` — that is the runtime's real API, and it
+   * is not being changed. Without a DOM lib those names come only from
+   * `@types/node`'s `web-globals/fetch.d.ts`, which declares them as
+   *
+   *     type _Request = typeof globalThis extends { onmessage: any }
+   *       ? {}                  // assume a DOM lib will supply the real one
+   *       : undici.Request      // otherwise use Node's own
+   *
+   * That heuristic infers "is a DOM lib loaded?" from an unrelated global. Get
+   * it wrong — in either direction — and `Request` collapses to `{}`, which
+   * is exactly the reported `Property 'headers' does not exist on type
+   * 'Request'`. Naming `DOM` explicitly removes the guess: the real Fetch
+   * interfaces are always in the program, whatever else a compiler decides
+   * about `globalThis`.
+   *
+   * This is NOT the browser project. `tsconfig.app.json` keeps its own
+   * `types: ["vite/client"]` and is untouched by anything here, and server
+   * code must still never use `window`, `document` or any other browser-only
+   * global — `release:check` enforces that separately, because the fallback
+   * environment can no longer catch it.
    */
   "files": [],
   "references": [
@@ -31,7 +56,7 @@
     "strict": true,
     "skipLibCheck": true,
     "target": "es2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "module": "nodenext",
     "moduleResolution": "nodenext",

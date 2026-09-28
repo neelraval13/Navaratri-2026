@@ -37,6 +37,7 @@ const check = (label, actual, expected) => {
 }
 
 const read = (p) => readFileSync(join(root, p), 'utf8')
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 const readConfig = (p) =>
   JSON.parse(read(p).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''))
 const walk = (dir, out = []) => {
@@ -173,11 +174,84 @@ check('  no Node globals leak into it',
   (appConfig.compilerOptions.types ?? []).includes('node'), false)
 check('  and it still covers only src', appConfig.include, ['src'])
 
+console.log('\n=== THE PLATFORM\'S PER-FUNCTION COMPILE ===')
+/**
+ * Vercel compiles every `api/*.ts` entrypoint ALONE, against the root
+ * `compilerOptions`, after our build has already succeeded. A whole-project
+ * `tsc` shares one program across every file, so a global type contributed by
+ * one file's dependency graph covers them all; per entrypoint, each function
+ * gets only what it imports. That is how a green build shipped functions that
+ * did not compile.
+ */
+const functionChecker = await import('../vercel-function-typecheck.mjs')
+const entrypoints = functionChecker.functionEntrypoints()
+
+check('every api entrypoint is enumerated',
+  entrypoints.map((file) => file.replace(`${root}/api/`, '')).sort(),
+  readdirSync(join(root, 'api')).filter((file) => file.endsWith('.ts')).sort())
+check('  and there is more than one', entrypoints.length > 1, true)
+
+const functionFailures = functionChecker.checkAllFunctions()
+check('every function compiles on its own',
+  [...functionFailures.entries()].map(([name, errors]) => `${name}: ${errors[0]}`), [])
+
+/**
+ * The Web surface is asserted directly, not inferred from whether today's
+ * handlers happen to touch it. `@types/node` declares `Request` as
+ * `typeof globalThis extends { onmessage: any } ? {} : undici.Request` — a
+ * guess about whether a DOM lib is loaded. When that guess is wrong the type
+ * becomes `{}` and every `request.headers` fails, which is exactly what the
+ * cloud build reported.
+ */
+check('the Web Request environment is intact',
+  functionChecker.checkWebApiSurface(entrypoints[0], functionChecker.rootFunctionOptions()), [])
+
+const rootLib = readConfig('tsconfig.json').compilerOptions.lib
+check('the root config names the Web lib explicitly',
+  [rootLib.includes('DOM'), rootLib.includes('ES2023')], [true, true])
+check('  so the surface does not depend on a heuristic',
+  /onmessage/.test(read('tsconfig.json')), true)
+check('  and the browser project is still not Node-aware',
+  readConfig('tsconfig.app.json').compilerOptions.types, ['vite/client'])
+
+console.log('  -- the runtime API is unchanged --')
+const serverSources = ['api', 'server'].flatMap((directory) => walk(join(root, directory)))
+  .map((file) => ({ file: file.replace(`${root}/`, ''), code: stripComments(readFileSync(file, 'utf8')) }))
+check('no handler migrated to VercelRequest',
+  serverSources.filter((entry) => /VercelRequest|VercelResponse|@vercel\/node/.test(entry.code))
+    .map((entry) => entry.file), [])
+check('  handlers still take a Web Request',
+  entrypoints.filter((file) => /export (async )?function (GET|POST)\(request: Request\)/
+    .test(readFileSync(file, 'utf8'))).length, entrypoints.length)
+check('  and no server file uses a browser-only global',
+  serverSources.filter((entry) =>
+    /\b(window|document|localStorage|sessionStorage|navigator)\s*\./.test(entry.code))
+    .map((entry) => entry.file), [])
+
+console.log('  -- the Sheets client is overload-stable --')
+const sheetsSource = stripComments(read('server/sync/google-sheets.ts'))
+check('the version is passed as a string, not an options object',
+  [/google\.sheets\('v4'\)/.test(sheetsSource), /google\.sheets\(\s*\{/.test(sheetsSource)], [true, false])
+check('  the credential travels per request',
+  (stripComments(read('server/sync/sync-registration.ts')).match(/auth: sheets\.auth/g) ?? []).length > 0, true)
+check('  every Sheets call carries it',
+  (stripComments(read('server/sync/sync-registration.ts')).match(/sheets\.client\.spreadsheets/g) ?? []).length,
+  (stripComments(read('server/sync/sync-registration.ts')).match(/auth: sheets\.auth/g) ?? []).length)
+check('  and never through a process-global default',
+  serverSources.filter((entry) => /google\.options\s*\(/.test(entry.code)).map((entry) => entry.file), [])
+check('the auth type is derived from the constructor, not a phantom dependency',
+  [/InstanceType<typeof google\.auth\.JWT>/.test(sheetsSource),
+   /from 'google-auth-library'/.test(sheetsSource)], [true, false])
+check('  and google-auth-library is still not a declared dependency',
+  Object.keys({ ...JSON.parse(read('package.json')).dependencies })
+    .includes('google-auth-library'), false)
+
 console.log('\n=== THE BUILD CANNOT SKIP IT ===')
 const manifest = JSON.parse(read('package.json'))
 check('build typechecks before bundling', manifest.scripts.build, 'pnpm typecheck && vite build')
-check('  typecheck covers every project and the parity profile',
-  manifest.scripts.typecheck, 'tsc -b && pnpm typecheck:parity')
+check('  typecheck covers every project, the parity profile AND each function',
+  manifest.scripts.typecheck,
+  'tsc -b && pnpm typecheck:parity && pnpm typecheck:vercel-functions')
 check('  and each is separately runnable',
   ['typecheck:client', 'typecheck:server', 'typecheck:parity']
     .map((name) => typeof manifest.scripts[name]), ['string', 'string', 'string'])
@@ -190,7 +264,6 @@ check('TypeScript is not downgraded to hide errors',
 
 console.log('\n=== TYPES ARE FIXED, NOT SILENCED ===')
 const sources = ['api', 'server', 'src'].flatMap((directory) => walk(join(root, directory)))
-const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 for (const [label, pattern, useStripped] of [
   ['@ts-ignore', /@ts-ignore/, false],
   ['@ts-expect-error', /@ts-expect-error/, false],

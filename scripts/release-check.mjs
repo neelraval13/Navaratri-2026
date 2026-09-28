@@ -104,6 +104,7 @@ const REQUIRED_FILES = [
   'src/shared/event.ts',
   'tsconfig.server.json',
   'tsconfig.parity.json',
+  'scripts/vercel-function-typecheck.mjs',
   'docs/DEVICE_AUTH.md',
   'api/admin-login.ts',
   'api/admin-device-password.ts',
@@ -1060,6 +1061,110 @@ addCheck(
   'build-parity',
   'api/ and server/ are typechecked by the build, in strict and degraded modes',
   parityProblems,
+)
+
+// --- H2. the platform's own per-function compile is reproduced -------------
+/**
+ * Vercel compiles each `api/*.ts` entrypoint on its own, against the ROOT
+ * tsconfig's `compilerOptions`, after our build has already succeeded. A whole-
+ * project `tsc` cannot see what that finds, so the build runs a model of it.
+ */
+const functionProblems = []
+
+if (!exists(join(ROOT, 'scripts/vercel-function-typecheck.mjs'))) {
+  functionProblems.push('the per-function typecheck script is missing')
+} else {
+  const checker = readText(join(ROOT, 'scripts/vercel-function-typecheck.mjs')) ?? ''
+
+  // It must be a real compile, not a text search pretending to be one.
+  for (const [needle, complaint] of [
+    ['createProgram', 'does not build a TypeScript Program'],
+    ['getSemanticDiagnostics', 'does not collect semantic diagnostics'],
+    ['getSyntacticDiagnostics', 'does not collect syntactic diagnostics'],
+    ["require('typescript')", 'does not use the installed TypeScript compiler'],
+  ]) {
+    if (!checker.includes(needle)) {
+      functionProblems.push(`the per-function typecheck ${complaint}`)
+    }
+  }
+
+  if (/fetch\(|https?:\/\//.test(stripComments(checker))) {
+    functionProblems.push('the per-function typecheck contacts the network')
+  }
+
+  if (/vercel (build|deploy|pull)/.test(checker)) {
+    functionProblems.push('the per-function typecheck shells out to the Vercel CLI')
+  }
+}
+
+if (!(scripts['typecheck'] ?? '').includes('typecheck:vercel-functions')) {
+  functionProblems.push('pnpm typecheck does not run the per-function compile')
+}
+
+if (typeof scripts['typecheck:vercel-functions'] !== 'string') {
+  functionProblems.push('the typecheck:vercel-functions script is missing')
+}
+
+/**
+ * The root config is what Vercel hands every function. Functions are written
+ * against the Web-standard Request/Response, so the Web lib must be there
+ * deliberately — `@types/node` alone supplies those types only through a
+ * heuristic that can collapse them to `{}`.
+ */
+if (rootConfig !== null) {
+  const lib = rootConfig.compilerOptions?.lib ?? []
+
+  if (!lib.includes('DOM')) {
+    functionProblems.push('the root tsconfig gives functions no Web Request environment')
+  }
+}
+
+// The runtime API stays the Web standard; no migration to VercelRequest.
+for (const directory of ['api', 'server']) {
+  for (const path of walk(join(ROOT, directory))) {
+    if (!/\.ts$/.test(basename(path))) {
+      continue
+    }
+
+    const text = readText(path)
+
+    if (text === null) {
+      continue
+    }
+
+    const code = stripComments(text)
+
+    if (/VercelRequest|VercelResponse|@vercel\/node/.test(code)) {
+      functionProblems.push(`${rel(path)} migrated away from the Web Request API`)
+    }
+
+    // A serverless instance serves concurrent invocations; a process-global
+    // credential could be observed by another request.
+    if (/google\.options\s*\(/.test(code)) {
+      functionProblems.push(`${rel(path)} sets a global google auth default`)
+    }
+
+    // Browser-only globals: the fallback environment now contains the DOM lib,
+    // so the compiler will no longer catch these.
+    if (/\b(window|document|localStorage|sessionStorage|navigator)\s*\./.test(code)) {
+      functionProblems.push(`${rel(path)} uses a browser-only global`)
+    }
+  }
+}
+
+// The Sheets client must not use the ambiguous object overload.
+const sheetsSource = readText(join(ROOT, 'server/sync/google-sheets.ts'))
+
+if (sheetsSource === null) {
+  functionProblems.push('server/sync/google-sheets.ts could not be read')
+} else if (/google\.sheets\(\s*\{/.test(stripComments(sheetsSource))) {
+  functionProblems.push('server/sync/google-sheets.ts uses the ambiguous google.sheets({…}) overload')
+}
+
+addCheck(
+  'vercel-function-compile',
+  "Vercel's per-function compile is modelled by the build",
+  functionProblems,
 )
 
 // --- G. client code never reads a server-only variable ----------------------
