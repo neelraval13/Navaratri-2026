@@ -5,6 +5,7 @@ import { EVENT_ROUTE_PATTERN, ROUTES } from '@/app/routes'
 import EventAppGate from '@/components/event-app-gate'
 import AdminPage from '@/pages/admin-page'
 import BadgeRegistrationPage from '@/pages/badge-registration-page'
+import DeviceLoginPage from '@/pages/device-login-page'
 import DeviceRegistrationPage from '@/pages/device-registration-page'
 import HomePage from '@/pages/home-page'
 import NotFoundPage from '@/pages/not-found-page'
@@ -12,9 +13,14 @@ import NotFoundPage from '@/pages/not-found-page'
 /**
  * Real pathname routing on one origin, split by SECURITY REALM.
  *
- * `/admin` is matched first and rendered outside the event shell: it has its
- * own AdminAccessGate, must not require Operator Access, and must not mount
- * the offline registration workflow.
+ * `/admin` and `/device-login` are matched first and rendered outside the
+ * event shell. Each is its own security realm: Admin has its own gate, device
+ * sign-in has its own session, and neither may require Operator Access or
+ * mount the offline registration workflow.
+ *
+ * `/device-login` unlocks no event route. Holding a device session does not
+ * open `/badge-registration`, and event routes keep answering to Operator
+ * Access until the offline device bridge exists.
  *
  * Every event route shares one EventAppGate, so Operator Access, the database
  * gate and SyncManager mount once and survive navigation between pages rather
@@ -28,6 +34,10 @@ const AppRouter: React.FC = () => {
     <Switch>
       <Route path={ROUTES.admin}>
         <AdminPage />
+      </Route>
+
+      <Route path={ROUTES.deviceLogin}>
+        <DeviceLoginPage />
       </Route>
 
       <Route path={EVENT_ROUTE_PATTERN}>

@@ -146,10 +146,16 @@ const HomePage: React.FC = () => {
           href={ROUTES.badgeRegistration}
         />
 
+        {/*
+          Two device routes, deliberately named for what they each do. Device
+          Registration is the transitional LOCAL badge-device setup this desk
+          already runs on; Device Sign-In is the CENTRAL identity, which
+          authorizes nothing here yet.
+        */}
         <ModuleCard
           icon={<MonitorSmartphone className="size-5" />}
           title="Device Registration"
-          description="Configure this event device and verify operational readiness."
+          description="Configure this event device locally and verify operational readiness."
           href={ROUTES.deviceRegistration}
         />
 
@@ -166,9 +172,17 @@ const HomePage: React.FC = () => {
         />
       </div>
 
-      {/* Deliberately a subtle link, not a module card: Admin is a control
-          plane in its own security realm, not an event operation. */}
-      <p className="text-xs text-muted-foreground">
+      {/* Deliberately subtle links, not module cards: neither is an event
+          operation. Admin is a control plane, and Device Sign-In identifies
+          this browser centrally without unlocking anything here. */}
+      <p className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+        <Link
+          href={ROUTES.deviceLogin}
+          className="underline-offset-4 hover:underline"
+        >
+          Device Sign-In
+        </Link>
+
         <Link
           href={ROUTES.admin}
           className="underline-offset-4 hover:underline"

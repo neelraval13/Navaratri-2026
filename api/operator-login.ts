@@ -90,7 +90,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const configuration = readOperatorAuthEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     console.error(
       `Navaratri operator login: refused. ${OPERATOR_AUTH_LOG_MESSAGES[configuration.reason]}`,
     )

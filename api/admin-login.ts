@@ -81,7 +81,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const configuration = readAdminAuthEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     console.error(
       `Navaratri admin login: refused. ${ADMIN_AUTH_LOG_MESSAGES[configuration.reason]}`,
     )

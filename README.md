@@ -88,19 +88,35 @@ Postgres on every check, so an Admin change takes effect immediately without a
 new cookie. An Admin password reset increments `session_version` and revokes
 every existing device session at once — there is no session store.
 
-> **The event application does not use this yet.**
+`/device-login` is the browser UI for it (Phase 9C-C1). It asks only for a
+login name and a password — the event slug comes from the application — and on
+success records a **safe enrollment snapshot** on the existing IndexedDB config
+row: the central device and event ids, the event slug, the device name, the
+login name, the verified attributes and a timestamp.
+
+One browser binds to one central device. Re-verifying the same device refreshes
+it; authenticating as a *different* one is refused rather than swapped in, and
+rebinding needs an explicit **Clear Central Enrollment** that removes only that
+snapshot.
+
+> **The event application does not use any of this yet.**
 >
 > `/`, `/badge-registration` and `/device-registration` still sit behind
-> Operator Access. A device cookie unlocks none of them, nothing in the app
-> calls these endpoints, and there is no device login screen.
+> Operator Access. A device session unlocks none of them, signing out of a
+> device locks none of them, and a cached enrollment never counts as
+> authentication — offline, the page shows "last verified", not "authenticated".
+
+The central badge range is **displayed read-only and never imported**. The
+local `badgeStart`, `badgeEnd` and `nextBadge`, and the Phase 7 local
+`deviceId` and `deviceName`, are left exactly as they are.
 
 See `docs/DEVICE_AUTH.md`.
 
-**Still deliberately absent:** a device login UI, device enrollment, a
-heartbeat, offline device authorization, badge-range self-claim, and any
-mapping from an authenticated central device into IndexedDB.
-`/device-registration` remains the transitional local flow. Those connect in
-Phase 9C-C and 9C-D.
+**Still deliberately absent:** any device gate on an event route, offline
+device authorization, badge-range import or self-claim, and a heartbeat.
+`/device-registration` remains the transitional *local* badge-device setup,
+distinct from `/device-login`, which is the *central* identity. Those converge
+in Phase 9C-C2 and 9C-C3.
 
 ## Central database (Phase 9A — foundation only)
 

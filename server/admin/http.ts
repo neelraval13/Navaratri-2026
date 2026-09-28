@@ -60,7 +60,7 @@ export const guardAdminRequest = (
 ): AdminGuardResult => {
   const configuration = readAdminAuthEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     console.error(
       `Navaratri admin: refused. ${ADMIN_AUTH_LOG_MESSAGES[configuration.reason]}`,
     )

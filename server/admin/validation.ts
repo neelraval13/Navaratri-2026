@@ -104,13 +104,13 @@ export const parseCreateEventInput = (
 
   const startsAt = parseOptionalDate(body.startsAt, 'Start')
 
-  if (!startsAt.ok) {
+  if (startsAt.ok === false) {
     return startsAt
   }
 
   const endsAt = parseOptionalDate(body.endsAt, 'End')
 
-  if (!endsAt.ok) {
+  if (endsAt.ok === false) {
     return endsAt
   }
 
@@ -161,7 +161,14 @@ export const parseCredentialInput = (
     required: context.required,
   })
 
-  return result.ok ? { ok: true, value: result.password } : result
+  // Narrowed rather than ternaried: the failure branch must be seen as the
+  // shared `{ ok: false; message: string }`, which every ValidationResult
+  // accepts whatever its success type is.
+  if (result.ok === false) {
+    return result
+  }
+
+  return { ok: true, value: result.password }
 }
 
 export const parseCreateDeviceInput = (
@@ -179,17 +186,29 @@ export const parseCreateDeviceInput = (
 
   const loginName = parseLoginName(body.loginName)
 
-  if (!loginName.ok) {
+  if (loginName.ok === false) {
     return loginName
   }
 
-  if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
-    return { ok: false, message: 'enabled must be a boolean.' }
+  /**
+   * Captured as a real `boolean` where it is validated. Re-reading
+   * `body.enabled` further down would hand a `Record<string, unknown>` value
+   * to a typed field and rely on narrowing surviving the intervening
+   * statements — which it does not in every compiler configuration.
+   */
+  let enabled = true
+
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== 'boolean') {
+      return { ok: false, message: 'enabled must be a boolean.' }
+    }
+
+    enabled = body.enabled
   }
 
   const attributes = parseAttributeSet(body.attributes ?? [])
 
-  if (!attributes.ok) {
+  if (attributes.ok === false) {
     return { ok: false, message: attributes.message }
   }
 
@@ -198,7 +217,7 @@ export const parseCreateDeviceInput = (
     required: false,
   })
 
-  if (!password.ok) {
+  if (password.ok === false) {
     return password
   }
 
@@ -207,7 +226,7 @@ export const parseCreateDeviceInput = (
     value: {
       name,
       loginName: loginName.value,
-      enabled: body.enabled ?? true,
+      enabled,
       attributes: attributes.attributes,
       password: password.value,
     },
@@ -304,7 +323,7 @@ export const parseDeviceConfigurationInput = (
   if (body.loginName !== undefined) {
     const loginName = parseLoginName(body.loginName)
 
-    if (!loginName.ok) {
+    if (loginName.ok === false) {
       return loginName
     }
 
@@ -324,7 +343,7 @@ export const parseDeviceConfigurationInput = (
   if (body.attributes !== undefined) {
     const parsed = parseAttributeSet(body.attributes)
 
-    if (!parsed.ok) {
+    if (parsed.ok === false) {
       return { ok: false, message: parsed.message }
     }
 

@@ -1476,10 +1476,57 @@ password is proven may a typed 403 name `device-disabled` or `event-inactive`.
 `last_seen_at` is written ONLY by a successful device login. A session check
 never touches it, and there is NO heartbeat.
 
-Phase 9C-B builds the realm but does NOT wire it in. The event routes still use
-Operator Access, nothing in `src/` calls the device endpoints, there is no
-device login UI, and no device auth data reaches IndexedDB. Connecting them is
-9C-C/9C-D.
+### Device Login And Central Enrollment
+
+`/device-login` is the central device sign-in page. It lives OUTSIDE Operator
+Access on purpose — it is where the per-device entry point will eventually
+live — and it unlocks NOTHING. `/`, `/badge-registration` and
+`/device-registration` still answer to Operator Access whether or not a device
+session exists, and signing out of a device locks none of them. There is NO
+device gate on any event route until the offline bridge exists.
+
+The event slug is supplied by the application from `src/shared/event.ts`, never
+typed. No screen asks an operator for an event id, an event slug or a device
+UUID.
+
+The session response is validated at RUNTIME, not merely typed, and fails
+closed. An attribute outside the `registration` / `prizes` allow-list rejects
+the whole response rather than becoming a local capability. The context is
+projected field by field, never spread, so a future server field cannot reach
+local state by accident.
+
+`centralDeviceEnrollment` is ONE optional field on the EXISTING config row —
+no new store, no new index, no Dexie version bump. It holds only `deviceId`,
+`eventId`, `eventSlug`, `deviceName`, `loginName`, `attributes` and
+`verifiedAt`.
+
+It NEVER holds a password, hash, salt, token, cookie, `sessionVersion` — or
+`activeBadgeRange`. The central range may be DISPLAYED read-only and must say
+the local range is unchanged; importing it is a later phase, and
+`configureBadgeDistribution` is never called from device login.
+
+The enrollment is "the last central identity this browser verified", NOT
+permission to operate. It never produces an authenticated state, never
+authorizes a route, and is never presented as offline authority. Offline, the
+page shows "last verified" and must never say Authenticated.
+
+Central values NEVER overwrite the Phase 7 local ones. The central `deviceId`
+and `deviceName` are stored BESIDE the local identity, and `badgeStart`,
+`badgeEnd`, `nextBadge`, `deviceConfiguredAt` and `badgeConfiguredAt` are never
+touched by enrollment. Enrollment is config-only: it never opens the
+registrations or outbox tables.
+
+One browser binds to ONE central device. Re-verifying the same device refreshes
+its name, login name, attributes and `verifiedAt`. A DIFFERENT device is
+refused, not swapped in: the new device is not persisted, its session is ended
+immediately, and rebinding requires an explicit Clear Central Enrollment, which
+removes the snapshot and nothing else.
+
+Sign Out calls the server FIRST. A failed logout keeps the local enrollment and
+says so rather than claiming the cookie is gone.
+
+There is NO polling and NO heartbeat. The session is checked on mount, after a
+login, and on an explicit Refresh Device Status.
 
 ## Central Database
 
@@ -1816,6 +1863,48 @@ the SSO origin and blocked by CORS.
 
 The fix is to send credentials, never to make the manifest public or to weaken
 deployment protection.
+
+### Build Parity
+
+`pnpm build` must FAIL whenever `api/**` or `server/**` has a TypeScript error
+that a differently-configured compiler would find. A local build that passes
+while the deployment platform's own compile fails is the failure mode this
+guards against, and it has happened once.
+
+Two independent causes, both now closed:
+
+1. `tsconfig.json` is a SOLUTION file. Project references do NOT inherit
+   compiler options, so a tool that ignores references — the platform's
+   function compiler is one — reads the root `compilerOptions` and fills the
+   rest from its own defaults. When those options were only `paths`, `api/**`
+   was compiled NON-STRICT. The root therefore carries a safe baseline
+   (`strict`, `types: ["node"]`, `lib`, `module`) purely for such readers. The
+   three real projects do not extend it and are unaffected, and
+   `tsconfig.app.json` keeps `types: ["vite/client"]` so no Node global ever
+   reaches browser code.
+
+2. Without `strictNullChecks`, a discriminated union STOPS NARROWING through
+   `if (!result.ok)`. Every `result.response`, `result.message` and
+   `result.blocked` below such a guard then fails to compile. Server and shared
+   code therefore narrows with an EXPLICIT discriminant — `if (x.ok === false)`
+   — which narrows under every configuration. Do not reintroduce bare negation
+   on a result union. A parser returning another parser's failure branch must
+   narrow first, so the branch is seen as the shared `{ ok: false; message }`.
+
+`tsconfig.parity.json` is the DEGRADED profile, compiled on every build by
+`pnpm typecheck:parity`. It is deliberately non-strict and must stay that way;
+relaxing it to make a change compile defeats its only purpose.
+`scripts/verification/build-parity.mjs` additionally compiles `api/` and
+`server/` under four configurations and plants a canary to prove each one is
+really checking.
+
+Never silence a type error here. `@ts-ignore`, `@ts-expect-error`,
+`@ts-nocheck` and `as any` are forbidden in `api/`, `server/` and `src/`, and
+`release:check` fails on them. Two pre-existing `as unknown as` sites are
+pinned by name; a new one fails the parity suite.
+
+`packageManager` pins pnpm exactly, because the platform selects its pnpm from
+that field and a different major would resolve the lockfile differently.
 
 ### release:check
 

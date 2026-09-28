@@ -678,23 +678,34 @@ check('  a subdomain is refused',
 console.log('\n=== 27-28. THE EVENT APP IS UNCHANGED ===')
 const clientFiles = walkSource(join(root, 'src'))
   .map((file) => ({ file: file.replace(`${root}/`, ''), code: stripComments(readFileSync(file, 'utf8')) }))
-check('no client module calls a device auth endpoint',
-  clientFiles.filter((entry) => /device-login|device-session|device-logout/.test(entry.code))
+/**
+ * Phase 9C-C1 gave the realm a UI. The endpoints belong to the device auth
+ * client and its own components; no event page, operator gate or sync module
+ * may reach them.
+ */
+check('only the device realm calls a device auth endpoint',
+  clientFiles
+    .filter((entry) => !/^src\/(device-auth|components\/device-auth|pages\/device-login-page)/
+      .test(entry.file))
+    .filter((entry) => /\/api\/device-(login|session|logout)/.test(entry.code))
     .map((entry) => entry.file), [])
 check('  nor names the device cookie',
   clientFiles.filter((entry) => /navaratri_device_session/.test(entry.code)).map((entry) => entry.file), [])
 check('  nor reads the device secret',
   clientFiles.filter((entry) => /EVENT_DEVICE_SESSION_SECRET/.test(entry.code)).map((entry) => entry.file), [])
-check('  and no device login UI exists',
-  ['src/pages/device-login-page.tsx', 'src/components/device/device-login-form.tsx',
-   'src/components/device/device-access-gate.tsx']
+check('  and no device route GATE exists',
+  ['src/components/device-auth/device-access-gate.tsx',
+   'src/components/device/device-access-gate.tsx',
+   'src/components/device-session-gate.tsx']
     .filter((file) => existsSync(join(root, file))), [])
 check('the event shell still uses OperatorAccessGate',
   /OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')), true)
 check('  and no device gate was added',
-  /Device(Access|Session|Login)/.test(
+  /Device(Access|Session|Auth)Gate/.test(
     stripComments(read('src/components/event-app-gate.tsx')) +
     stripComments(read('src/components/app-router.tsx'))), false)
+check('  the event shell itself names no device auth',
+  /[Dd]evice/.test(stripComments(read('src/components/event-app-gate.tsx'))), false)
 check('the routes are unchanged',
   ['/', '/badge-registration', '/device-registration', '/admin']
     .every((route) => read('src/app/routes.ts').includes(`'${route}'`)), true)

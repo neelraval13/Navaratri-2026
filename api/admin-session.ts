@@ -24,7 +24,7 @@ const jsonResponse = (body: unknown, status: number): Response => {
 export function GET(request: Request): Response {
   const configuration = readAdminAuthEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     return jsonResponse({ authenticated: false, configured: false }, 503)
   }
 

@@ -78,7 +78,7 @@ export async function POST(request: Request): Promise<Response> {
    */
   const operatorAuth = readOperatorAuthEnvironment()
 
-  if (!operatorAuth.ok) {
+  if (operatorAuth.ok === false) {
     console.error(
       `Navaratri sync: refused. ${OPERATOR_AUTH_LOG_MESSAGES[operatorAuth.reason]}`,
     )
@@ -109,7 +109,7 @@ export async function POST(request: Request): Promise<Response> {
    */
   const configuration = readSyncEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     console.error(
       `Navaratri sync: refused. ${SYNC_DISABLED_LOG_MESSAGES[configuration.reason]}`,
     )
@@ -165,7 +165,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const parsed = parseSyncRegistrationRequest(parsedBody)
 
-  if (!parsed.ok) {
+  if (parsed.ok === false) {
     return failure('invalid-request', parsed.message, 400)
   }
 
@@ -175,7 +175,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const result = await syncRegistration(syncRequest, environment)
 
-    if (result.ok) {
+    if (result.ok === true) {
       return success(result.outcome, registrationId, payload.updatedAt)
     }
 

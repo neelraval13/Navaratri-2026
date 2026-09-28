@@ -6,6 +6,7 @@ import { createEvent, type AdminEvent } from '@/admin/admin-api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { CURRENT_EVENT_SLUG } from '@/shared/event'
 
 interface EventSetupFormProps {
   onCreated: (event: AdminEvent) => void
@@ -20,7 +21,8 @@ interface EventSetupFormProps {
  */
 const EventSetupForm: React.FC<EventSetupFormProps> = ({ onCreated }) => {
   const [name, setName] = useState('Navaratri 2026')
-  const [slug, setSlug] = useState('navaratri-2026')
+  // The slug this build is wired to, so Admin and the device login agree.
+  const [slug, setSlug] = useState(CURRENT_EVENT_SLUG)
   const [timezone, setTimezone] = useState('Asia/Kolkata')
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)

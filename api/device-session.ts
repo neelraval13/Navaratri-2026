@@ -37,7 +37,7 @@ const UNAUTHENTICATED = { authenticated: false, configured: true } as const
 export async function GET(request: Request): Promise<Response> {
   const configuration = readDeviceAuthEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     console.error(
       `Navaratri device auth: unavailable. ${DEVICE_AUTH_LOG_MESSAGES[configuration.reason]}`,
     )

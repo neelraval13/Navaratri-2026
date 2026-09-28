@@ -37,13 +37,13 @@ const BLOCK_MESSAGES: Record<string, string> = {
 export async function POST(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: true, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
   const body = await readAdminBody(request)
 
-  if (!body.ok) {
+  if (body.ok === false) {
     return body.response
   }
 
@@ -63,7 +63,7 @@ export async function POST(request: Request): Promise<Response> {
    */
   const password = parseCredentialInput(raw, { hasLoginName: true, required: true })
 
-  if (!password.ok) {
+  if (password.ok === false) {
     return adminError(password.message, 400)
   }
 
@@ -74,7 +74,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const result = await setDevicePassword(eventId, deviceId, password.value)
 
-    if (!result.ok) {
+    if (result.ok === false) {
       if ('conflict' in result) {
         return adminConflict(result.conflict)
       }

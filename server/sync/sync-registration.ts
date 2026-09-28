@@ -393,7 +393,7 @@ export const syncRegistration = async (
 
   const tabs = await loadTabs(sheets, environment.spreadsheetId)
 
-  if (!tabs.ok) {
+  if (tabs.ok === false) {
     return { ok: false, outcome: 'sheet-shape-conflict', message: tabs.message }
   }
 

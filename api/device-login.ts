@@ -47,13 +47,13 @@ export async function POST(request: Request): Promise<Response> {
 
   const body = await readDeviceBody(request)
 
-  if (!body.ok) {
+  if (body.ok === false) {
     return body.response
   }
 
   const configuration = readDeviceAuthEnvironment()
 
-  if (!configuration.ok) {
+  if (configuration.ok === false) {
     // Names the variable, never its value.
     console.error(
       `Navaratri device auth: refused. ${DEVICE_AUTH_LOG_MESSAGES[configuration.reason]}`,
@@ -74,14 +74,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const input = parseDeviceLoginInput(body.body)
 
-  if (!input.ok) {
+  if (input.ok === false) {
     return deviceJson({ ok: false, message: input.message }, 400)
   }
 
   try {
     const result = await authenticateDevice(input.value)
 
-    if (!result.ok) {
+    if (result.ok === false) {
       if ('reason' in result) {
         return deviceJson(GENERIC_FAILURE, 401)
       }

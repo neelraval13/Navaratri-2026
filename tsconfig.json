@@ -1,4 +1,23 @@
 {
+  /**
+   * A SOLUTION file: it compiles nothing itself and only points at the three
+   * real projects.
+   *
+   * The `compilerOptions` below are a SAFETY BASELINE, not the configuration
+   * any of those projects use — none of them `extends` this file, and project
+   * references do not inherit compiler options.
+   *
+   * They exist because a tool that does not understand project references —
+   * Vercel's function compiler is one — reads this file, finds it nominally
+   * applicable to `api/**` and `server/**`, and then fills every unset option
+   * from its own defaults. A bare `{ "paths": … }` handed such a tool a
+   * NON-STRICT, environment-less compile, and `strictNullChecks: false`
+   * silently stops discriminated unions narrowing through `if (!result.ok)`.
+   * That is exactly how a build could pass here and fail there.
+   *
+   * Keeping the baseline here costs the real projects nothing and means the
+   * weakest plausible reader still gets a correct environment.
+   */
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
@@ -8,6 +27,15 @@
   "compilerOptions": {
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "strict": true,
+    "skipLibCheck": true,
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "moduleDetection": "force",
+    "noEmit": true
   }
 }

@@ -3,7 +3,7 @@ import type * as React from 'react'
 import { Link } from 'wouter'
 
 import { ROUTES } from '@/app/routes'
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 
 /**
@@ -23,13 +23,13 @@ const NotFoundPage: React.FC = () => {
           That address does not match any part of this application.
         </p>
 
-        <Button
-          render={<Link href={ROUTES.home} />}
-          variant="outline"
-          className="h-12 sm:min-w-32"
+        {/* A real link with the button's appearance — see device-login-page. */}
+        <Link
+          href={ROUTES.home}
+          className={buttonVariants({ variant: 'outline', className: 'h-12 sm:min-w-32' })}
         >
           Back to Home
-        </Button>
+        </Link>
       </CardContent>
     </Card>
   )

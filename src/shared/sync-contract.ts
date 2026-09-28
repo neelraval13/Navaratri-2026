@@ -215,7 +215,7 @@ export const parseSyncRegistrationRequest = (body: unknown): ParseResult => {
 
   const deviceCheck = checkDeviceProvenance(payload.deviceId, payload.deviceName)
 
-  if (!deviceCheck.ok) {
+  if (deviceCheck.ok === false) {
     return { ok: false, message: deviceCheck.message }
   }
 

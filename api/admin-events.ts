@@ -13,7 +13,7 @@ import { parseCreateEventInput } from '../server/admin/validation.js'
 export async function GET(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: false, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
@@ -31,26 +31,26 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: true, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
   const body = await readAdminBody(request)
 
-  if (!body.ok) {
+  if (body.ok === false) {
     return body.response
   }
 
   const input = parseCreateEventInput(body.body)
 
-  if (!input.ok) {
+  if (input.ok === false) {
     return adminError(input.message, 400)
   }
 
   try {
     const result = await createEvent(input.value)
 
-    if (!result.ok) {
+    if (result.ok === false) {
       return 'conflict' in result ? adminConflict(result.conflict) : adminError(result.blocked, 409)
     }
 

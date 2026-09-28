@@ -1,0 +1,36 @@
+{
+  /**
+   * The DEGRADED environment, compiled on purpose.
+   *
+   * This is not how the application is built. It is the weakest configuration
+   * a references-unaware tool might apply to `api/**` and `server/**`, and it
+   * is checked on every build so the repository cannot pass here and fail on
+   * a platform that compiles those files its own way.
+   *
+   * `strict: false` is the important one. It is the pre-TypeScript-6 default
+   * and it disables the narrowing that `if (result.ok === false)` depends on;
+   * with it, ambiguous boolean narrowing produces dozens of errors that the
+   * strict project never sees.
+   *
+   * `typeRoots` is pinned so a missing `@types/node` fails here loudly rather
+   * than on a platform that installs the tree differently.
+   *
+   * Do NOT relax this to make a change compile. It is the contract that server
+   * code narrows explicitly enough to survive any compiler configuration.
+   */
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.parity.tsbuildinfo",
+    "paths": { "@/*": ["./src/*"] },
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"],
+    "skipLibCheck": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": false
+  },
+  "include": ["api", "server", "src/shared"]
+}

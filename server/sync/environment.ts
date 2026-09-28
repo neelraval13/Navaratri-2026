@@ -176,7 +176,7 @@ export const readSyncEnvironment = (
     actualVercelEnvironment: source.VERCEL_ENV,
   })
 
-  if (!runtime.allowed) {
+  if (runtime.allowed === false) {
     return { ok: false, reason: runtime.reason }
   }
 

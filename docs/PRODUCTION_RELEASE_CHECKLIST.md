@@ -79,6 +79,23 @@ manually.
 
 Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
 
+### Build parity
+
+`pnpm build` typechecks the browser project, the `api/` + `server/` project and
+a deliberately DEGRADED profile before it bundles anything. That third pass
+exists because a build once passed locally while the deployment platform's own
+compile of `api/**` reported dozens of errors.
+
+If a deployment ever fails with TypeScript errors that `pnpm build` did not
+show, that is a parity regression, not a one-off: reproduce it by adding the
+platform's compiler options to `tsconfig.parity.json` and fix the source, never
+the profile.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.21 | `pnpm build` run on a clean checkout, not an incremental tree | ☐ |
+| 3.22 | `pnpm verify:parity` green | ☐ |
+
 ### Device credentials (Phase 9C-A)
 
 Provisioning a device password **stores a credential; it does not enable a
@@ -105,6 +122,24 @@ unchanged.
 
 Rotating it invalidates every device session at once. Per-device revocation is
 an Admin password reset or disabling the device.
+
+### Device sign-in UI (Phase 9C-C1)
+
+`/device-login` exists and works, and still **authorizes nothing**. It records
+a safe central-identity snapshot on this browser's config row; it does not
+import a badge range, does not touch the local device identity, and does not
+gate any event route. Operator Access remains the only thing standing in front
+of `/`, `/badge-registration` and `/device-registration`.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.18 | Each physical device signed in once at `/device-login` as its own central device, on the browser it will actually use | ☐ |
+| 3.19 | Central device names in Admin match the physical labels on the desks | ☐ |
+| 3.20 | No desk enrolled as a device belonging to another desk — a mismatch is refused, but the wrong *first* binding is not | ☐ |
+
+The third is the one to take seriously: binding a browser to the wrong central
+device succeeds, because it is the first binding. Later phases make badge
+ownership depend on it.
 
 The login rate limit is a Vercel firewall rule configured by hand in the
 Dashboard — no application code creates it, and `release:check` cannot verify

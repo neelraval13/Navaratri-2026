@@ -97,6 +97,13 @@ const REQUIRED_FILES = [
   'api/device-login.ts',
   'api/device-session.ts',
   'api/device-logout.ts',
+  'src/device-auth/device-api.ts',
+  'src/device-auth/device-session-contract.ts',
+  'src/db/central-enrollment.ts',
+  'src/pages/device-login-page.tsx',
+  'src/shared/event.ts',
+  'tsconfig.server.json',
+  'tsconfig.parity.json',
   'docs/DEVICE_AUTH.md',
   'api/admin-login.ts',
   'api/admin-device-password.ts',
@@ -727,16 +734,25 @@ for (const path of walk(join(ROOT, 'src'))) {
 
   const code = stripComments(text)
 
-  if (/device-login|device-session|device-logout/.test(code)) {
-    deviceRealmProblems.push(`${rel(path)} calls a device auth endpoint before its phase`)
+  /**
+   * Phase 9C-C1 gave the realm a UI. The device endpoints belong to the
+   * device auth client and its components ONLY — no event page, no operator
+   * gate and no sync module may reach them.
+   */
+  const isDeviceAuthModule = /\/src\/(device-auth|components\/device-auth|pages\/device-login-page)/
+    .test(path)
+
+  if (!isDeviceAuthModule && /\/api\/device-(login|session|logout)/.test(code)) {
+    deviceRealmProblems.push(`${rel(path)} calls a device auth endpoint outside the device realm`)
   }
 
-  if (/DeviceLoginForm|DeviceAccessGate|DeviceSessionGate/.test(code)) {
-    deviceRealmProblems.push(`${rel(path)} defines device login UI before its phase`)
+  // A device GATE would make device auth authoritative for a route. Not yet.
+  if (/DeviceAccessGate|DeviceSessionGate|DeviceAuthGate/.test(code)) {
+    deviceRealmProblems.push(`${rel(path)} defines a device route gate before its phase`)
   }
 
-  if (/navaratri_device_session/.test(code)) {
-    deviceRealmProblems.push(`${rel(path)} references the device cookie in client code`)
+  if (/navaratri_device_session|document\.cookie/.test(code)) {
+    deviceRealmProblems.push(`${rel(path)} reads the device cookie in client code`)
   }
 }
 
@@ -751,8 +767,25 @@ if (routerSource === null || gateSource === null) {
     deviceRealmProblems.push('the event shell no longer uses OperatorAccessGate')
   }
 
-  if (/Device(Access|Session|Login)/.test(stripComments(gateSource) + stripComments(routerSource))) {
-    deviceRealmProblems.push('a device gate has been wired into the event routes')
+  /**
+   * A device GATE, not a device route. `/device-login` legitimately appears in
+   * the router; what must not exist is a device gate, and nothing
+   * device-related may sit INSIDE the event shell.
+   */
+  if (/Device(Access|Session|Login)Gate/.test(stripComments(gateSource) + stripComments(routerSource))) {
+    deviceRealmProblems.push('a device gate component exists')
+  }
+
+  if (/Device|device/.test(stripComments(gateSource))) {
+    deviceRealmProblems.push('the event shell references device auth')
+  }
+
+  const routerBody = stripComments(routerSource).slice(
+    stripComments(routerSource).indexOf('<Switch>'),
+  )
+
+  if (/<EventAppGate>[\s\S]*[Dd]eviceLogin/.test(routerBody)) {
+    deviceRealmProblems.push('/device-login is nested inside the event shell')
   }
 }
 
@@ -760,6 +793,273 @@ addCheck(
   'device-realm',
   'Device auth is a separate realm and is not yet wired into the event app',
   deviceRealmProblems,
+)
+
+// --- G4. central device enrollment stays a safe, config-only snapshot ------
+const enrollmentProblems = []
+
+// The SPA must serve /device-login directly; the API route must stay a Function.
+if (vercelConfig !== null) {
+  let rewrites = []
+
+  try {
+    rewrites = JSON.parse(vercelConfig).rewrites ?? []
+  } catch {
+    enrollmentProblems.push('vercel.json could not be parsed')
+  }
+
+  if (!rewrites.some((rule) => rule.source === '/device-login')) {
+    enrollmentProblems.push('vercel.json has no /device-login rewrite')
+  }
+
+  for (const rule of rewrites) {
+    if (typeof rule.source === 'string' && rule.source.startsWith('/api')) {
+      enrollmentProblems.push(`rewrite "${rule.source}" would swallow an API route`)
+    }
+  }
+}
+
+const enrollmentSource = readText(join(ROOT, 'src/db/central-enrollment.ts'))
+
+if (enrollmentSource === null) {
+  enrollmentProblems.push('src/db/central-enrollment.ts could not be read')
+} else {
+  const code = stripComments(enrollmentSource)
+
+  // The central badge range is NOT imported into local state in this phase.
+  for (const forbidden of ['activeBadgeRange', 'rangeStart', 'rangeEnd', 'nextBadge',
+    'badgeStart', 'badgeEnd', 'configureBadgeDistribution', 'sessionVersion', 'password']) {
+    if (code.includes(forbidden)) {
+      enrollmentProblems.push(`central enrollment references ${forbidden}`)
+    }
+  }
+
+  // Config only: the registrations and outbox tables are never opened.
+  if (/db\.registrations|db\.outbox/.test(code)) {
+    enrollmentProblems.push('central enrollment opens a registration or outbox table')
+  }
+
+  if (/localStorage|sessionStorage/.test(code)) {
+    enrollmentProblems.push('central enrollment uses browser storage instead of config')
+  }
+}
+
+// The Dexie schema is untouched: still version 1, still three stores.
+const dexieSource = readText(join(ROOT, 'src/db/database.ts'))
+
+if (dexieSource === null) {
+  enrollmentProblems.push('src/db/database.ts could not be read')
+} else {
+  if (!/DATABASE_VERSION = 1/.test(dexieSource)) {
+    enrollmentProblems.push('the IndexedDB version is no longer 1')
+  }
+
+  const stores = (/\.stores\(\{([\s\S]*?)\}\)/.exec(dexieSource)?.[1] ?? '')
+    .match(/^\s*(\w+):/gm)
+    ?.map((entry) => entry.trim().replace(':', '')) ?? []
+
+  if (stores.join(',') !== 'registrations,config,outbox') {
+    enrollmentProblems.push(`the IndexedDB stores changed: ${stores.join(', ')}`)
+  }
+}
+
+// The event routes remain Operator-gated, and no device gate wraps them.
+if (routerSource !== null) {
+  const body = stripComments(routerSource).slice(stripComments(routerSource).indexOf('<Switch>'))
+
+  if (!body.includes('ROUTES.deviceLogin')) {
+    enrollmentProblems.push('the router has no /device-login route')
+  }
+
+  if (/<EventAppGate>[\s\S]*deviceLogin/.test(body)) {
+    enrollmentProblems.push('/device-login is nested inside the event shell')
+  }
+}
+
+// No self-claim, and no polling heartbeat in the browser.
+for (const name of ['device-claim-range.ts', 'device-badge-assignment.ts']) {
+  if (exists(join(ROOT, 'api', name))) {
+    enrollmentProblems.push(`api/${name} exists before its phase`)
+  }
+}
+
+for (const path of walk(join(ROOT, 'src/device-auth'))) {
+  const text = readText(path)
+
+  if (text !== null && /setInterval/.test(stripComments(text))) {
+    enrollmentProblems.push(`${rel(path)} polls on a timer`)
+  }
+}
+
+for (const path of walk(join(ROOT, 'src/components/device-auth'))) {
+  const text = readText(path)
+
+  if (text === null) {
+    continue
+  }
+
+  const code = stripComments(text)
+
+  if (/setInterval/.test(code)) {
+    enrollmentProblems.push(`${rel(path)} polls on a timer`)
+  }
+
+  if (/configureBadgeDistribution|nextBadge|badgeStart|badgeEnd/.test(code)) {
+    enrollmentProblems.push(`${rel(path)} writes local badge state`)
+  }
+}
+
+addCheck(
+  'device-enrollment',
+  'Central device enrollment is a safe, config-only snapshot',
+  enrollmentProblems,
+)
+
+// --- H. the server/API typecheck cannot be skipped -------------------------
+/**
+ * A local build once passed while Vercel found dozens of TypeScript errors in
+ * `api/**` and `server/**`. These assertions keep the two in step; the actual
+ * compiles are `pnpm typecheck`, which `pnpm build` runs first.
+ */
+const parityProblems = []
+
+const readJson = (relativePath) => {
+  const text = readText(join(ROOT, relativePath))
+
+  if (text === null) {
+    parityProblems.push(`${relativePath} could not be read`)
+
+    return null
+  }
+
+  try {
+    // Tolerate the comments these configs carry.
+    return JSON.parse(text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''))
+  } catch {
+    parityProblems.push(`${relativePath} is not parseable`)
+
+    return null
+  }
+}
+
+const serverConfig = readJson('tsconfig.server.json')
+
+if (serverConfig !== null) {
+  const include = serverConfig.include ?? []
+
+  for (const required of ['api', 'server']) {
+    if (!include.includes(required)) {
+      parityProblems.push(`tsconfig.server.json does not cover ${required}/`)
+    }
+  }
+
+  if (!(serverConfig.compilerOptions?.types ?? []).includes('node')) {
+    parityProblems.push('tsconfig.server.json does not declare the Node environment')
+  }
+
+  if (serverConfig.compilerOptions?.strict !== true) {
+    parityProblems.push('tsconfig.server.json is not strict')
+  }
+}
+
+// The degraded profile is what proves a weaker compiler finds nothing.
+const parityConfig = readJson('tsconfig.parity.json')
+
+if (parityConfig !== null) {
+  const include = parityConfig.include ?? []
+
+  for (const required of ['api', 'server']) {
+    if (!include.includes(required)) {
+      parityProblems.push(`tsconfig.parity.json does not cover ${required}/`)
+    }
+  }
+
+  if (parityConfig.compilerOptions?.strict !== false) {
+    parityProblems.push('tsconfig.parity.json is no longer the DEGRADED profile')
+  }
+}
+
+/**
+ * The root is solution-style, so a references-unaware tool inherits these.
+ * Bare `paths` alone is what produced the original mismatch.
+ */
+const rootConfig = readJson('tsconfig.json')
+
+if (rootConfig !== null) {
+  const options = rootConfig.compilerOptions ?? {}
+
+  if (options.strict !== true) {
+    parityProblems.push('the root tsconfig hands a non-strict baseline to naive tools')
+  }
+
+  if (!(options.types ?? []).includes('node')) {
+    parityProblems.push('the root tsconfig hands no Node environment to naive tools')
+  }
+}
+
+// The browser project keeps its own environment; no Node globals leak in.
+const appConfig = readJson('tsconfig.app.json')
+
+if (appConfig !== null && (appConfig.compilerOptions?.types ?? []).includes('node')) {
+  parityProblems.push('tsconfig.app.json exposes Node globals to browser code')
+}
+
+const manifestText = readText(join(ROOT, 'package.json'))
+const scripts = manifestText === null ? {} : (JSON.parse(manifestText).scripts ?? {})
+
+if (!/(^|&&\s*)(pnpm typecheck|tsc -b)/.test(scripts.build ?? '')) {
+  parityProblems.push('pnpm build does not typecheck before bundling')
+}
+
+for (const name of ['typecheck', 'typecheck:server', 'typecheck:parity']) {
+  if (typeof scripts[name] !== 'string') {
+    parityProblems.push(`the ${name} script is missing`)
+  }
+}
+
+if (!(scripts.typecheck ?? '').includes('typecheck:parity')) {
+  parityProblems.push('pnpm typecheck does not run the degraded parity compile')
+}
+
+if (manifestText !== null) {
+  const manifest = JSON.parse(manifestText)
+
+  if (typeof manifest.devDependencies?.['@types/node'] !== 'string') {
+    parityProblems.push('@types/node is not a declared devDependency')
+  }
+
+  if (!/^pnpm@\d+\.\d+\.\d+$/.test(manifest.packageManager ?? '')) {
+    parityProblems.push('packageManager is not pinned to an exact pnpm version')
+  }
+}
+
+// Types are fixed, never silenced.
+for (const directory of ['api', 'server', 'src']) {
+  for (const path of walk(join(ROOT, directory))) {
+    if (!/\.tsx?$/.test(basename(path))) {
+      continue
+    }
+
+    const text = readText(path)
+
+    if (text === null) {
+      continue
+    }
+
+    if (/@ts-ignore|@ts-expect-error|@ts-nocheck/.test(text)) {
+      parityProblems.push(`${rel(path)} suppresses a TypeScript error`)
+    }
+
+    if (/\bas any\b/.test(stripComments(text))) {
+      parityProblems.push(`${rel(path)} casts through \`as any\``)
+    }
+  }
+}
+
+addCheck(
+  'build-parity',
+  'api/ and server/ are typechecked by the build, in strict and degraded modes',
+  parityProblems,
 )
 
 // --- G. client code never reads a server-only variable ----------------------

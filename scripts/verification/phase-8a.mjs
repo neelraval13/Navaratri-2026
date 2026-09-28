@@ -59,7 +59,7 @@ check('Home device card routes correctly', homeHrefs.includes('/device-registrat
 // Home links to the two built modules plus the subtle Admin link. What must
 // never appear is a link behind a Coming soon card.
 check('Home links only to real destinations', homeHrefs.sort(),
-  ['/admin', '/badge-registration', '/device-registration'])
+  ['/admin', '/badge-registration', '/device-login', '/device-registration'])
 check('coming-soon cards do NOT navigate',
   homeHrefs.filter((href) => /dandiya|prize/i.test(href)), [])
 check('  Admin is a subtle link, not a module card',
@@ -86,7 +86,7 @@ console.log('\n=== 10. API IS NEVER SWALLOWED BY THE SPA REWRITE ===')
 const vercelConfig = JSON.parse(read('vercel.json'))
 const rewriteSources = vercelConfig.rewrites.map((r) => r.source)
 check('rewrites are explicit, not a catch-all', rewriteSources.sort(),
-  ['/admin', '/badge-registration', '/device-registration'])
+  ['/admin', '/badge-registration', '/device-login', '/device-registration'])
 check('  no wildcard or regex source', rewriteSources.some((s) => /[*:()]/.test(s)), false)
 for (const api of ['/api/operator-login', '/api/operator-session', '/api/operator-logout', '/api/sync-registration'])
   check(`  ${api} is not matched`, rewriteSources.includes(api), false)

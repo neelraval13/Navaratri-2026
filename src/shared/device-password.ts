@@ -99,7 +99,7 @@ export const checkPasswordPair = (input: {
 
   const password = validateDevicePassword(input.password)
 
-  if (!password.ok) {
+  if (password.ok === false) {
     return password
   }
 

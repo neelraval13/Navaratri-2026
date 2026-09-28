@@ -728,7 +728,9 @@ check('none of the self-claim is implemented',
   [join(root, 'src'), join(root, 'server'), join(root, 'api')]
     .flatMap((dir) => walkSource(dir))
     .filter((file) =>
-      /claimBadgeRange|admin-badge-claim|device-login|deviceSession|heartbeat(At|_at)/
+      // `device-login` is Phase 9C-B/C1 and now legitimately exists. What must
+      // still be absent is the SELF-CLAIM and any heartbeat.
+      /claimBadgeRange|admin-badge-claim|selfClaimRange|adoptCentralRange|heartbeat(At|_at)/
         .test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')), [])
 

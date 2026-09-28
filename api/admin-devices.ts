@@ -35,7 +35,7 @@ const readEventId = (request: Request): string | null => {
 export async function GET(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: false, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
@@ -62,13 +62,13 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: true, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
   const body = await readAdminBody(request)
 
-  if (!body.ok) {
+  if (body.ok === false) {
     return body.response
   }
 
@@ -81,14 +81,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const input = parseCreateDeviceInput(raw)
 
-  if (!input.ok) {
+  if (input.ok === false) {
     return adminError(input.message, 400)
   }
 
   try {
     const result = await createDevice(eventId, input.value)
 
-    if (!result.ok) {
+    if (result.ok === false) {
       return 'conflict' in result ? adminConflict(result.conflict) : adminError(result.blocked, 409)
     }
 
@@ -115,13 +115,13 @@ export async function POST(request: Request): Promise<Response> {
 export async function PATCH(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: true, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
   const body = await readAdminBody(request)
 
-  if (!body.ok) {
+  if (body.ok === false) {
     return body.response
   }
 
@@ -134,14 +134,14 @@ export async function PATCH(request: Request): Promise<Response> {
 
   const input = parseDeviceConfigurationInput(raw)
 
-  if (!input.ok) {
+  if (input.ok === false) {
     return adminError(input.message, 400)
   }
 
   try {
     const result = await updateDeviceConfiguration(deviceId, input.value)
 
-    if (!result.ok) {
+    if (result.ok === false) {
       if ('conflict' in result) {
         return adminConflict(result.conflict)
       }

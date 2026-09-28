@@ -4,7 +4,7 @@ import { Link } from 'wouter'
 
 import { ROUTES } from '@/app/routes'
 import EventConfigGate from '@/components/registration/event-config-gate'
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { isDeviceRegistered } from '@/db/device'
 import { useEventConfig } from '@/hooks/use-event-config'
@@ -65,12 +65,13 @@ const DeviceRegisteredGate: React.FC<DeviceRegisteredGateProps> = ({ children })
           Register this physical device before configuring event modules.
         </p>
 
-        <Button
-          render={<Link href={ROUTES.deviceRegistration} />}
-          className="h-12 w-full sm:w-auto sm:min-w-52"
+        {/* A real link with the button's appearance — see device-login-page. */}
+        <Link
+          href={ROUTES.deviceRegistration}
+          className={buttonVariants({ className: 'h-12 w-full sm:w-auto sm:min-w-52' })}
         >
           Register This Device
-        </Button>
+        </Link>
       </CardContent>
     </Card>
   )

@@ -11,6 +11,12 @@ export const ROUTES = {
   home: '/',
   badgeRegistration: '/badge-registration',
   deviceRegistration: '/device-registration',
+  /**
+   * Central device sign-in. Its own realm, deliberately NOT behind Operator
+   * Access — it is where the per-device entry point will eventually live, and
+   * building it here avoids moving the route later. It unlocks no event route.
+   */
+  deviceLogin: '/device-login',
   /** The admin control plane. Its own security realm, not an event module. */
   admin: '/admin',
 } as const
@@ -25,9 +31,9 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES]
  * moving between Home, Badge Registration and Device Registration never
  * remounts the sync processor.
  *
- * `/admin` is deliberately absent: it is a different security realm and must
- * not require Operator Access. Unknown paths are absent too, so Not Found is
- * reachable without unlocking anything.
+ * `/admin` and `/device-login` are deliberately absent: each is a different
+ * security realm and must not require Operator Access. Unknown paths are
+ * absent too, so Not Found is reachable without unlocking anything.
  */
 export const EVENT_ROUTE_PATTERN =
   /^\/(?:badge-registration|device-registration)?$/

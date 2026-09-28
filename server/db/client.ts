@@ -41,7 +41,7 @@ export const getDatabase = (): Database => {
 
   const environment = readDatabaseEnvironment()
 
-  if (!environment.ok) {
+  if (environment.ok === false) {
     throw new DatabaseNotConfiguredError(environment.reason)
   }
 

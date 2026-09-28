@@ -2,12 +2,12 @@
 
 How a central device proves its identity to this deployment.
 
-> ## Phase 9C-B builds the realm. It does not yet run the event application.
+> ## The realm exists and has a UI. It does not yet run the event application.
 >
 > `/`, `/badge-registration` and `/device-registration` still sit behind
 > **Operator Access**, exactly as before. Holding a device session unlocks none
-> of them, nothing in the event application calls these endpoints, and there
-> is no device login screen. Connecting the two is **Phase 9C-C**.
+> of them, and signing out of a device locks none of them. Connecting the two
+> is **Phase 9C-C2 / 9C-C3**.
 
 ---
 
@@ -270,10 +270,136 @@ so the limit must not be tuned like a single-user login.
 
 ---
 
+---
+
+## `/device-login` — the browser UI (Phase 9C-C1)
+
+A real page, deliberately **outside Operator Access**. In the final
+architecture it replaces the shared operator code as the per-device entry
+point, so it is built where it will live rather than moved later.
+
+It is additive. Nothing in the event application links its behaviour to this
+page: a browser with no device session still reaches Operator Access for every
+event route, and a browser with a valid device session still has to satisfy
+Operator Access for them.
+
+### What it asks for
+
+A **login name** and a **password**. Nothing else.
+
+The event slug comes from `src/shared/event.ts` — one constant, read by the
+device login client and by the Admin event form. An operator typing
+`navaratri-2026` by hand would eventually mistype it, and a wrong slug is
+indistinguishable from a wrong password. There is no Event ID or Device UUID
+field either: nobody should type a UUID at a desk.
+
+The login name is trimmed, matching how it is stored. The password is not.
+
+### Runtime validation
+
+The response is validated at runtime, not merely typed. Identifiers must be
+UUIDs, names must be non-empty, the device must belong to the event it was
+returned with, and a badge range must be a coherent positive interval.
+
+**Attributes fail closed.** An unrecognised string — anything outside
+`registration` and `prizes` — rejects the entire response rather than becoming
+a locally recorded capability.
+
+The context is projected field by field, never spread, so a field the server
+adds later cannot arrive in local state by accident.
+
+---
+
+## `centralDeviceEnrollment` — what the browser remembers
+
+One optional field on the **existing** `config` row. No new object store, no
+new index, no Dexie version bump; the database stays at version 1 with
+`registrations`, `config` and `outbox`.
+
+```
+deviceId · eventId · eventSlug · deviceName · loginName · attributes · verifiedAt
+```
+
+It answers exactly one question: *which central device did this browser last
+prove it is, and when?*
+
+> ### It is not permission to operate.
+>
+> The HttpOnly cookie is the credential and `GET /api/device-session` is the
+> only way to check it. A cached enrollment never produces an authenticated
+> state, never authorizes an event route, and is never described as
+> authoritative offline. Those rules are **Phase 9C-C3**.
+
+### Deliberately absent
+
+The password, its hash and salt, the session token, the cookie,
+`sessionVersion` — none of which ever reaches the browser — **and
+`activeBadgeRange`**.
+
+The central range may be *displayed*, read-only, alongside the words
+*"Central assignment only. Local badge range has not been changed."* It is not
+written anywhere. Importing it would silently change which physical badges this
+desk believes it owns, and that transition is **Phase 9C-C2**. There is no
+"Use this range" action, and `configureBadgeDistribution` is never called from
+this page.
+
+### The local Phase 7 identity is untouched
+
+`deviceId`, `deviceName`, `deviceConfiguredAt`, `badgeStart`, `badgeEnd`,
+`nextBadge` and `badgeConfiguredAt` belong to this browser's own offline badge
+workflow and to Sheets provenance. The central values are stored *beside*
+them, never over them — the central device id does not replace the local one,
+and the central display name does not replace the local one. Converging the
+two is a later, deliberate migration.
+
+---
+
+## One browser, one central device
+
+Re-verifying the **same** device refreshes its name, login name, attributes
+and `verifiedAt` — exactly the facts that change centrally.
+
+Authenticating as a **different** device is refused:
+
+> This browser is enrolled as *Registration Desk A*. It cannot silently switch
+> to *Registration Desk B*.
+
+The new device is not persisted, and its session is ended immediately with
+`POST /api/device-logout` so the browser is not left holding a cookie it
+declined to enroll. Badge ownership will eventually depend on this binding, so
+rebinding is an explicit operator decision: **Clear Central Enrollment**.
+
+That action removes the enrollment snapshot and nothing else. It is not Reset
+Device, not Clear Event Data, not Clear Badge Range and not an operator logout
+— the local device identity, the badge range, `nextBadge`, every registration,
+every outbox row and the trusted-operator marker all survive it.
+
+---
+
+## Signing out, and being offline
+
+**Sign Out Device** calls the server first. Only a confirmed logout clears the
+local enrollment; if the request fails the enrollment is kept and the page says
+the device session is still active, because claiming otherwise would be a lie
+the operator acts on.
+
+When the server cannot be reached, the page shows the cached identity as
+*"Last verified device: …"* with *"Internet is required to verify or change the
+central device in this phase."* It never says **Authenticated**, and it unlocks
+nothing.
+
+### No heartbeat
+
+The session is checked on page mount, after a successful login, and when the
+operator presses **Refresh Device Status**. There is no `setInterval`, no
+background timer and no polling. Reconnect reconciliation is Phase 9C-C3.
+
+---
+
 ## Not in this phase
 
-No device login page, form or gate. No enrollment. No mapping from an
-authenticated central device into IndexedDB. No copying of permissions or a
-badge range into local `EventConfig`. No badge-range self-claim. No offline
-device authorization. No heartbeat. No schema change — this phase added no
-migration and uses the columns Phase 9C-A already provided.
+No device gate on any event route. No offline device authorization. No use of
+cached attributes as authority. No badge-range import or self-claim. No
+heartbeat. No change to Google Sheets, to the outbox, or to sync
+authentication, which still uses Operator Access. No schema change — this phase
+added no migration and uses the columns Phase 9C-A already provided.

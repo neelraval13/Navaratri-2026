@@ -29,13 +29,13 @@ const BLOCK_MESSAGES: Record<string, string> = {
 export async function POST(request: Request): Promise<Response> {
   const guard = guardAdminRequest(request, { mutating: true, requiresDatabase: true })
 
-  if (!guard.ok) {
+  if (guard.ok === false) {
     return guard.response
   }
 
   const body = await readAdminBody(request)
 
-  if (!body.ok) {
+  if (body.ok === false) {
     return body.response
   }
 
@@ -49,14 +49,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const range = parseBadgeRangeInput(raw)
 
-  if (!range.ok) {
+  if (range.ok === false) {
     return adminError(range.message, 400)
   }
 
   try {
     const result = await assignBadgeRange(eventId, deviceId, range.value)
 
-    if (!result.ok) {
+    if (result.ok === false) {
       if ('conflict' in result) {
         return adminConflict(result.conflict)
       }

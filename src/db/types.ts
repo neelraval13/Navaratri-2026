@@ -1,3 +1,4 @@
+import type { DeviceAttribute } from '@/shared/device-attributes'
 import type { OutboxSyncErrorCode } from '@/shared/sync-contract'
 import type { Gender, PaymentMethod } from '@/types/registration'
 
@@ -116,8 +117,59 @@ export interface EventConfig {
   /** Undefined until the operator supplies the organizer UPI details. */
   upiId?: string
   payeeName?: string
+  /**
+   * The last CENTRAL device identity this browser successfully verified.
+   *
+   * Entirely separate from the Phase 7 fields above. `deviceId` and
+   * `deviceName` there are this browser's own local identity, used by the
+   * offline badge workflow and stamped onto registration provenance; the
+   * central values below belong to a row in Postgres. They are never merged,
+   * and central values never overwrite local ones — that convergence is a
+   * later, deliberate migration.
+   */
+  centralDeviceEnrollment?: CentralDeviceEnrollment
   /** ISO 8601 UTC. */
   updatedAt: string
+}
+
+/**
+ * A SAFE snapshot of the central device this browser is bound to.
+ *
+ * It answers exactly one question: "which central device did this browser
+ * last prove it is, and when?"
+ *
+ * It is NOT permission to operate. Nothing authorizes an event route from
+ * this record, and it must never be described as authenticating anything
+ * offline — the HttpOnly session cookie remains the only credential, and
+ * `GET /api/device-session` the only way to check it. The offline trust rules
+ * are Phase 9C-C3.
+ *
+ * Deliberately ABSENT, and none may be added here:
+ *
+ * - the password, its hash, its salt or any derived key
+ * - the session token, the cookie, or `sessionVersion`
+ * - `activeBadgeRange`, `rangeStart`, `rangeEnd` — the central badge range is
+ *   NOT imported into local state in this phase (Phase 9C-C2 owns that), and
+ *   writing it here would silently change which physical badges this desk
+ *   believes it owns
+ *
+ * Every field is projected explicitly from the verified server response; the
+ * response is never stored wholesale, so a field the server adds later cannot
+ * arrive here by accident.
+ */
+export interface CentralDeviceEnrollment {
+  /** The central `devices.id` UUID. Never copied over the local `deviceId`. */
+  deviceId: string
+  /** The central `events.id` UUID. */
+  eventId: string
+  eventSlug: string
+  /** The central display name. Never copied over the local `deviceName`. */
+  deviceName: string
+  loginName: string
+  /** Verified against the application allow-list before being stored. */
+  attributes: DeviceAttribute[]
+  /** ISO 8601 UTC, when the SERVER last confirmed this identity. */
+  verifiedAt: string
 }
 
 /**
