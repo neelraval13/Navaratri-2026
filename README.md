@@ -74,7 +74,7 @@ leave the server, and a password is never shown again after it is set.
 ## Device authentication (Phase 9C-B — realm only)
 
 A central device can now authenticate with `eventSlug` + `loginName` +
-`password` against `POST /api/device-login`, and receives its own 14-day
+`password` against `POST /api/device-auth`, and receives its own 14-day
 `__Host-navaratri_device_session` cookie.
 
 This is a **third independent realm**. A device session authorizes no Admin or
@@ -109,6 +109,11 @@ snapshot.
 The central badge range is **displayed read-only and never imported**. The
 local `badgeStart`, `badgeEnd` and `nextBadge`, and the Phase 7 local
 `deviceId` and `deviceName`, are left exactly as they are.
+
+Admin and Device authentication are each **one endpoint with three methods** —
+`POST` signs in, `GET` introspects, `DELETE` signs out. Every file under `api/`
+is a Vercel Function and the Hobby plan allows twelve; this deployment uses
+**10**, with two spare.
 
 See `docs/DEVICE_AUTH.md`.
 

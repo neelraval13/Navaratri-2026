@@ -97,9 +97,15 @@ check('  the existing rewrites are kept',
 check('  no rewrite is a wildcard that could swallow /api',
   sources.filter((source) => /[*:()]/.test(source)), [])
 check('  and none targets /api', sources.filter((source) => source.startsWith('/api')), [])
-check('the device API routes are Functions, not rewrites',
+check('the device API is ONE Function, not a rewrite',
+  existsSync(join(root, 'api/device-auth.ts')), true)
+check('  the three old Functions are gone, not left as wrappers',
   ['device-login.ts', 'device-session.ts', 'device-logout.ts']
-    .map((file) => existsSync(join(root, 'api', file))), [true, true, true])
+    .filter((file) => existsSync(join(root, 'api', file))), [])
+check('  and no rewrite aliases the old paths',
+  vercel.rewrites.filter((rule) =>
+    /device-(login|session|logout)|admin-(login|session|logout)/.test(rule.source) &&
+    rule.source.startsWith('/api')), [])
 
 const serviceWorker = read('dist/sw.js')
 check('the service worker still denylists /api',
@@ -239,7 +245,8 @@ const safeContext = (deviceId = DEVICE_A, over = {}) => ({
 calls.length = 0
 stubFetch(200, { ok: true, authenticated: true, ...safeContext() })
 const loggedIn = await api.loginDevice({ loginName: 'desk-a', password: '  spaced pass  ' })
-check('login posts to /api/device-login', [calls[0].url, calls[0].method], ['/api/device-login', 'POST'])
+check('login POSTs to the consolidated endpoint',
+  [calls[0].url, calls[0].method], ['/api/device-auth', 'POST'])
 check('  with the slug supplied and the password EXACT',
   JSON.parse(calls[0].body),
   { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: '  spaced pass  ' })
@@ -279,7 +286,8 @@ check('  offline is UNREACHABLE, never unauthenticated',
 calls.length = 0
 stubFetch(200, { ok: true })
 await api.logoutDevice()
-check('logout posts to /api/device-logout', [calls[0].url, calls[0].method], ['/api/device-logout', 'POST'])
+check('logout DELETEs the consolidated endpoint',
+  [calls[0].url, calls[0].method], ['/api/device-auth', 'DELETE'])
 stubFetch(500, {})
 check('  a failed logout reports honestly', (await api.logoutDevice()).ok, false)
 globalThis.fetch = () => Promise.reject(new Error('offline'))
@@ -526,8 +534,14 @@ check('  nor a self-claim function',
   walkSource(join(root, 'src')).concat(walkSource(join(root, 'server')))
     .filter((file) => /claimBadgeRange|selfClaimRange|adoptCentralRange/
       .test(readFileSync(file, 'utf8'))), [])
-check('  and the only central writes are login and logout',
-  [...stripComments(read('src/device-auth/device-api.ts')).matchAll(/method: 'POST'/g)].length, 2)
+check('  and the only central calls are login, session and logout',
+  [...stripComments(read('src/device-auth/device-api.ts'))
+    .matchAll(/method: '(POST|GET|DELETE)'/g)].map((match) => match[1]).sort(),
+  ['DELETE', 'GET', 'POST'])
+check('  all against the one consolidated endpoint',
+  [...stripComments(read('src/device-auth/device-api.ts'))
+    .matchAll(/request\((\w+)/g)].map((match) => match[1]).filter((name) => name.endsWith('ENDPOINT')),
+  ['DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT'])
 
 console.log('\n=== 33-37. NOTHING ELSE CHANGED ===')
 const dexie = read('src/db/database.ts')

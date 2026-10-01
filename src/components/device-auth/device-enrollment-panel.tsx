@@ -21,7 +21,7 @@ import { formatEventDateTime } from '@/lib/datetime'
  *
  * `authenticated` is only ever reached from a SERVER answer. A cached
  * enrollment can produce `last-verified`, never `authenticated`: the HttpOnly
- * cookie is the credential, `GET /api/device-session` is the only way to
+ * cookie is the credential, `GET /api/device-auth` is the only way to
  * check it, and offline trust rules do not exist yet.
  */
 type PanelState =

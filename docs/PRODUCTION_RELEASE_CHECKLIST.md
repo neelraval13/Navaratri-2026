@@ -75,7 +75,7 @@ manually.
 | 3.14 | No device password provisioned on a shared or reused passphrase | ☐ |
 | 3.15 | `EVENT_DEVICE_SESSION_SECRET` set, 32+ chars, generated independently of the other two secrets | ☐ |
 | 3.16 | Device-login rate limit configured per `docs/VERCEL_FIREWALL.md`, **with the venue's NAT checked** | ☐ |
-| 3.17 | All three realms verified apart on the deployment: a device cookie reaches no Admin or operator API, and neither reaches `/api/device-session` | ☐ |
+| 3.17 | All three realms verified apart on the deployment: a device cookie reaches no Admin or operator API, and neither reaches `GET /api/device-auth` | ☐ |
 
 Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
 
@@ -96,6 +96,7 @@ the profile.
 | 3.21 | `pnpm build` run on a clean checkout, not an incremental tree | ☐ |
 | 3.22 | `pnpm verify:parity` green | ☐ |
 | 3.23 | `pnpm typecheck:vercel-functions` green — the platform compiles each `api/*.ts` separately after our build finishes | ☐ |
+| 3.24 | Deployment Function count is **10 of 12** — the Hobby limit is enforced at deploy time, after the build succeeds | ☐ |
 
 A deployment can still fail after a green build: Vercel typechecks every
 function on its own, against the ROOT `tsconfig.json`'s `compilerOptions`. If
@@ -121,7 +122,7 @@ The device realm exists and works, but **the event application does not use
 it**: `/`, `/badge-registration` and `/device-registration` still sit behind
 Operator Access, and a device session unlocks none of them. Enabling
 `EVENT_DEVICE_SESSION_SECRET` in Production therefore changes nothing an
-operator sees — it only makes `POST /api/device-login` functional.
+operator sees — it only makes `POST /api/device-auth` functional.
 
 Leaving it unset is a valid Production posture for this phase: device
 authentication simply reports itself unavailable, and everything else runs

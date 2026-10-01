@@ -141,7 +141,7 @@ export interface EventConfig {
  * It is NOT permission to operate. Nothing authorizes an event route from
  * this record, and it must never be described as authenticating anything
  * offline — the HttpOnly session cookie remains the only credential, and
- * `GET /api/device-session` the only way to check it. The offline trust rules
+ * `GET /api/device-auth` the only way to check it. The offline trust rules
  * are Phase 9C-C3.
  *
  * Deliberately ABSENT, and none may be added here:

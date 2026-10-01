@@ -1310,7 +1310,7 @@ and verifier must not be changed — doing so would invalidate live sessions.
 
 `EVENT_ADMIN_ACCESS_CODE` has a minimum of 8 characters, compared exactly —
 no trimming, no case folding. That is a floor, not a recommendation: a short
-admin code leans on the edge rate limit for `POST /api/admin-login` and the
+admin code leans on the edge rate limit for `POST /api/admin-auth` and the
 fixed wrong-code delay, and neither replaces entropy. `EVENT_ADMIN_SESSION_SECRET`
 stays at a 32-character minimum.
 
@@ -1389,7 +1389,7 @@ must be centrally accepted; after that, issuance stays local and offline.
 ## Device Credentials
 
 Phase 9C-A STORES device credentials. It does NOT enable device login. There is
-no `/api/device-login`, no device session, no cookie and no heartbeat, and none
+no device login endpoint, no device session, no cookie and no heartbeat, and none
 may be added before its phase. Devices still use Operator Access. Provisioning
 a password ACTIVATES NOTHING — a disabled device may be provisioned, because
 preparing a desk before opening it is normal and `enabled` is enforced at login.
@@ -1946,6 +1946,57 @@ The root baseline is NOT the browser project. `tsconfig.app.json` keeps
 `types: ["vite/client"]`, and server code must still never touch `window`,
 `document`, `localStorage`, `sessionStorage` or `navigator` — the compiler can
 no longer catch that, so `release:check` does.
+
+### A File Under `api/` Is A Deployment Function
+
+Every `api/*.ts` file becomes its own Vercel Function. The Hobby plan REFUSES
+a deployment with more than TWELVE, and it refuses it at deploy time — after
+the build has already succeeded, at "Deploying outputs…". No build step
+reports it, so the budget is a durable check, not something a green build
+proves.
+
+Current inventory: **10 of 12, two slots of headroom.**
+
+```
+admin-auth · admin-badge-assignment · admin-device-password · admin-devices
+admin-events · device-auth · operator-login · operator-logout
+operator-session · sync-registration
+```
+
+A shared helper NEVER belongs under `api/` — it costs a deployment Function
+for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
+on an `api/` file that exports no HTTP method, and on any file outside the
+expected inventory, so headroom cannot be consumed quietly.
+
+The two spare slots are headroom, not permission to start the next phase.
+
+### Auth Realms Are Consolidated By HTTP Method
+
+Admin and Device each expose ONE endpoint with three method exports:
+
+```
+POST   /api/admin-auth | /api/device-auth    sign in
+GET    /api/admin-auth | /api/device-auth    session introspection
+DELETE /api/admin-auth | /api/device-auth    sign out
+```
+
+The METHOD is the dispatcher. Never `?action=`, never an `"action"` field in a
+body, and never a rewrite aliasing an old path — these are first-party APIs
+with first-party callers, so the old URLs simply cease to exist rather than
+gaining a compatibility surface. They must resolve as missing API routes, never
+as the SPA index.
+
+Admin and Device stay SEPARATE Functions and must never merge into one
+`api/auth.ts`: different secrets, different cookies, different signing
+contexts, different rate limits, different threat surfaces. The budget reaches
+10 without merging them, so there is no reason to.
+
+Operator Access keeps its three separate Functions. It is the live event-app
+auth boundary and is not consolidated in this phase.
+
+Because one path now serves three operations, every firewall rule MUST
+condition on `Method = POST`. Rate-limiting the path alone would throttle
+session checks on reconnect and block sign-outs.
 
 ### Google Sheets Client
 

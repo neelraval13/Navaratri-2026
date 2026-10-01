@@ -59,7 +59,7 @@ Admin needs all three:
   trimmed, not case-folded)
 
   8 is the floor, not a recommendation. A short admin code leans on the edge
-  rate limit for `POST /api/admin-login` (5 attempts per minute per IP) and
+  rate limit for `POST /api/admin-auth` (5 attempts per minute per IP) and
   the fixed wrong-code delay; neither replaces entropy, so prefer a passphrase
   well above the minimum.
 - `EVENT_ADMIN_SESSION_SECRET` (minimum 32 characters)
@@ -180,7 +180,7 @@ in with: its **login name** plus a **device password**.
 > **Provisioning a credential does not put a device into service.**
 >
 > Since Phase 9C-B these credentials do work: a device can sign in at
-> `POST /api/device-login` and hold its own session. But the **event
+> `POST /api/device-auth` and hold its own session. But the **event
 > application still runs on Operator Access** — a device session unlocks none
 > of `/`, `/badge-registration` or `/device-registration`, and there is no
 > device login screen yet. Setting a password on a *disabled* device is
@@ -394,7 +394,7 @@ replaces the transitional self-registration flow.
 
 ## Rate limiting
 
-`POST /api/admin-login` should be rate limited at the Vercel edge. See
+`POST /api/admin-auth` should be rate limited at the Vercel edge. See
 [VERCEL_FIREWALL.md](VERCEL_FIREWALL.md). A 429 shows a generic *"Too many
 admin login attempts"* message that reveals no address, no counter and nothing
 about the submitted code.

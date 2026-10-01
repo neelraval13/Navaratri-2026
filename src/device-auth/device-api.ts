@@ -14,9 +14,13 @@ import { CURRENT_EVENT_SLUG } from '@/shared/event'
  * No server secret, hash or session version ever enters this file.
  */
 
-const LOGIN_ENDPOINT = '/api/device-login'
-const SESSION_ENDPOINT = '/api/device-session'
-const LOGOUT_ENDPOINT = '/api/device-logout'
+/**
+ * One endpoint, three methods: POST signs in, GET introspects, DELETE signs
+ * out. Each file under `api/` is a deployment Function and the Hobby plan
+ * allows twelve, so the device credential's lifecycle spends one rather than
+ * three.
+ */
+const DEVICE_AUTH_ENDPOINT = '/api/device-auth'
 
 const TIMEOUT_MS = 15_000
 
@@ -111,7 +115,7 @@ export const loginDevice = async (credentials: {
   let response: Response
 
   try {
-    response = await request(LOGIN_ENDPOINT, {
+    response = await request(DEVICE_AUTH_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -168,7 +172,7 @@ export const getDeviceSession = async (): Promise<DeviceSessionResult> => {
   let response: Response
 
   try {
-    response = await request(SESSION_ENDPOINT, { method: 'GET' })
+    response = await request(DEVICE_AUTH_ENDPOINT, { method: 'GET' })
   } catch {
     return { status: 'unreachable' }
   }
@@ -210,11 +214,7 @@ export const getDeviceSession = async (): Promise<DeviceSessionResult> => {
  */
 export const logoutDevice = async (): Promise<{ ok: boolean }> => {
   try {
-    const response = await request(LOGOUT_ENDPOINT, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    })
+    const response = await request(DEVICE_AUTH_ENDPOINT, { method: 'DELETE' })
 
     return { ok: response.ok }
   } catch {

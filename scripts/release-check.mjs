@@ -94,9 +94,7 @@ const REQUIRED_FILES = [
   'server/device-auth/same-origin.ts',
   'server/device-auth/authenticate.ts',
   'src/shared/device-password.ts',
-  'api/device-login.ts',
-  'api/device-session.ts',
-  'api/device-logout.ts',
+  'api/device-auth.ts',
   'src/device-auth/device-api.ts',
   'src/device-auth/device-session-contract.ts',
   'src/db/central-enrollment.ts',
@@ -106,10 +104,8 @@ const REQUIRED_FILES = [
   'tsconfig.parity.json',
   'scripts/vercel-function-typecheck.mjs',
   'docs/DEVICE_AUTH.md',
-  'api/admin-login.ts',
+  'api/admin-auth.ts',
   'api/admin-device-password.ts',
-  'api/admin-session.ts',
-  'api/admin-logout.ts',
   'docs/ADMIN.md',
   'drizzle.config.ts',
   'docs/DATABASE.md',
@@ -1165,6 +1161,135 @@ addCheck(
   'vercel-function-compile',
   "Vercel's per-function compile is modelled by the build",
   functionProblems,
+)
+
+// --- H3. the Hobby deployment Function budget ------------------------------
+/**
+ * Every file under `api/` becomes a separate deployment Function, and the
+ * Hobby plan refuses a deployment with more than twelve. That is enforced
+ * AFTER the build succeeds, at "Deploying outputs…", so no build step reports
+ * it — a 14-function deployment built cleanly and was then rejected.
+ */
+const HOBBY_FUNCTION_LIMIT = 12
+const EXPECTED_FUNCTIONS = [
+  'admin-auth.ts',
+  'admin-badge-assignment.ts',
+  'admin-device-password.ts',
+  'admin-devices.ts',
+  'admin-events.ts',
+  'device-auth.ts',
+  'operator-login.ts',
+  'operator-logout.ts',
+  'operator-session.ts',
+  'sync-registration.ts',
+]
+
+const budgetProblems = []
+const apiFiles = readdirSync(join(ROOT, 'api'))
+  .filter((file) => file.endsWith('.ts') && !file.endsWith('.d.ts'))
+  .sort()
+
+if (apiFiles.length > HOBBY_FUNCTION_LIMIT) {
+  budgetProblems.push(
+    `${String(apiFiles.length)} Functions exceeds the Hobby limit of ${String(HOBBY_FUNCTION_LIMIT)}`,
+  )
+}
+
+for (const file of apiFiles) {
+  if (!EXPECTED_FUNCTIONS.includes(file)) {
+    budgetProblems.push(`api/${file} is an unexpected Function and consumes deployment budget`)
+  }
+}
+
+for (const file of EXPECTED_FUNCTIONS) {
+  if (!apiFiles.includes(file)) {
+    budgetProblems.push(`api/${file} is expected but missing`)
+  }
+}
+
+// The six consolidated files must be GONE, not left as wrappers — a wrapper
+// under api/ is still a Function.
+for (const file of [
+  'admin-login.ts', 'admin-session.ts', 'admin-logout.ts',
+  'device-login.ts', 'device-session.ts', 'device-logout.ts',
+]) {
+  if (exists(join(ROOT, 'api', file))) {
+    budgetProblems.push(`api/${file} still exists and still costs a Function`)
+  }
+}
+
+// Nothing under api/ may be a shared helper: helpers belong in server/.
+for (const file of apiFiles) {
+  const text = readText(join(ROOT, 'api', file))
+
+  if (text !== null && !/export (async )?function (GET|POST|PUT|PATCH|DELETE)\(/.test(text)) {
+    budgetProblems.push(`api/${file} exports no HTTP method — a helper here costs a Function`)
+  }
+}
+
+// The old paths must simply not exist; they are never aliased or rewritten.
+if (vercelConfig !== null) {
+  let rewrites = []
+
+  try {
+    rewrites = JSON.parse(vercelConfig).rewrites ?? []
+  } catch {
+    budgetProblems.push('vercel.json could not be parsed')
+  }
+
+  for (const rule of rewrites) {
+    if (/(admin|device)-(login|session|logout)/.test(rule.source ?? '') &&
+        (rule.source ?? '').startsWith('/api')) {
+      budgetProblems.push(`rewrite "${rule.source}" aliases a removed API path`)
+    }
+
+    if (/\/api\//.test(rule.destination ?? '')) {
+      budgetProblems.push(`rewrite "${rule.source}" targets an API path`)
+    }
+  }
+}
+
+// Client code must call the consolidated endpoints, and only those.
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path)
+
+  if (text !== null && /['"`]\/api\/(admin|device)-(login|session|logout)['"`]/.test(text)) {
+    budgetProblems.push(`${rel(path)} still calls a removed API path`)
+  }
+}
+
+// The firewall doc must name the consolidated POST endpoints.
+const firewallDoc = readText(join(ROOT, 'docs/VERCEL_FIREWALL.md'))
+
+if (firewallDoc === null) {
+  budgetProblems.push('docs/VERCEL_FIREWALL.md could not be read')
+} else {
+  for (const required of ['/api/admin-auth', '/api/device-auth']) {
+    if (!firewallDoc.includes(required)) {
+      budgetProblems.push(`docs/VERCEL_FIREWALL.md does not name ${required}`)
+    }
+  }
+
+  if (/\| `\/api\/(admin|device)-login`/.test(firewallDoc)) {
+    budgetProblems.push('docs/VERCEL_FIREWALL.md still rate-limits a removed path')
+  }
+}
+
+// Operator stays three Functions in this phase; it is the live auth boundary.
+for (const file of ['operator-login.ts', 'operator-session.ts', 'operator-logout.ts']) {
+  if (!exists(join(ROOT, 'api', file))) {
+    budgetProblems.push(`api/${file} was consolidated; Operator Access must stay untouched`)
+  }
+}
+
+addCheck(
+  'function-budget',
+  `api/ holds ${String(apiFiles.length)} of ${String(HOBBY_FUNCTION_LIMIT)} Hobby Functions`,
+  budgetProblems,
 )
 
 // --- G. client code never reads a server-only variable ----------------------

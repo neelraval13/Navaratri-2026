@@ -246,6 +246,51 @@ check('  and google-auth-library is still not a declared dependency',
   Object.keys({ ...JSON.parse(read('package.json')).dependencies })
     .includes('google-auth-library'), false)
 
+console.log('\n=== THE HOBBY FUNCTION BUDGET ===')
+const budget = functionChecker.checkFunctionBudget()
+
+console.log(`  ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_FUNCTION_LIMIT)}` +
+  `   headroom ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
+
+check('the deployment stays within the Hobby limit',
+  budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
+check('  at exactly ten Functions', budget.actual.length, 10)
+check('  with no unexpected entrypoint', budget.problems, [])
+check('the six consolidated Functions are GONE, not wrappers',
+  ['admin-login', 'admin-session', 'admin-logout',
+   'device-login', 'device-session', 'device-logout']
+    .filter((name) => existsSync(join(root, 'api', `${name}.ts`))), [])
+check('  replaced by exactly two',
+  ['admin-auth', 'device-auth'].filter((name) => existsSync(join(root, 'api', `${name}.ts`))),
+  ['admin-auth', 'device-auth'])
+check('  each dispatching on the HTTP method',
+  ['admin-auth', 'device-auth'].map((name) =>
+    [...read(`api/${name}.ts`).matchAll(/export (?:async )?function ([A-Z]+)\(/g)]
+      .map((match) => match[1]).sort().join(',')),
+  ['DELETE,GET,POST', 'DELETE,GET,POST'])
+check('  and neither using a query action',
+  ['admin-auth', 'device-auth'].filter((name) =>
+    /searchParams\.get\('action'\)|\baction\b\s*===/.test(stripComments(read(`api/${name}.ts`)))), [])
+check('the two realms remain separate Functions',
+  existsSync(join(root, 'api/auth.ts')), false)
+check('Operator Access keeps its three Functions',
+  ['operator-login', 'operator-logout', 'operator-session']
+    .filter((name) => existsSync(join(root, 'api', `${name}.ts`))).sort(),
+  ['operator-login', 'operator-logout', 'operator-session'])
+check('no api file is a helper rather than a Function',
+  functionChecker.functionEntrypoints()
+    .filter((file) => !/export (async )?function (GET|POST|PUT|PATCH|DELETE)\(/
+      .test(readFileSync(file, 'utf8')))
+    .map((file) => file.replace(`${root}/`, '')), [])
+check('no removed path is aliased by a rewrite',
+  JSON.parse(read('vercel.json')).rewrites
+    .filter((rule) => rule.source.startsWith('/api') || /\/api\//.test(rule.destination)), [])
+check('  and no client still calls one',
+  walk(join(root, 'src'))
+    .filter((file) => /['"`]\/api\/(admin|device)-(login|session|logout)['"`]/
+      .test(readFileSync(file, 'utf8')))
+    .map((file) => file.replace(`${root}/`, '')), [])
+
 console.log('\n=== THE BUILD CANNOT SKIP IT ===')
 const manifest = JSON.parse(read('package.json'))
 check('build typechecks before bundling', manifest.scripts.build, 'pnpm typecheck && vite build')
@@ -299,8 +344,11 @@ const resultUnions = sources
 check('no result union is narrowed by bare negation',
   resultUnions.filter((entry) => /if \(!\w+\.(ok|allowed)\)/.test(entry.code))
     .map((entry) => entry.file), [])
+// Counted by OCCURRENCE, not by file: consolidating six auth Functions into
+// two reduced the file count without removing a single guard.
 check('  the explicit form is used instead',
-  resultUnions.filter((entry) => /\.ok === (true|false)/.test(entry.code)).length > 15, true)
+  resultUnions.reduce((total, entry) =>
+    total + (entry.code.match(/\.ok === (true|false)/g) ?? []).length, 0) > 40, true)
 
 console.log('\n=== NOTHING ELSE MOVED ===')
 check('no migration was added',

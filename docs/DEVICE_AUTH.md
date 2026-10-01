@@ -11,6 +11,23 @@ How a central device proves its identity to this deployment.
 
 ---
 
+## One endpoint, three methods
+
+```
+POST   /api/device-auth   sign in
+GET    /api/device-auth   the current session
+DELETE /api/device-auth   sign out
+```
+
+There is no `?action=` and no `"action"` field in a body: the HTTP method is
+the dispatcher. `/api/device-login`, `/api/device-session` and
+`/api/device-logout` no longer exist — every file under `api/` becomes a
+separate deployment Function and the Hobby plan allows twelve, so one
+credential's lifecycle now spends one rather than three.
+
+The behaviour of each is unchanged. Only the path and, for sign-out, the
+method have moved.
+
 ## Three independent realms
 
 | Realm | Cookie | Unlocks |
@@ -44,7 +61,7 @@ another — but isolation does not depend on it.
 ## Signing in
 
 ```http
-POST /api/device-login
+POST /api/device-auth
 Content-Type: application/json
 
 { "eventSlug": "navaratri-2026", "loginName": "desk-a", "password": "…" }
@@ -150,7 +167,7 @@ authorizing after an Admin had already changed it.
 ```
 A device logs in with        registration + prizes
 Admin removes prizes
-Next GET /api/device-session registration
+Next GET /api/device-auth   registration
 ```
 
 No new cookie, no password reset, no logout. The same applies to `enabled`,
@@ -162,7 +179,7 @@ revocable without reissuing a credential.
 
 ---
 
-## `GET /api/device-session`
+## `GET /api/device-auth`
 
 Answers: *does this browser hold a valid device session, and what is that
 device now?*
@@ -213,7 +230,7 @@ device session at once.
 
 ---
 
-## `POST /api/device-logout`
+## `DELETE /api/device-auth`
 
 Same-origin, expires `__Host-navaratri_device_session`, returns success.
 
@@ -264,7 +281,7 @@ Nothing at startup depends on either. A deployment without them runs exactly
 as before; device authentication simply reports itself unavailable when it is
 invoked.
 
-Rate limiting for `POST /api/device-login` is a Vercel firewall rule — see
+Rate limiting for `POST /api/device-auth` is a Vercel firewall rule — see
 `docs/VERCEL_FIREWALL.md`. Several devices may share the venue's NAT address,
 so the limit must not be tuned like a single-user login.
 
@@ -325,7 +342,7 @@ prove it is, and when?*
 
 > ### It is not permission to operate.
 >
-> The HttpOnly cookie is the credential and `GET /api/device-session` is the
+> The HttpOnly cookie is the credential and `GET /api/device-auth` is the
 > only way to check it. A cached enrollment never produces an authenticated
 > state, never authorizes an event route, and is never described as
 > authoritative offline. Those rules are **Phase 9C-C3**.
@@ -365,7 +382,7 @@ Authenticating as a **different** device is refused:
 > to *Registration Desk B*.
 
 The new device is not persisted, and its session is ended immediately with
-`POST /api/device-logout` so the browser is not left holding a cookie it
+`DELETE /api/device-auth` so the browser is not left holding a cookie it
 declined to enroll. Badge ownership will eventually depend on this binding, so
 rebinding is an explicit operator decision: **Clear Central Enrollment**.
 

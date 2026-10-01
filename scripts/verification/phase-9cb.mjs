@@ -131,8 +131,10 @@ check('the wrong secret is rejected', verify(token, 'e'.repeat(48)), null)
 check('a tampered payload is rejected', verify(`x${token}`), null)
 check('  a tampered signature is rejected',
   verify(`${token.split('.')[0]}.${'A'.repeat(43)}`), null)
-check('  a re-signed foreign payload is rejected',
-  verify(`${token.split('.')[0]}.${token.split('.')[1].slice(0, -1)}A`), null)
+check('  a single flipped signature character is rejected',
+  verify(`${token.split('.')[0]}.${token.split('.')[1].slice(0, -1)}${
+    token.split('.')[1].endsWith('A') ? 'B' : 'A'
+  }`), null)
 
 for (const [label, value] of [
   ['undefined', undefined], ['empty', ''], ['not a token', 'nonsense'],
@@ -423,16 +425,29 @@ check('  which the token could not have carried',
   /attributes|badge|range/i.test(JSON.stringify(decoded)), false)
 
 console.log('\n=== ENDPOINTS ===')
-const loginRoute = read('api/device-login.ts')
-const sessionRoute = read('api/device-session.ts')
-const logoutRoute = read('api/device-logout.ts')
+const deviceAuthRoute = read('api/device-auth.ts')
+// One module, three method exports. Each behaviour is asserted against the
+// section that implements it.
+const loginRoute = deviceAuthRoute
+const sessionRoute = deviceAuthRoute
+const logoutRoute = deviceAuthRoute
 /** The handler bodies, so alphabetised imports cannot fake an ordering. */
-const loginBody = loginRoute.slice(loginRoute.indexOf('export async function POST'))
-const logoutBody = logoutRoute.slice(logoutRoute.indexOf('export async function POST'))
+const loginBody = loginRoute.slice(
+  loginRoute.indexOf('export async function POST'),
+  loginRoute.indexOf('export async function GET'),
+)
+const logoutBody = logoutRoute.slice(logoutRoute.indexOf('export function DELETE'))
 
-check('all three endpoints exist',
+check('the device realm is ONE Function with three methods',
+  [existsSync(join(root, 'api/device-auth.ts')),
+   [...deviceAuthRoute.matchAll(/export (?:async )?function ([A-Z]+)\(/g)]
+     .map((match) => match[1]).sort()],
+  [true, ['DELETE', 'GET', 'POST']])
+check('  and the three old Functions are gone',
   ['api/device-login.ts', 'api/device-session.ts', 'api/device-logout.ts']
-    .map((file) => existsSync(join(root, file))), [true, true, true])
+    .filter((file) => existsSync(join(root, file))), [])
+check('  no PUT or PATCH is exported',
+  /export (async )?function (PUT|PATCH)\(/.test(deviceAuthRoute), false)
 check('login checks same-origin FIRST',
   loginBody.indexOf('isSameOriginDeviceRequest') < loginBody.indexOf('readDeviceBody'), true)
 check('  then the body, then configuration, then the input',
@@ -465,8 +480,12 @@ check('  every invalidation returns the same body',
 check('  which reveals no reason',
   /reason|revoked|disabled|expired|mismatch/.test(
     /const UNAUTHENTICATED = [^\n]*/.exec(sessionRoute)[0]), false)
+const sessionBody = sessionRoute.slice(
+  sessionRoute.indexOf('export async function GET'),
+  sessionRoute.indexOf('export function DELETE'),
+)
 check('  a supplied invalid cookie is cleared',
-  (sessionRoute.match(/serializeClearedDeviceSessionCookie\(\)/g) ?? []).length, 2)
+  (sessionBody.match(/serializeClearedDeviceSessionCookie\(\)/g) ?? []).length, 2)
 check('  a missing cookie is 200, not 401',
   /token === undefined\) \{\s*return deviceJson\(UNAUTHENTICATED, 200\)/.test(sessionRoute), true)
 check('  missing configuration is a safe 503',
@@ -482,7 +501,7 @@ check('  clears only the device cookie',
    /admin|operator/i.test(stripComments(logoutRoute))], [true, false])
 check('  writes nothing',
   /getDatabase|update\(|insert\(|delete\(|indexedDB|localStorage/.test(logoutRoute), false)
-check('  and needs no database', /isDatabaseConfigured/.test(logoutRoute), false)
+check('  and needs no database', /isDatabaseConfigured/.test(logoutBody), false)
 
 console.log('\n=== RESPONSE HYGIENE ===')
 for (const [file, source] of [['device-login', loginRoute], ['device-session', sessionRoute],
@@ -492,7 +511,7 @@ for (const [file, source] of [['device-login', loginRoute], ['device-session', s
 // `sessionVersion` legitimately travels INTO the signer; it must never travel
 // out in a response, which the real-response checks below prove.
 check('  the session version only ever goes into the token',
-  [...stripComments(loginRoute + sessionRoute).matchAll(/sessionVersion[:,]?/g)].length, 3)
+  [...stripComments(deviceAuthRoute).matchAll(/sessionVersion[:,]?/g)].length, 3)
 check('  no endpoint spreads a raw device row',
   /\.\.\.device[,}\s]|\.\.\.row/.test(stripComments(loginRoute + sessionRoute)), false)
 check('  the context is built by an explicit projection',
@@ -517,9 +536,14 @@ const routeJiti = createJiti(import.meta.url, {
   interopDefault: true,
 })
 process.env.EVENT_DEVICE_SESSION_SECRET = SECRET
-const loginHandler = await routeJiti.import(`${root}/api/device-login.ts`)
-const sessionHandler = await routeJiti.import(`${root}/api/device-session.ts`)
-const logoutHandler = await routeJiti.import(`${root}/api/device-logout.ts`)
+/**
+ * All three used to be separate Functions. They are now one, dispatched by
+ * HTTP method — the same module object serves login, session and logout.
+ */
+const deviceAuth = await routeJiti.import(`${root}/api/device-auth.ts`)
+const loginHandler = deviceAuth
+const sessionHandler = deviceAuth
+const logoutHandler = deviceAuth
 
 const ORIGIN = 'https://desk.example.test'
 const post = (path, body, headers = {}) =>
@@ -537,9 +561,16 @@ const settle = async (response) => ({
   cacheControl: response.headers.get('cache-control'),
 })
 
+check('the imported module really exports the three methods',
+  ['POST', 'GET', 'DELETE'].map((method) => typeof deviceAuth[method]),
+  ['function', 'function', 'function'])
+check('  and nothing else callable as a method',
+  Object.keys(deviceAuth).filter((key) => /^[A-Z]+$/.test(key)).sort(),
+  ['DELETE', 'GET', 'POST'])
+
 await seed()
 const loggedIn = await settle(await loginHandler.POST(
-  post('/api/device-login', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
+  post('/api/device-auth', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
 check('a real login returns 200 and authenticates',
   [loggedIn.status, loggedIn.body.ok, loggedIn.body.authenticated], [200, true, true])
 check('  it sets the device cookie with every attribute',
@@ -556,7 +587,7 @@ check('  with no secret of any kind',
 const deviceCookieHeader = `__Host-navaratri_device_session=${loggedIn.cookie.split(';')[0].split('=')[1]}`
 
 const failed = await settle(await loginHandler.POST(
-  post('/api/device-login', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: 'wrong-passphrase' })))
+  post('/api/device-auth', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: 'wrong-passphrase' })))
 check('a wrong password is a generic 401',
   [failed.status, failed.body], [401, { ok: false, authenticated: false, message: 'Device login failed.' }])
 check('  and sets NO cookie', failed.cookie, null)
@@ -564,7 +595,7 @@ for (const [label, body] of [
   ['an unknown login', { eventSlug: 'navaratri-2026', loginName: 'desk-z', password: PASSPHRASE }],
   ['an unknown event', { eventSlug: 'no-such-event', loginName: 'desk-a', password: PASSPHRASE }],
 ]) {
-  const other = await settle(await loginHandler.POST(post('/api/device-login', body)))
+  const other = await settle(await loginHandler.POST(post('/api/device-auth', body)))
   check(`  ${label} is byte-identical`,
     [other.status, JSON.stringify(other.body) === JSON.stringify(failed.body), other.cookie],
     [401, true, null])
@@ -572,13 +603,13 @@ for (const [label, body] of [
 
 await seed({ device: { enabled: false } })
 const blocked = await settle(await loginHandler.POST(
-  post('/api/device-login', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
+  post('/api/device-auth', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
 check('a disabled device with the right password is a typed 403',
   [blocked.status, blocked.body.blocked, blocked.cookie],
   [403, 'device-disabled', null])
 await seed({ event: { active: false } })
 const inactive = await settle(await loginHandler.POST(
-  post('/api/device-login', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
+  post('/api/device-auth', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
 check('  an inactive event too', [inactive.status, inactive.body.blocked], [403, 'event-inactive'])
 
 const crossSite = await settle(await loginHandler.POST(
@@ -589,15 +620,15 @@ const crossSite = await settle(await loginHandler.POST(
   })))
 check('a cross-site login is refused before anything else', [crossSite.status, crossSite.cookie], [403, null])
 const wrongType = await settle(await loginHandler.POST(
-  post('/api/device-login', {}, { 'content-type': 'text/plain' })))
+  post('/api/device-auth', {}, { 'content-type': 'text/plain' })))
 check('  a wrong content type is 415', wrongType.status, 415)
 const oversized = await settle(await loginHandler.POST(
-  post('/api/device-login', { eventSlug: 'x'.repeat(5000) })))
+  post('/api/device-auth', { eventSlug: 'x'.repeat(5000) })))
 check('  an oversized body is 413', oversized.status, 413)
 
 console.log('  -- the session endpoint --')
 await seed()
-const live = await settle(await sessionHandler.GET(get('/api/device-session', deviceCookieHeader)))
+const live = await settle(await sessionHandler.GET(get('/api/device-auth', deviceCookieHeader)))
 check('a valid cookie is authenticated',
   [live.status, live.body.authenticated, live.body.configured], [200, true, true])
 check('  it returns the CURRENT attributes and range',
@@ -605,18 +636,18 @@ check('  it returns the CURRENT attributes and range',
 check('  and no secret', /password|hash|salt|scrypt|sessionVersion/i.test(JSON.stringify(live.body)), false)
 check('  no cookie is re-issued', live.cookie, null)
 
-const anonymous = await settle(await sessionHandler.GET(get('/api/device-session')))
+const anonymous = await settle(await sessionHandler.GET(get('/api/device-auth')))
 check('no cookie is 200 unauthenticated, not 401',
   [anonymous.status, anonymous.body], [200, { authenticated: false, configured: true }])
 check('  and nothing is cleared', anonymous.cookie, null)
 
 const foreign = await settle(await sessionHandler.GET(
-  get('/api/device-session', '__Host-navaratri_admin_session=x; __Host-navaratri_operator_session=y')))
+  get('/api/device-auth', '__Host-navaratri_admin_session=x; __Host-navaratri_operator_session=y')))
 check('an Admin or operator cookie authenticates nothing here',
   [foreign.status, foreign.body.authenticated], [200, false])
 
 fakeDb.state.devices.get(DEVICE_ID).sessionVersion = 4
-const revoked = await settle(await sessionHandler.GET(get('/api/device-session', deviceCookieHeader)))
+const revoked = await settle(await sessionHandler.GET(get('/api/device-auth', deviceCookieHeader)))
 check('a password reset revokes the live cookie',
   [revoked.status, revoked.body], [200, { authenticated: false, configured: true }])
 check('  and the stale cookie is cleared',
@@ -625,12 +656,15 @@ check('  and the stale cookie is cleared',
 check('  revealing no reason', JSON.stringify(revoked.body), '{"authenticated":false,"configured":true}')
 
 const tampered = await settle(await sessionHandler.GET(
-  get('/api/device-session', '__Host-navaratri_device_session=garbage')))
+  get('/api/device-auth', '__Host-navaratri_device_session=garbage')))
 check('a garbage cookie looks exactly the same',
   [tampered.status, JSON.stringify(tampered.body)], [200, '{"authenticated":false,"configured":true}'])
 
 console.log('  -- logout --')
-const loggedOut = await settle(await logoutHandler.POST(post('/api/device-logout', {})))
+const remove = (path, origin = ORIGIN) =>
+  new Request(`${ORIGIN}${path}`, { method: 'DELETE', headers: { origin } })
+
+const loggedOut = await settle(await logoutHandler.DELETE(remove('/api/device-auth')))
 check('logout succeeds and clears the device cookie',
   [loggedOut.status, loggedOut.body.ok,
    loggedOut.cookie.includes('__Host-navaratri_device_session='),
@@ -639,21 +673,19 @@ check('  it touches no other cookie',
   /admin_session|operator_session/.test(loggedOut.cookie), false)
 check('  it sets exactly one cookie', loggedOut.cookie.split('__Host-').length - 1, 1)
 await seed()
-await logoutHandler.POST(post('/api/device-logout', {}))
+await logoutHandler.DELETE(remove('/api/device-auth'))
 check('  and writes nothing', writes(), [])
-const crossSiteLogout = await settle(await logoutHandler.POST(
-  new Request(`${ORIGIN}/api/device-logout`, {
-    method: 'POST', headers: { origin: 'https://evil.test', 'content-type': 'application/json' }, body: '{}',
-  })))
+const crossSiteLogout = await settle(await logoutHandler.DELETE(
+  remove('/api/device-auth', 'https://evil.test')))
 check('  a cross-site logout is refused', [crossSiteLogout.status, crossSiteLogout.cookie], [403, null])
 
 console.log('  -- unconfigured device auth --')
 delete process.env.EVENT_DEVICE_SESSION_SECRET
-const unconfigured = await settle(await sessionHandler.GET(get('/api/device-session', deviceCookieHeader)))
+const unconfigured = await settle(await sessionHandler.GET(get('/api/device-auth', deviceCookieHeader)))
 check('a missing secret is a safe 503',
   [unconfigured.status, unconfigured.body], [503, { authenticated: false, configured: false }])
 const unconfiguredLogin = await settle(await loginHandler.POST(
-  post('/api/device-login', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
+  post('/api/device-auth', { eventSlug: 'navaratri-2026', loginName: 'desk-a', password: PASSPHRASE })))
 check('  and login refuses without authenticating',
   [unconfiguredLogin.status, unconfiguredLogin.body.configured, unconfiguredLogin.cookie],
   [503, false, null])
@@ -719,9 +751,21 @@ check('Operator Access still signs the BARE payload (no context)',
 check('Admin auth is unchanged',
   [/navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')),
    /MIN_ADMIN_ACCESS_CODE_LENGTH = 8/.test(read('server/admin-auth/environment.ts'))], [true, true])
-check('no Admin endpoint accepts a device cookie',
+/**
+ * Comments stripped: `api/admin-auth.ts` EXPLAINS that device auth is a
+ * separate Function, and naming it there is the point. What must not exist is
+ * an import or a cookie reference in code.
+ */
+check('no Admin endpoint reaches into the device realm',
   readdirSync(join(root, 'api')).filter((file) => file.startsWith('admin-'))
-    .filter((file) => /device-auth|DEVICE_SESSION_COOKIE/.test(read(`api/${file}`))), [])
+    .filter((file) =>
+      /server\/device-auth|DEVICE_SESSION_COOKIE|navaratri_device_session/
+        .test(stripComments(read(`api/${file}`)))), [])
+check('  and no device endpoint reaches into the Admin realm',
+  readdirSync(join(root, 'api')).filter((file) => file.startsWith('device-'))
+    .filter((file) =>
+      /server\/admin-auth|ADMIN_SESSION_COOKIE|navaratri_admin_session|server\/auth\//
+        .test(stripComments(read(`api/${file}`)))), [])
 check('  and sync-registration still uses the operator realm',
   [/operator/i.test(read('api/sync-registration.ts')),
    /device-auth/.test(read('api/sync-registration.ts'))], [true, false])
@@ -759,8 +803,10 @@ for (const needle of ['eventSlug', 'loginName', '__Host-navaratri_device_session
 check('  it states device login is not wired into the event app',
   /9C-C|not yet|does not/.test(deviceDoc), true)
 check('the firewall doc covers device login',
-  [/\/api\/device-login/.test(read('docs/VERCEL_FIREWALL.md')),
+  [/\/api\/device-auth/.test(read('docs/VERCEL_FIREWALL.md')),
    /30/.test(read('docs/VERCEL_FIREWALL.md'))], [true, true])
+check('  and only its POST method',
+  /### The method matters/.test(read('docs/VERCEL_FIREWALL.md')), true)
 check('AGENTS.md records the third realm',
   /third independent security realm|Device auth is a third/i.test(read('AGENTS.md')), true)
 check('.env.example documents the secret',

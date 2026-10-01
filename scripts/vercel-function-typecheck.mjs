@@ -45,6 +45,32 @@ const ts = require('typescript')
 const root = resolve(import.meta.dirname, '..')
 const apiDirectory = join(root, 'api')
 
+/**
+ * EVERY file under `api/` becomes a separate deployment Function, and the
+ * Hobby plan refuses a deployment with more than twelve. That limit is
+ * enforced at DEPLOY time, after the build has already succeeded, so nothing
+ * in a normal build reports it — a 14-function deployment built cleanly and
+ * then failed at "Deploying outputs…".
+ *
+ * A shared helper therefore never belongs in `api/`; it belongs in `server/`
+ * or `src/shared/`, which cost nothing.
+ */
+export const HOBBY_FUNCTION_LIMIT = 12
+
+/** The inventory this checkpoint expects, so a new file cannot slip in. */
+export const EXPECTED_FUNCTIONS = [
+  'admin-auth',
+  'admin-badge-assignment',
+  'admin-device-password',
+  'admin-devices',
+  'admin-events',
+  'device-auth',
+  'operator-login',
+  'operator-logout',
+  'operator-session',
+  'sync-registration',
+]
+
 /** Every serverless entrypoint, exactly as the platform enumerates them. */
 export const functionEntrypoints = () =>
   readdirSync(apiDirectory)
@@ -184,6 +210,36 @@ export const checkWebApiSurface = (entrypoint, options) => {
   return problems
 }
 
+/**
+ * The deployment Function budget, checked against the real files rather than
+ * against route strings.
+ */
+export const checkFunctionBudget = () => {
+  const actual = functionEntrypoints().map((file) =>
+    file.replace(`${apiDirectory}/`, '').replace(/\.ts$/, ''),
+  )
+  const problems = []
+
+  if (actual.length > HOBBY_FUNCTION_LIMIT) {
+    problems.push(
+      `${String(actual.length)} Functions exceeds the Hobby limit of ${String(HOBBY_FUNCTION_LIMIT)} — the deployment will be refused after the build succeeds`,
+    )
+  }
+
+  const unexpected = actual.filter((name) => !EXPECTED_FUNCTIONS.includes(name))
+  const missing = EXPECTED_FUNCTIONS.filter((name) => !actual.includes(name))
+
+  for (const name of unexpected) {
+    problems.push(`api/${name}.ts is a new Function and consumes deployment budget`)
+  }
+
+  for (const name of missing) {
+    problems.push(`api/${name}.ts is expected but missing`)
+  }
+
+  return { actual, problems }
+}
+
 /** Checks every entrypoint and returns the failures, keyed by file. */
 export const checkAllFunctions = () => {
   const options = rootFunctionOptions()
@@ -215,9 +271,25 @@ const isDirectInvocation = process.argv[1] !== undefined &&
 
 if (isDirectInvocation) {
   const entrypoints = functionEntrypoints()
+  const budget = checkFunctionBudget()
+
+  console.log('Vercel Functions:\n')
+
+  budget.actual.forEach((name, index) => {
+    console.log(`${String(index + 1).padStart(2)}  ${name}`)
+  })
 
   console.log(
-    `Vercel function typecheck — ${String(entrypoints.length)} entrypoints, each compiled alone\n`,
+    `\nTotal: ${String(budget.actual.length)} / ${String(HOBBY_FUNCTION_LIMIT)}` +
+      `   Headroom: ${String(HOBBY_FUNCTION_LIMIT - budget.actual.length)}\n`,
+  )
+
+  for (const problem of budget.problems) {
+    console.log(`BUDGET  ${problem}`)
+  }
+
+  console.log(
+    `Typecheck — ${String(entrypoints.length)} entrypoints, each compiled alone\n`,
   )
 
   const failures = checkAllFunctions()
@@ -258,7 +330,7 @@ if (isDirectInvocation) {
       : `\n${String(total)} error(s) across ${String(failures.size)} function(s). Vercel will report these.`,
   )
 
-  process.exit(failures.size === 0 ? 0 : 1)
+  process.exit(failures.size === 0 && budget.problems.length === 0 ? 0 : 1)
 }
 
 export { dirname }

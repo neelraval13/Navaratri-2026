@@ -56,13 +56,13 @@ not a meaningful threat against a strong passphrase.
 
 ## Admin login
 
-`POST /api/admin-login` is the second public, unauthenticated endpoint and
+`POST /api/admin-auth` is the second public, unauthenticated endpoint and
 needs its own rule. Admin is a higher-value credential and legitimate traffic
 is far lower, so the limit is tighter:
 
 | Setting | Value |
 |---|---|
-| **Condition — Path** | `/api/admin-login` |
+| **Condition — Path** | `/api/admin-auth` |
 | **Condition — Method** | `POST` |
 | **Action** | Rate Limit |
 | **Key** | IP |
@@ -77,7 +77,7 @@ message on 429 and reveals no address, counter or code correctness.
 
 ## Device login
 
-`POST /api/device-login` is the third public, unauthenticated endpoint.
+`POST /api/device-auth` is the third public, unauthenticated endpoint.
 
 **The limit must be looser than it looks like it should be.** Several event
 devices normally share the venue's Wi-Fi and leave through **one NAT address**,
@@ -86,7 +86,7 @@ the whole venue while an operator retypes a passphrase on one tablet.
 
 | Setting | Value |
 |---|---|
-| **Condition — Path** | `/api/device-login` |
+| **Condition — Path** | `/api/device-auth` |
 | **Condition — Method** | `POST` |
 | **Action** | Rate Limit |
 | **Key** | IP |
@@ -108,10 +108,25 @@ login name, unprovisioned device, wrong password — pays for a full scrypt
 derivation, so guessing is inherently expensive and every failure looks
 identical. See `docs/DEVICE_AUTH.md`.
 
-**Do not rate-limit `/api/device-session`**: it is called on startup and on
-reconnect, exactly like `/api/operator-session`, and blocking it would break
-a working desk rather than a guesser. **Do not rate-limit
-`/api/device-logout`** either.
+### The method matters
+
+`/api/admin-auth` and `/api/device-auth` each serve three operations,
+dispatched by HTTP method:
+
+| Method | Operation |
+|---|---|
+| `POST` | sign in — the only one worth rate-limiting |
+| `GET` | session introspection — called on startup and on reconnect |
+| `DELETE` | sign out |
+
+**Both rules must condition on `Method = POST`.** A rule on the path alone
+would throttle session checks and sign-outs too, and breaking a working desk's
+reconnect is worse than anything a guesser can do. Blocking a sign-out is
+worse than allowing it.
+
+That is an improvement on the previous shape: when login had its own path,
+the path was the whole condition and a mistake was invisible. Now the method
+is doing real work, so it must be set explicitly.
 
 ## Scope: this endpoint only
 

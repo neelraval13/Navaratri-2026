@@ -28,7 +28,7 @@ const BLOCK_MESSAGES: Record<string, string> = {
  * nothing about the deployment or about which devices exist.
  *
  * Phase 9C-A STORES the credential. It does not enable device login: there is
- * no device session, no cookie and no `/api/device-login`. Provisioning a
+ * no device session, no cookie and no device login. Provisioning a
  * password activates nothing.
  *
  * The reply carries no password, no hash, no salt, no derived key and no

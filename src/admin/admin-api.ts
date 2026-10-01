@@ -5,9 +5,13 @@ import {
 } from '@/admin/admin-access-store'
 import type { DeviceAttribute } from '@/shared/device-attributes'
 
-const SESSION_ENDPOINT = '/api/admin-session'
-const LOGIN_ENDPOINT = '/api/admin-login'
-const LOGOUT_ENDPOINT = '/api/admin-logout'
+/**
+ * One endpoint, three methods: POST signs in, GET introspects, DELETE signs
+ * out. Each file under `api/` is a deployment Function and the Hobby plan
+ * allows twelve, so the Admin credential's lifecycle spends one rather than
+ * three.
+ */
+const ADMIN_AUTH_ENDPOINT = '/api/admin-auth'
 const EVENTS_ENDPOINT = '/api/admin-events'
 const DEVICES_ENDPOINT = '/api/admin-devices'
 const BADGE_ENDPOINT = '/api/admin-badge-assignment'
@@ -150,7 +154,7 @@ export const refreshAdminAccess = async (): Promise<void> => {
   let response: Response
 
   try {
-    response = await request(SESSION_ENDPOINT, { method: 'GET' })
+    response = await request(ADMIN_AUTH_ENDPOINT, { method: 'GET' })
   } catch {
     setAdminAccess({ phase: 'unavailable', reason: 'unreachable' })
 
@@ -195,7 +199,7 @@ export const adminLogin = async (accessCode: string): Promise<AdminResult<true>>
   let response: Response
 
   try {
-    response = await request(LOGIN_ENDPOINT, mutation({ accessCode }, 'POST'))
+    response = await request(ADMIN_AUTH_ENDPOINT, mutation({ accessCode }, 'POST'))
   } catch {
     return { ok: false, message: ADMIN_MESSAGES.unreachable }
   }
@@ -228,7 +232,7 @@ export const adminLogin = async (accessCode: string): Promise<AdminResult<true>>
 /** Clears only the admin cookie. Operator Access is a separate realm. */
 export const adminLogout = async (): Promise<void> => {
   try {
-    await request(LOGOUT_ENDPOINT, { method: 'POST' })
+    await request(ADMIN_AUTH_ENDPOINT, { method: 'DELETE' })
   } catch {
     // The local state is still locked below.
   }

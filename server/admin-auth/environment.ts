@@ -19,7 +19,7 @@ export const ADMIN_AUTH_ENVIRONMENT_NAMES = [
  * The floor, not a recommendation.
  *
  * Admin can create devices and assign badge ranges for the whole event, so a
- * short code leans heavily on the edge rate limit for `/api/admin-login`
+ * short code leans heavily on the edge rate limit for `POST /api/admin-auth`
  * (5 attempts per minute per IP) and on the fixed wrong-code delay. Neither
  * is a substitute for entropy — use a passphrase well above this minimum.
  */

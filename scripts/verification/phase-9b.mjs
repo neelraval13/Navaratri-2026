@@ -86,10 +86,14 @@ check('  exactly 32 accepted', reason({ EVENT_ADMIN_SESSION_SECRET: 'y'.repeat(3
 check('  a short code leans on the edge rate limit, and the docs say so',
   [/5 attempts per minute per IP|5 attempts \/ 60 seconds/i.test(read('docs/ADMIN.md')),
    /floor, not a recommendation/i.test(read('docs/ADMIN.md'))], [true, true])
-check('  the admin login firewall rule is unchanged',
-  [/\/api\/admin-login/.test(read('docs/VERCEL_FIREWALL.md')),
+// The path consolidated to /api/admin-auth; the POLICY is unchanged, and the
+// rule must now also condition on the method, since one path serves three.
+check('  the admin login firewall policy is unchanged',
+  [/\/api\/admin-auth/.test(read('docs/VERCEL_FIREWALL.md')),
    /\| \*\*Limit\*\* \| 5 \|/.test(read('docs/VERCEL_FIREWALL.md')),
    /\| \*\*Window\*\* \| 60 seconds \|/.test(read('docs/VERCEL_FIREWALL.md'))], [true, true, true])
+check('  and it rate-limits POST only',
+  (read('docs/VERCEL_FIREWALL.md').match(/\| \*\*Condition — Method\*\* \| `POST` \|/g) ?? []).length, 3)
 check('  every doc states the same minimum',
   [/`EVENT_ADMIN_ACCESS_CODE` \(8\+\)/.test(read('README.md')),
    /minimum 8 characters/.test(read('docs/ADMIN.md')),
@@ -426,9 +430,11 @@ setOperatorAccess('locked', 'new-device')
 setAdminAccess('authenticated')
 check('Operator logout leaves the admin session alone',
   renderRoute('/admin', null).html.includes('Sign out'), true)
-check('  the admin logout endpoint clears only the admin cookie',
-  [/serializeClearedAdminSessionCookie/.test(read('api/admin-logout.ts')),
-   /operator/i.test(stripComments(read('api/admin-logout.ts')).replace(/isSameOriginAdminRequest/g, ''))],
+const adminAuthSource = read('api/admin-auth.ts')
+const adminLogoutBody = adminAuthSource.slice(adminAuthSource.indexOf('export function DELETE'))
+check('  the admin sign-out clears only the admin cookie',
+  [/serializeClearedAdminSessionCookie/.test(adminLogoutBody),
+   /operator/i.test(stripComments(adminLogoutBody).replace(/isSameOriginAdminRequest/g, ''))],
   [true, false])
 setOperatorAccess('unlocked')
 setAdminAccess('checking')
@@ -461,8 +467,8 @@ check('auth is verified BEFORE the database is consulted',
   httpSource.indexOf('verifyAdminSessionToken') < httpSource.indexOf('isDatabaseConfigured'), true)
 const adminRoutes = readdirSync(join(root, 'api')).filter((f) => f.startsWith('admin-'))
 check('admin API routes exist as Functions', adminRoutes.sort(),
-  ['admin-badge-assignment.ts', 'admin-device-password.ts', 'admin-devices.ts',
-   'admin-events.ts', 'admin-login.ts', 'admin-logout.ts', 'admin-session.ts'])
+  ['admin-auth.ts', 'admin-badge-assignment.ts', 'admin-device-password.ts',
+   'admin-devices.ts', 'admin-events.ts'])
 for (const file of ['api/admin-events.ts', 'api/admin-devices.ts', 'api/admin-badge-assignment.ts',
   'api/admin-device-password.ts']) {
   const source = stripComments(read(file))
@@ -733,6 +739,143 @@ check('none of the self-claim is implemented',
       /claimBadgeRange|admin-badge-claim|selfClaimRange|adoptCentralRange|heartbeat(At|_at)/
         .test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')), [])
+
+console.log('\n=== THE ADMIN REALM IS ONE FUNCTION, THREE METHODS ===')
+/**
+ * `admin-login`, `admin-session` and `admin-logout` were three deployment
+ * Functions for one credential's lifecycle. Every file under `api/` is a
+ * Function and the Hobby plan allows twelve, so they are now one endpoint
+ * dispatched by HTTP method. Behaviour is unchanged; only the path and the
+ * sign-out method moved.
+ */
+const adminAuthJiti = createJiti(import.meta.url, {
+  alias: {
+    '../db/client.js': `${HERE}/fake-admin-db.mjs`,
+    '../server/db/client.js': `${HERE}/fake-admin-db.mjs`,
+    '../db/schema.js': `${HERE}/fake-drizzle.mjs`,
+    'drizzle-orm': `${HERE}/fake-drizzle.mjs`,
+    '@': `${root}/src`,
+  },
+  interopDefault: true,
+})
+process.env.EVENT_ADMIN_ACCESS_CODE = CODE
+process.env.EVENT_ADMIN_SESSION_SECRET = SECRET
+const adminAuth = await adminAuthJiti.import(`${root}/api/admin-auth.ts`)
+
+const ADMIN_ORIGIN = 'https://admin.example.test'
+const adminRequest = (method, { body, cookie, origin = ADMIN_ORIGIN } = {}) =>
+  new Request(`${ADMIN_ORIGIN}/api/admin-auth`, {
+    method,
+    headers: {
+      ...(origin === null ? {} : { origin }),
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...(cookie === undefined ? {} : { cookie }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+const settleAdmin = async (response) => ({
+  status: response.status,
+  body: await response.json(),
+  cookie: response.headers.get('set-cookie'),
+  cacheControl: response.headers.get('cache-control'),
+})
+
+check('the Admin realm exports exactly three methods',
+  ['POST', 'GET', 'DELETE'].map((method) => typeof adminAuth[method]),
+  ['function', 'function', 'function'])
+check('  and nothing else',
+  Object.keys(adminAuth).filter((key) => /^[A-Z]+$/.test(key)).sort(),
+  ['DELETE', 'GET', 'POST'])
+check('  the three old Functions are gone',
+  ['api/admin-login.ts', 'api/admin-session.ts', 'api/admin-logout.ts']
+    .filter((file) => existsSync(join(root, file))), [])
+
+console.log('  -- POST signs in --')
+const adminIn = await settleAdmin(await adminAuth.POST(adminRequest('POST', { body: { accessCode: CODE } })))
+check('a correct access code authenticates',
+  [adminIn.status, adminIn.body.ok, adminIn.body.authenticated], [200, true, true])
+check('  it sets the Admin cookie with every attribute',
+  [adminIn.cookie.startsWith('__Host-navaratri_admin_session='),
+   ['Secure', 'HttpOnly', 'SameSite=Strict', 'Path=/', 'Max-Age=43200']
+     .every((attribute) => adminIn.cookie.includes(attribute)),
+   /Domain=/i.test(adminIn.cookie)], [true, true, false])
+check('  and touches no other realm\'s cookie',
+  /device_session|operator_session/.test(adminIn.cookie), false)
+check('  it is never cached', adminIn.cacheControl, 'no-store')
+const adminCookie = `__Host-navaratri_admin_session=${adminIn.cookie.split(';')[0].split('=')[1]}`
+
+const adminWrong = await settleAdmin(await adminAuth.POST(adminRequest('POST', { body: { accessCode: 'wrong-code-entirely' } })))
+check('a wrong code is 401 with no cookie',
+  [adminWrong.status, adminWrong.body.message, adminWrong.cookie],
+  [401, 'Access code is incorrect.', null])
+const adminCrossSite = await settleAdmin(
+  await adminAuth.POST(adminRequest('POST', { body: { accessCode: CODE }, origin: 'https://evil.test' })))
+check('  a cross-site sign-in is refused first',
+  [adminCrossSite.status, adminCrossSite.cookie], [403, null])
+
+console.log('  -- GET introspects --')
+const adminIntrospect = await settleAdmin(await adminAuth.GET(adminRequest('GET', { cookie: adminCookie })))
+check('a valid cookie is authenticated',
+  [adminIntrospect.status, adminIntrospect.body.authenticated, adminIntrospect.body.configured],
+  [200, true, true])
+check('  the safe fields are unchanged',
+  Object.keys(adminIntrospect.body).sort(), ['authenticated', 'configured', 'databaseConfigured'])
+check('  and it is never cached', adminIntrospect.cacheControl, 'no-store')
+const adminAnon = await settleAdmin(await adminAuth.GET(adminRequest('GET')))
+check('no cookie is unauthenticated, not an error',
+  [adminAnon.status, adminAnon.body.authenticated], [200, false])
+const adminForeign = await settleAdmin(await adminAuth.GET(adminRequest('GET', {
+  cookie: '__Host-navaratri_device_session=x; __Host-navaratri_operator_session=y',
+})))
+check('  a device or operator cookie authorizes nothing here',
+  [adminForeign.status, adminForeign.body.authenticated], [200, false])
+
+console.log('  -- DELETE signs out --')
+const adminOut = await settleAdmin(await adminAuth.DELETE(adminRequest('DELETE')))
+check('logout clears the Admin cookie',
+  [adminOut.status, adminOut.body.ok,
+   adminOut.cookie.includes('__Host-navaratri_admin_session='),
+   adminOut.cookie.includes('Max-Age=0')], [200, true, true, true])
+check('  it leaves the Device cookie alone',
+  /navaratri_device_session/.test(adminOut.cookie), false)
+check('  and the Operator cookie alone',
+  /navaratri_operator_session/.test(adminOut.cookie), false)
+check('  it sets exactly one cookie', adminOut.cookie.split('__Host-').length - 1, 1)
+const adminOutCrossSite = await settleAdmin(await adminAuth.DELETE(adminRequest('DELETE', { origin: 'https://evil.test' })))
+check('  a cross-site sign-out is refused',
+  [adminOutCrossSite.status, adminOutCrossSite.cookie], [403, null])
+
+fakeDb.state.applied = []
+await adminAuth.DELETE(adminRequest('DELETE'))
+await adminAuth.GET(adminRequest('GET', { cookie: adminCookie }))
+check('  neither sign-out nor introspection writes anything', writes(), [])
+
+console.log('\n=== DEPLOYMENT FUNCTION BUDGET ===')
+const functionChecker = await import('../vercel-function-typecheck.mjs')
+const budget = functionChecker.checkFunctionBudget()
+
+console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_FUNCTION_LIMIT)}` +
+  `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
+for (const [index, name] of budget.actual.entries()) console.log(`    ${String(index + 1).padStart(2)}  ${name}`)
+
+check('the inventory is exactly the expected ten', budget.actual, [
+  'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
+  'admin-events', 'device-auth', 'operator-login', 'operator-logout',
+  'operator-session', 'sync-registration',
+])
+check('  which is within the Hobby limit',
+  budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('  and nothing unexpected', budget.problems, [])
+check('no api file is a helper rather than a Function',
+  functionChecker.functionEntrypoints()
+    .filter((file) => !/export (async )?function (GET|POST|DELETE|PUT|PATCH)\(/
+      .test(readFileSync(file, 'utf8')))
+    .map((file) => file.replace(`${root}/`, '')), [])
+check('the Operator realm was NOT consolidated',
+  ['operator-login', 'operator-session', 'operator-logout']
+    .every((name) => budget.actual.includes(name)), true)
 
 console.log('\n=== CLIENT SAFETY ===')
 const clientFiles = walkSource(join(root, 'src')).map((f) => ({ file: f.replace(`${root}/src/`, ''), code: read(`src/${f.replace(`${root}/src/`, '')}`) }))
