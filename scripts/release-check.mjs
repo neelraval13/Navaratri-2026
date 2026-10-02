@@ -51,6 +51,7 @@ const SUSPICIOUS_CREDENTIAL_FILENAMES = new Set([
 
 const SERVER_ONLY_NAMES = [
   'DATABASE_URL',
+  'EVENT_DEVICE_OFFLINE_PRIVATE_KEY_PKCS8_B64',
   'EVENT_ADMIN_ACCESS_CODE',
   'EVENT_ADMIN_SESSION_SECRET',
   'EVENT_DEVICE_SESSION_SECRET',
@@ -64,7 +65,12 @@ const SERVER_ONLY_NAMES = [
   'SYNC_ALLOWED_VERCEL_ENV',
 ]
 
-const CLIENT_NAMES = ['VITE_UPI_ID', 'VITE_UPI_PAYEE_NAME']
+const CLIENT_NAMES = [
+  'VITE_UPI_ID',
+  'VITE_UPI_PAYEE_NAME',
+  // Intentionally public: the VERIFICATION half of the offline lease key.
+  'VITE_EVENT_DEVICE_OFFLINE_PUBLIC_KEY_SPKI_B64',
+]
 
 const REQUIRED_FILES = [
   '.env.example',
@@ -97,6 +103,11 @@ const REQUIRED_FILES = [
   'api/device-auth.ts',
   'src/device-auth/device-api.ts',
   'src/shared/badge-claim-contract.ts',
+  'src/shared/device-offline-authorization.ts',
+  'server/device-auth/offline-authorization.ts',
+  'src/device-auth/offline-authorization.ts',
+  'src/device-auth/offline-lease.ts',
+  'src/db/central-offline-authorization.ts',
   'server/badge-assignments/conflicts.ts',
   'server/db/constraints.ts',
   'src/device-auth/device-session-contract.ts',
@@ -1624,6 +1635,150 @@ addCheck(
   'badge-self-claim',
   'A device may claim a badge range centrally only while authenticated and online',
   selfClaimProblems,
+)
+
+// --- I3. the signed offline authorization lease ---------------------------
+/**
+ * A server-signed statement of what a device was allowed to do, verified in
+ * the browser with the PUBLIC half of a P-256 pair. It authorizes LOCAL
+ * decisions until it expires; no endpoint accepts it as a credential.
+ */
+const offlineProblems = []
+const PRIVATE_KEY_NAME = 'EVENT_DEVICE_OFFLINE_PRIVATE_KEY_PKCS8_B64'
+const offlineIssuer = readText(join(ROOT, 'server/device-auth/offline-authorization.ts'))
+const offlineShared = readText(join(ROOT, 'src/shared/device-offline-authorization.ts'))
+const offlineVerifier = readText(join(ROOT, 'src/device-auth/offline-authorization.ts'))
+
+if (offlineIssuer === null || offlineShared === null || offlineVerifier === null) {
+  offlineProblems.push('the offline authorization issuer, contract or verifier is missing')
+} else {
+  // The SIGNING key is server-only. Browser code may not even name it.
+  for (const path of walk(join(ROOT, 'src'))) {
+    if (!isTextFile(basename(path))) {
+      continue
+    }
+
+    const text = readText(path) ?? ''
+
+    if (text.includes(PRIVATE_KEY_NAME)) {
+      offlineProblems.push(`${rel(path)} names the offline signing key`)
+    }
+
+    if (/PRIVATE KEY|createPrivateKey|dsaEncoding|node:crypto/.test(stripComments(text))) {
+      offlineProblems.push(`${rel(path)} carries private-key or signing material`)
+    }
+  }
+
+  // Asymmetric, so the browser can verify without being able to sign.
+  if (!/ECDSA/.test(offlineVerifier) || !/'verify'/.test(offlineVerifier)) {
+    offlineProblems.push('the browser verifier is not an asymmetric verify-only path')
+  }
+
+  if (/createHmac|HMAC/.test(stripComments(offlineIssuer))) {
+    offlineProblems.push('the offline lease is signed with an HMAC rather than a key pair')
+  }
+
+  // WebCrypto accepts only the raw r‖s signature encoding.
+  if (!/ieee-p1363/.test(offlineIssuer)) {
+    offlineProblems.push('the issuer does not emit the WebCrypto signature encoding')
+  }
+
+  // Minimal claims: no credential, no attendee data, no allocator.
+  const claimsShape = /export interface DeviceOfflineClaims \{([\s\S]*?)\n\}/
+    .exec(offlineShared)?.[1] ?? ''
+
+  if (claimsShape === '') {
+    offlineProblems.push('DeviceOfflineClaims is not declared')
+  }
+
+  for (const forbidden of [
+    'nextBadge', 'password', 'passwordHash', 'token', 'cookie', 'sessionVersion',
+    'phone', 'attendee', 'name:', 'age', 'gender', 'payment',
+  ]) {
+    if (claimsShape.includes(forbidden)) {
+      offlineProblems.push(`the offline lease claims carry ${forbidden}`)
+    }
+  }
+
+  // Offline authority always expires, and never outlives the event.
+  if (!/MAX_DEVICE_OFFLINE_LEASE_SECONDS = 24 \* 60 \* 60/.test(offlineShared)) {
+    offlineProblems.push('the offline lease has no 24 hour maximum')
+  }
+
+  if (!/eventEndsAt/.test(offlineIssuer) || !/Math\.min/.test(offlineIssuer)) {
+    offlineProblems.push('the offline lease expiry is not capped by the event end')
+  }
+
+  // The lease is never a server credential.
+  for (const file of readdirSync(join(ROOT, 'api'))) {
+    if (!file.endsWith('.ts')) {
+      continue
+    }
+
+    const code = stripComments(readText(join(ROOT, 'api', file)) ?? '')
+
+    if (/verifyOfflineAuthorization|offline-lease|Bearer/.test(code)) {
+      offlineProblems.push(`api/${file} treats the offline lease as authentication`)
+    }
+  }
+
+  // Phase 9C-C3A is foundation only: no route may consult it.
+  for (const file of [
+    'src/components/event-app-gate.tsx',
+    'src/components/app-router.tsx',
+    'src/components/operator/operator-access-gate.tsx',
+  ]) {
+    const code = stripComments(readText(join(ROOT, file)) ?? '')
+
+    if (/offline-lease|verifyOfflineAuthorization|offlineAuthorization/.test(code)) {
+      offlineProblems.push(`${file} authorizes a route from the offline lease`)
+    }
+  }
+
+  // No heartbeat: the lease refreshes on operations that already happen.
+  for (const file of [
+    'src/device-auth/offline-lease.ts',
+    'src/device-auth/offline-authorization.ts',
+    'src/components/device-auth/device-enrollment-panel.tsx',
+  ]) {
+    const code = stripComments(readText(join(ROOT, file)) ?? '')
+
+    if (/setInterval|setTimeout\(/.test(code)) {
+      offlineProblems.push(`${file} polls or revalidates on a timer`)
+    }
+  }
+
+  // A network failure is not a revocation.
+  const panel = stripComments(
+    readText(join(ROOT, 'src/components/device-auth/device-enrollment-panel.tsx')) ?? '',
+  )
+
+  /**
+   * Sliced to the BRANCH, not matched across it: the two cases sit next to
+   * each other, so a window-based regex would read the definitive branch's
+   * revocation as the unreachable branch's and report the opposite of the
+   * truth.
+   */
+  const unreachableStart = panel.indexOf("session.status === 'unreachable'")
+  const definitiveStart = panel.indexOf("session.status === 'unauthenticated'")
+
+  if (unreachableStart === -1 || definitiveStart === -1 || definitiveStart < unreachableStart) {
+    offlineProblems.push('the offline revocation branches could not be located')
+  } else {
+    if (/revokeOfflineAuthorization/.test(panel.slice(unreachableStart, definitiveStart))) {
+      offlineProblems.push('an unreachable server clears the offline lease')
+    }
+
+    if (!/revokeOfflineAuthorization/.test(panel.slice(definitiveStart))) {
+      offlineProblems.push('a definitively rejected session does not clear the offline lease')
+    }
+  }
+}
+
+addCheck(
+  'device-offline-authorization',
+  'The offline authorization lease is signed, expiring, and never a server credential',
+  offlineProblems,
 )
 
 if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 1) {

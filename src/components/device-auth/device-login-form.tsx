@@ -7,10 +7,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { loginDevice } from '@/device-auth/device-api'
-import type { DeviceSessionContext } from '@/device-auth/device-session-contract'
+import type {
+  DeviceSessionContext,
+  OfflineAuthorizationEnvelope,
+} from '@/device-auth/device-session-contract'
 
 interface DeviceLoginFormProps {
-  onAuthenticated: (context: DeviceSessionContext) => void
+  onAuthenticated: (
+    context: DeviceSessionContext,
+    offlineAuthorization: OfflineAuthorizationEnvelope,
+  ) => void
 }
 
 /**
@@ -66,7 +72,7 @@ const DeviceLoginForm: React.FC<DeviceLoginFormProps> = ({ onAuthenticated }) =>
 
     // The plaintext leaves React state the moment the server accepts it.
     setPassword('')
-    onAuthenticated(result.context)
+    onAuthenticated(result.context, result.offlineAuthorization)
   }
 
   return (

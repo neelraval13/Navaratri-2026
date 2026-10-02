@@ -1656,6 +1656,86 @@ session and the database constraints are authoritative, so it gets no
 unauthenticated login-style firewall rule. The `POST /api/device-auth` rule is
 unchanged.
 
+## Offline Device Authorization
+
+A desk must survive a venue internet outage, but a boolean in IndexedDB is not
+authorization — anyone with the device can edit it. The server therefore signs
+a SHORT-LIVED OFFLINE AUTHORIZATION LEASE and the browser verifies it with no
+network.
+
+ASYMMETRIC, and it must stay so: ECDSA P-256 / SHA-256, `node:crypto` to sign
+and Web Crypto to verify. NEVER an HMAC — that would put the signing secret in
+the bundle, and anyone holding the bundle could mint themselves Registration
+or Prizes access. No JWT package and no crypto library: the platform provides
+both halves.
+
+`EVENT_DEVICE_OFFLINE_PRIVATE_KEY_PKCS8_B64` is SERVER-ONLY and never `VITE_`
+prefixed, never in `src/`, never in a response, IndexedDB, localStorage or a
+log — only the problem is logged, never a value. The curve is validated on
+read: a non-P-256 key signs happily and produces a signature the browser can
+never accept, and that failure would appear only at an offline desk.
+
+`VITE_EVENT_DEVICE_OFFLINE_PUBLIC_KEY_SPKI_B64` is INTENTIONALLY PUBLIC. It
+verifies a lease and cannot create one.
+
+The token is `<base64url payload>.<base64url signature>` over the
+domain-separated bytes `navaratri-device-offline-v1:<encodedPayload>` — the
+ENCODED payload, so the bytes on the wire are the bytes that were signed and
+no canonical-JSON question arises. Node signs with `dsaEncoding:
+'ieee-p1363'`, the raw r‖s pair WebCrypto requires; Node's DER default is
+rejected by `crypto.subtle.verify`.
+
+Claims are MINIMAL: `v`, `t`, `deviceId`, `eventId`, `eventSlug`,
+`attributes`, `activeBadgeRange`, `iat`, `exp`. Never a password or hash, a
+session token or cookie, `sessionVersion`, an Admin or operator credential,
+ANY attendee data, `nextBadge`, or this browser's local Phase 7 identity.
+`activeBadgeRange` is carried because offline Registration must eventually
+prove WHICH central assignment was authorized; it is not an allocator.
+
+`exp = min(now + 24h, event.endsAt)`. Offline authority ALWAYS expires, an
+ended event yields NO lease, and an expired lease is never extended locally —
+only the server issues one. Five minutes of clock skew is tolerated; an `iat`
+beyond that is rejected.
+
+THE LEASE IS NEVER A CENTRAL API CREDENTIAL. It is readable by JavaScript
+because the browser must verify it offline, and its power is LOCAL
+authorization until `exp`. `/api/device-auth`, `/api/device-badge-claim`, the
+Admin APIs and `/api/sync-registration` all keep requiring their own cookies;
+no endpoint reads it and the browser never puts it in a header or a cookie.
+
+It is issued beside the session cookie on operations that ALREADY happen —
+login, an explicit session check, and a successful self-claim. There is NO
+timer, NO polling and NO heartbeat. Unconfigured signing returns
+`{ configured: false }` and leaves online device authentication untouched; a
+fake lease is never invented.
+
+SAVE ONLY WHAT VERIFIES. A token is stored only after its signature holds, its
+claims parse, its clock is sane AND it describes the same device, event,
+attributes and badge range the server returned in that same response. Only the
+TOKEN is stored, in `centralDeviceOfflineAuthorization` — one optional field
+on the existing config row, separate from `centralDeviceEnrollment` and
+`centralBadgeRangeBinding`, no Dexie version bump. No decoded claim is ever
+stored beside it: a second unsigned copy of what a device may do is exactly
+what an attacker would edit. Every read verifies again.
+
+A successful sign-out and Clear Central Enrollment both drop the lease with
+the enrollment, in ONE transaction. A FAILED sign-out keeps it — nothing was
+revoked. A server answer that DEFINITIVELY rejects the session clears it; a
+timeout, an unreachable host or a 5xx NEVER does. A NETWORK FAILURE IS NOT A
+REVOCATION, and treating one as revocation would disable a desk at exactly the
+moment its offline authority is what keeps it working. The badge range,
+`nextBadge`, `centralBadgeRangeBinding`, registrations and the outbox survive
+all of these.
+
+Only VERIFIED claims are ever displayed. Offline, a valid lease is described
+as "Offline authorization lease valid" and NEVER as "Authenticated": nobody
+asked the server, and the signature is the only thing proven.
+
+Phase 9C-C3A is FOUNDATION ONLY. The lease unlocks nothing: `/`,
+`/badge-registration` and `/device-registration` still answer to Operator
+Access, no route consults it and no `DeviceAccessGate` exists. Phase 9C-C3B
+wires it to event routes, and production configuration is required first.
+
 ## Central Database
 
 PostgreSQL (Neon) is the CENTRAL OPERATIONAL AUTHORITY: events, devices,

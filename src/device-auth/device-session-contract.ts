@@ -210,3 +210,32 @@ export const withActiveBadgeRange = (
   },
   activeBadgeRange,
 })
+
+/**
+ * The offline-authorization envelope that rides beside a device context.
+ *
+ * `configured: false` is a normal answer: a deployment without signing keys
+ * still authenticates devices online. The token is NOT validated here — only
+ * its SHAPE is. A token means nothing until `verifyOfflineAuthorization`
+ * checks the signature, so nothing may act on it before that.
+ */
+export type OfflineAuthorizationEnvelope =
+  | { configured: false }
+  | { configured: true; token: string; expiresAt: string }
+
+export const parseOfflineAuthorizationEnvelope = (
+  value: unknown,
+): OfflineAuthorizationEnvelope => {
+  if (!isRecord(value) || value.configured !== true) {
+    // Anything unrecognised is treated as "not configured" rather than as an
+    // error: an unusable lease and an absent one permit exactly the same
+    // things, which is nothing.
+    return { configured: false }
+  }
+
+  if (!isNonEmpty(value.token) || !isNonEmpty(value.expiresAt)) {
+    return { configured: false }
+  }
+
+  return { configured: true, token: value.token, expiresAt: value.expiresAt }
+}

@@ -33,7 +33,12 @@ import { verifyDeviceSessionToken } from './session.js'
  * 3. the session — everything after this point is for an authenticated device
  */
 export type DeviceAuthorization =
-  | { ok: true; context: AuthenticatedDeviceContext }
+  | {
+      ok: true
+      context: AuthenticatedDeviceContext
+      /** Server-only; caps an offline authorization lease. Never returned. */
+      eventEndsAt: Date | null
+    }
   | { ok: false; response: Response }
 
 const UNAUTHORIZED = {
@@ -98,15 +103,15 @@ export const authorizeDeviceRequest = async (
    * Admin disabling it, resetting its password or deactivating the event
    * takes effect without waiting for the cookie to expire.
    */
-  const context = await loadDeviceSessionContext({
+  const state = await loadDeviceSessionContext({
     deviceId: claims.deviceId,
     eventId: claims.eventId,
     sessionVersion: claims.sv,
   })
 
-  if (context === null) {
+  if (state === null) {
     return { ok: false, response: deviceJson(UNAUTHORIZED, 401) }
   }
 
-  return { ok: true, context }
+  return { ok: true, context: state.context, eventEndsAt: state.eventEndsAt }
 }

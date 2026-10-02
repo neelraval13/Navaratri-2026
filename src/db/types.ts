@@ -138,8 +138,35 @@ export interface EventConfig {
    * hand-typed Phase 7 setup. A later reconnect needs to tell those two apart.
    */
   centralBadgeRangeBinding?: CentralBadgeRangeBinding
+  /**
+   * The signed OFFLINE AUTHORIZATION LEASE this browser last verified.
+   *
+   * Separate from both records above, because it is the only one of the three
+   * that can be trusted without a server: the other two are unsigned local
+   * metadata, this is a server signature over what the device was allowed to
+   * do and until when.
+   */
+  centralDeviceOfflineAuthorization?: CentralDeviceOfflineAuthorization
   /** ISO 8601 UTC. */
   updatedAt: string
+}
+
+/**
+ * The cached offline lease. THE TOKEN IS THE AUTHORITY.
+ *
+ * No decoded claim is stored beside it — not the attributes, not the badge
+ * range, not the expiry. A second unsigned copy of "what this device may do"
+ * would be trivially editable and indistinguishable from the signed answer,
+ * so every read verifies the signature again with the pinned public key.
+ *
+ * `receivedAt` is local bookkeeping only. It grants nothing and is never
+ * used in place of the signed `exp`.
+ */
+export interface CentralDeviceOfflineAuthorization {
+  /** `<base64url payload>.<base64url P-256 signature>`. */
+  token: string
+  /** ISO 8601 UTC, when this browser verified and stored it. */
+  receivedAt: string
 }
 
 /**

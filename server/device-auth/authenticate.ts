@@ -118,6 +118,7 @@ interface EventRow {
   name: string
   timezone: string
   active: boolean
+  endsAt: Date | null
 }
 
 /**
@@ -187,6 +188,12 @@ export type DeviceLoginResult =
       deviceId: string
       eventId: string
       sessionVersion: number
+      /**
+       * SERVER-ONLY, deliberately outside the safe context: it caps how long
+       * an offline authorization lease may live. It is never returned to a
+       * browser as part of the device context.
+       */
+      eventEndsAt: Date | null
     }
   /** Every credential failure, indistinguishable from the others. */
   | { ok: false; reason: 'invalid-credentials' }
@@ -277,6 +284,7 @@ export const authenticateDevice = async (credentials: {
     deviceId: device.id,
     eventId: device.eventId,
     sessionVersion: device.sessionVersion,
+    eventEndsAt: event.endsAt,
   }
 }
 
@@ -297,12 +305,21 @@ export const authenticateDevice = async (credentials: {
  * Attributes and the badge range are read fresh, so an Admin change is
  * reflected on the next check without a new cookie. `last_seen_at` is NOT
  * touched: checking a session is not evidence of device activity.
+ *
+ * It returns the safe context PLUS the event's end, which is server-only: an
+ * offline authorization lease may never outlive the event, and the safe
+ * context must not grow a field to carry that.
  */
+export interface DeviceSessionState {
+  context: AuthenticatedDeviceContext
+  eventEndsAt: Date | null
+}
+
 export const loadDeviceSessionContext = async (claims: {
   deviceId: string
   eventId: string
   sessionVersion: number
-}): Promise<AuthenticatedDeviceContext | null> => {
+}): Promise<DeviceSessionState | null> => {
   const [device] = await getDatabase()
     .select()
     .from(devices)
@@ -328,5 +345,8 @@ export const loadDeviceSessionContext = async (claims: {
     return null
   }
 
-  return toContext(device, event, device.lastSeenAt)
+  return {
+    context: await toContext(device, event, device.lastSeenAt),
+    eventEndsAt: event.endsAt,
+  }
 }

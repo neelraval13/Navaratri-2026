@@ -171,6 +171,26 @@ badge stack actually standing at that desk, which no software can verify.
 | 3.27 | No desk left in "Central range claimed, but local setup could not be completed" — that desk must not issue badges | ☐ |
 | 3.28 | No desk left showing "Claim status could not be confirmed" without a Refresh Device Status to settle it | ☐ |
 
+### Offline device authorization (Phase 9C-C3A)
+
+The signed lease is **foundation only** in this phase: it is issued, verified
+and displayed, and it unlocks nothing. Event routes still answer to Operator
+Access, so these steps prepare the ground rather than gate the event.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.29 | A P-256 key pair generated for this deployment, never reused from another environment | ☐ |
+| 3.30 | `EVENT_DEVICE_OFFLINE_PRIVATE_KEY_PKCS8_B64` set **server-side only**, never with a `VITE_` prefix | ☐ |
+| 3.31 | `VITE_EVENT_DEVICE_OFFLINE_PUBLIC_KEY_SPKI_B64` set to the **matching** public key — a mismatched pair verifies nothing, and only an offline desk would discover it | ☐ |
+| 3.32 | The private key is not in the repository, not in a commit, not in a screenshot and not in a chat message | ☐ |
+| 3.33 | `events.ends_at` set for the event, so every lease is capped by it rather than by 24 hours alone | ☐ |
+| 3.34 | A device signed in once online and `/device-login` shows **Available offline** with a sensible *Valid until* | ☐ |
+
+Leaving both unset is a valid production state for C3A: device sign-in works,
+the page reports offline authorization unavailable, and nothing fails open.
+**Phase 9C-C3B is required before a device lease can unlock event
+operations,** and it must not be switched on until these are configured.
+
 **There is no undo.** Nothing in the application releases, edits, transfers or
 extends a central badge range, so a range claimed against the wrong desk has to
 be reconciled by hand in the database before the event. Reserve a range only

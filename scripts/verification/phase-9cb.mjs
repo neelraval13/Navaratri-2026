@@ -367,11 +367,20 @@ check('  and it is a real parseable scrypt record',
     /scrypt\$v1\$[^']+/.exec(read('server/device-auth/authenticate.ts'))[0]), false)
 
 console.log('\n=== 40-53. SESSION RE-AUTHORIZATION ===')
-const context = (over = {}) =>
+/**
+ * Phase 9C-C3A made this return `{ context, eventEndsAt }`: an offline
+ * authorization lease may not outlive the event, and the SAFE context must
+ * not grow a field to carry that. The helper unwraps, so every assertion
+ * below still reads the context itself.
+ */
+const sessionState = (over = {}) =>
   authenticate.loadDeviceSessionContext({ deviceId: DEVICE_ID, eventId: EVENT_ID, sessionVersion: 3, ...over })
+const context = async (over = {}) => (await sessionState(over))?.context ?? null
 
 await seed()
 check('a current session is authorized', (await context()) !== null, true)
+check('  and carries the event end for the offline lease, server-side only',
+  [(await sessionState()).eventEndsAt, 'endsAt' in (await context()).event], [null, false])
 check('  a session version BEHIND the database is not', (await context({ sessionVersion: 2 })) !== null, false)
 check('  a session version AHEAD of it is not', (await context({ sessionVersion: 4 })) !== null, false)
 
@@ -579,8 +588,14 @@ check('  it sets the device cookie with every attribute',
      .every((attribute) => loggedIn.cookie.includes(attribute)),
    /Domain=/i.test(loggedIn.cookie)], [true, true, false])
 check('  and is never cached', loggedIn.cacheControl, 'no-store')
-check('  the body carries the safe context only',
-  Object.keys(loggedIn.body).sort(), ['activeBadgeRange', 'authenticated', 'device', 'event', 'ok'])
+// 9C-C3A adds the offline authorization envelope BESIDE the context. It is
+// never instead of the cookie, and it is `{ configured: false }` here.
+check('  the body carries the safe context plus the lease envelope',
+  Object.keys(loggedIn.body).sort(),
+  ['activeBadgeRange', 'authenticated', 'device', 'event', 'offlineAuthorization', 'ok'])
+check('  the cookie is still what authenticates; the lease is not a credential',
+  [loggedIn.body.offlineAuthorization, loggedIn.cookie.startsWith('__Host-navaratri_device_session=')],
+  [{ configured: false }, true])
 check('  with no secret of any kind',
   /password|hash|salt|scrypt|sessionVersion|session_version|enabled/i.test(JSON.stringify(loggedIn.body)), false)
 

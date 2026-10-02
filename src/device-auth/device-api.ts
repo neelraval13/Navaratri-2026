@@ -1,8 +1,10 @@
 import {
   parseDeviceBadgeRange,
   parseDeviceSessionContext,
+  parseOfflineAuthorizationEnvelope,
   type DeviceBadgeRange,
   type DeviceSessionContext,
+  type OfflineAuthorizationEnvelope,
 } from '@/device-auth/device-session-contract'
 import { isBadgeClaimConflict } from '@/shared/badge-claim-contract'
 import { CURRENT_EVENT_SLUG } from '@/shared/event'
@@ -64,7 +66,12 @@ export const DEVICE_MESSAGES = {
 } as const
 
 export type DeviceLoginResult =
-  | { ok: true; context: DeviceSessionContext }
+  | {
+      ok: true
+      context: DeviceSessionContext
+      /** Shape-checked only. Nothing may act on it before verification. */
+      offlineAuthorization: OfflineAuthorizationEnvelope
+    }
   | { ok: false; message: string }
 
 /**
@@ -73,7 +80,11 @@ export type DeviceLoginResult =
  * enrollment may be shown as "last verified" rather than as an error.
  */
 export type DeviceSessionResult =
-  | { status: 'authenticated'; context: DeviceSessionContext }
+  | {
+      status: 'authenticated'
+      context: DeviceSessionContext
+      offlineAuthorization: OfflineAuthorizationEnvelope
+    }
   | { status: 'unauthenticated' }
   | { status: 'not-configured' }
   | { status: 'unreachable' }
@@ -175,14 +186,23 @@ export const loginDevice = async (credentials: {
     return { ok: false, message: DEVICE_MESSAGES.unexpected }
   }
 
-  const context = parseDeviceSessionContext(await readJson(response))
+  const body = await readJson(response)
+  const context = parseDeviceSessionContext(body)
 
   // A 200 that does not validate is not a login.
   if (context === null) {
     return { ok: false, message: DEVICE_MESSAGES.unexpected }
   }
 
-  return { ok: true, context }
+  return {
+    ok: true,
+    context,
+    offlineAuthorization: parseOfflineAuthorizationEnvelope(
+      typeof body === 'object' && body !== null
+        ? (body as { offlineAuthorization?: unknown }).offlineAuthorization
+        : null,
+    ),
+  }
 }
 
 /**
@@ -225,7 +245,17 @@ export const getDeviceSession = async (): Promise<DeviceSessionResult> => {
 
   const context = parseDeviceSessionContext(body)
 
-  return context === null ? { status: 'unexpected' } : { status: 'authenticated', context }
+  if (context === null) {
+    return { status: 'unexpected' }
+  }
+
+  return {
+    status: 'authenticated',
+    context,
+    offlineAuthorization: parseOfflineAuthorizationEnvelope(
+      (body as { offlineAuthorization?: unknown }).offlineAuthorization,
+    ),
+  }
 }
 
 /**
@@ -254,9 +284,18 @@ export const logoutDevice = async (): Promise<{ ok: boolean }> => {
  * caller must re-check central state rather than assume either outcome.
  */
 export type DeviceBadgeClaimResult =
-  | { status: 'claimed'; activeBadgeRange: DeviceBadgeRange }
+  | {
+      status: 'claimed'
+      activeBadgeRange: DeviceBadgeRange
+      /** Re-issued from the authoritative POST-CLAIM central state. */
+      offlineAuthorization: OfflineAuthorizationEnvelope
+    }
   /** An identical range was already reserved for this device. Idempotent. */
-  | { status: 'already-claimed'; activeBadgeRange: DeviceBadgeRange }
+  | {
+      status: 'already-claimed'
+      activeBadgeRange: DeviceBadgeRange
+      offlineAuthorization: OfflineAuthorizationEnvelope
+    }
   /** This device owns a DIFFERENT range. Its own range, when readable. */
   | {
       status: 'already-assigned'
@@ -415,5 +454,11 @@ export const claimDeviceBadgeRange = async (input: {
     return { status: 'unexpected', message: DEVICE_MESSAGES.claimFailed }
   }
 
-  return { status: outcome, activeBadgeRange }
+  return {
+    status: outcome,
+    activeBadgeRange,
+    offlineAuthorization: parseOfflineAuthorizationEnvelope(
+      (body as { offlineAuthorization?: unknown }).offlineAuthorization,
+    ),
+  }
 }

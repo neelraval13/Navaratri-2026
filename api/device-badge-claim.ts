@@ -6,7 +6,9 @@ import {
   reserveBadgeRange,
   type CentralBadgeRange,
 } from '../server/badge-assignments/reserve.js'
+import type { AuthenticatedDeviceContext } from '../server/device-auth/authenticate.js'
 import { authorizeDeviceRequest } from '../server/device-auth/authorize.js'
+import { issueDeviceOfflineAuthorization } from '../server/device-auth/offline-authorization.js'
 import { deviceJson, readDeviceBody } from '../server/device-auth/http.js'
 import { parseDeviceBadgeClaimInput } from '../server/device-auth/requests.js'
 
@@ -40,12 +42,31 @@ const MESSAGES = {
   unexpected: 'That badge range could not be claimed. Try again.',
 } as const
 
-const claimed = (range: CentralBadgeRange, status: 200 | 201): Response =>
+/**
+ * A successful claim CHANGES central badge ownership, so the lease the
+ * browser is holding is stale the moment it returns. A fresh one is issued
+ * from the authoritative post-claim state, which spares the caller an extra
+ * session round trip purely to catch up.
+ *
+ * A REFUSED claim issues none: nothing changed, and a new lease would imply
+ * it had.
+ */
+const claimed = (
+  range: CentralBadgeRange,
+  status: 200 | 201,
+  authorized: { context: AuthenticatedDeviceContext; eventEndsAt: Date | null },
+): Response =>
   deviceJson(
     {
       ok: true,
       outcome: status === 201 ? 'claimed' : 'already-claimed',
       activeBadgeRange: range,
+      offlineAuthorization: issueDeviceOfflineAuthorization({
+        // The range the device now owns, not the one the session was loaded
+        // with: the claim is what made them differ.
+        context: { ...authorized.context, activeBadgeRange: range },
+        eventEndsAt: authorized.eventEndsAt,
+      }),
     },
     status,
   )
@@ -80,11 +101,12 @@ const alreadyAssigned = (range: CentralBadgeRange | null): Response =>
 const resolveExistingAssignment = async (
   deviceId: string,
   requested: BadgeRangeInput,
+  authorized: { context: AuthenticatedDeviceContext; eventEndsAt: Date | null },
 ): Promise<Response> => {
   const current = await readActiveBadgeAssignment(deviceId)
 
   if (current !== null && isSameBadgeRange(current, requested)) {
-    return claimed(current, 200)
+    return claimed(current, 200, authorized)
   }
 
   return alreadyAssigned(current)
@@ -138,7 +160,7 @@ export async function POST(request: Request): Promise<Response> {
 
     if (existing !== null) {
       return isSameBadgeRange(existing, input.value)
-        ? claimed(existing, 200)
+        ? claimed(existing, 200, authorized)
         : alreadyAssigned(existing)
     }
 
@@ -150,7 +172,7 @@ export async function POST(request: Request): Promise<Response> {
 
     if (reserved.ok === false) {
       if (reserved.conflict === 'badge-range-already-assigned') {
-        return await resolveExistingAssignment(device.id, input.value)
+        return await resolveExistingAssignment(device.id, input.value, authorized)
       }
 
       /**
@@ -178,7 +200,7 @@ export async function POST(request: Request): Promise<Response> {
       )
     }
 
-    return claimed(reserved.value, 201)
+    return claimed(reserved.value, 201, authorized)
   } catch (error: unknown) {
     // The operation and, where available, the SQLSTATE. Never the body, never
     // the connection string, never a raw driver error.

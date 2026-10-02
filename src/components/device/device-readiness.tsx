@@ -13,6 +13,10 @@ import {
 } from '@/components/ui/dialog'
 import { formatBadgeRange } from '@/db/device'
 import { readLocalReadiness } from '@/db/readiness'
+import {
+  readVerifiedOfflineAuthorization,
+  type CachedOfflineLease,
+} from '@/device-auth/offline-lease'
 import { useNetworkStatus } from '@/hooks/use-network-status'
 import { useOperatorAccess } from '@/hooks/use-operator-access'
 import { formatBadgeNumber } from '@/lib/badge'
@@ -27,6 +31,25 @@ import {
   type ReadinessTone,
 } from '@/lib/device-readiness-summary'
 import { cn } from '@/lib/utils'
+
+/**
+ * How a verified lease reads in diagnostics.
+ *
+ * Every state that is not a held, in-date signature says so plainly: an
+ * unverifiable lease grants nothing, and a readiness screen that implied
+ * otherwise would be worse than showing nothing at all.
+ */
+const OFFLINE_LEASE_LABELS: Record<
+  CachedOfflineLease['status'],
+  { value: string; tone: ReadinessTone; hint?: string }
+> = {
+  none: { value: 'None issued', tone: 'neutral' },
+  'not-configured': { value: 'Not configured', tone: 'neutral' },
+  valid: { value: 'Signature valid', tone: 'good' },
+  expired: { value: 'Expired', tone: 'attention', hint: 'Sign in online to receive a new lease.' },
+  invalid: { value: 'Signature invalid', tone: 'attention' },
+  unverifiable: { value: 'Unable to verify', tone: 'attention' },
+}
 
 const TONE_CLASS: Record<ReadinessTone, string> = {
   good: 'text-emerald-700 dark:text-emerald-400',
@@ -115,6 +138,12 @@ const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) =
     attempt: number
     snapshot: ReadinessSnapshot
   } | null>(null)
+  /**
+   * READ-ONLY, and re-verified at the moment it is shown. Diagnostics never
+   * issue, refresh, repair or clear a lease — they only report what the
+   * pinned public key says about the bytes currently stored.
+   */
+  const [offlineLease, setOfflineLease] = useState<CachedOfflineLease | null>(null)
   const [copyMessage, setCopyMessage] = useState<string | null>(null)
 
   useEffect(() => {
@@ -125,13 +154,15 @@ const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) =
     let cancelled = false
 
     void (async () => {
-      const [local, environment] = await Promise.all([
+      const [local, environment, lease] = await Promise.all([
         readLocalReadiness(),
         readDeviceEnvironment(),
+        readVerifiedOfflineAuthorization(),
       ])
 
       if (!cancelled) {
         setSettled({ attempt, snapshot: { local, environment } })
+        setOfflineLease(lease)
       }
     })()
 
@@ -371,6 +402,25 @@ const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) =
                 value={access.phase === 'expired' ? 'Session expired' : 'Unlocked'}
                 tone={access.phase === 'expired' ? 'warning' : 'good'}
               />
+
+              {offlineLease === null ? null : (
+                <>
+                  <ReadinessRow
+                    label="Central offline authorization"
+                    {...OFFLINE_LEASE_LABELS[offlineLease.status]}
+                  />
+
+                  {offlineLease.status === 'valid' || offlineLease.status === 'expired' ? (
+                    <ReadinessRow
+                      label="Expires"
+                      value={formatEventDateTime(
+                        new Date(offlineLease.claims.exp * 1000).toISOString(),
+                      )}
+                      tone={offlineLease.status === 'valid' ? 'good' : 'attention'}
+                    />
+                  ) : null}
+                </>
+              )}
             </section>
           </div>
         )}

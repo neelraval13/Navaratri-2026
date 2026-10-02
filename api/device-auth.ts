@@ -1,4 +1,5 @@
 import { loadDeviceSessionContext, authenticateDevice } from '../server/device-auth/authenticate.js'
+import { issueDeviceOfflineAuthorization } from '../server/device-auth/offline-authorization.js'
 import {
   readDeviceSessionCookie,
   serializeClearedDeviceSessionCookie,
@@ -129,7 +130,21 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     return deviceJson(
-      { ok: true, authenticated: true, ...result.context },
+      {
+        ok: true,
+        authenticated: true,
+        ...result.context,
+        /**
+         * A freshly signed OFFLINE AUTHORIZATION LEASE, beside — never
+         * instead of — the session cookie. The cookie stays the online
+         * credential; the lease authorizes local decisions during an outage
+         * and is accepted by no endpoint.
+         */
+        offlineAuthorization: issueDeviceOfflineAuthorization({
+          context: result.context,
+          eventEndsAt: result.eventEndsAt,
+        }),
+      },
       200,
       serializeDeviceSessionCookie(
         createDeviceSessionToken(configuration.environment.sessionSecret, {
@@ -208,17 +223,34 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    const context = await loadDeviceSessionContext({
+    const state = await loadDeviceSessionContext({
       deviceId: claims.deviceId,
       eventId: claims.eventId,
       sessionVersion: claims.sv,
     })
 
-    if (context === null) {
+    if (state === null) {
       return deviceJson(UNAUTHENTICATED, 200, serializeClearedDeviceSessionCookie())
     }
 
-    return deviceJson({ authenticated: true, configured: true, ...context }, 200)
+    /**
+     * Re-issued from CURRENT Postgres state on every check, so a changed
+     * attribute set, a newly assigned badge range or an event that has since
+     * ended are all reflected in the lease the browser caches next. There is
+     * no timer behind this — it rides on checks the operator already causes.
+     */
+    return deviceJson(
+      {
+        authenticated: true,
+        configured: true,
+        ...state.context,
+        offlineAuthorization: issueDeviceOfflineAuthorization({
+          context: state.context,
+          eventEndsAt: state.eventEndsAt,
+        }),
+      },
+      200,
+    )
   } catch (error: unknown) {
     const code =
       typeof error === 'object' && error !== null && 'code' in error

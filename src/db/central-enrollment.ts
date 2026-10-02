@@ -108,10 +108,16 @@ export const saveCentralDeviceEnrollment = async (
 /**
  * Unbinds this browser from its central device.
  *
- * ONLY the enrollment snapshot. This is not Reset Device, not Clear Event
- * Data, not Clear Badge Range and not an operator logout: the local device
- * identity, the badge range, `nextBadge`, every registration, every outbox row
- * and the trusted-operator marker are all untouched.
+ * The enrollment snapshot AND the signed offline authorization lease, in one
+ * transaction. An offline lease is authority granted to a central identity
+ * this browser is deliberately forgetting; leaving it behind would keep that
+ * authority silently usable with nothing on screen explaining where it came
+ * from.
+ *
+ * This is still not Reset Device, not Clear Event Data, not Clear Badge Range
+ * and not an operator logout: the local device identity, the badge range,
+ * `nextBadge`, `centralBadgeRangeBinding`, every registration, every outbox
+ * row and the trusted-operator marker are all untouched.
  */
 export const clearCentralDeviceEnrollment = async (): Promise<{
   outcome: 'cleared' | 'missing-config'
@@ -126,8 +132,9 @@ export const clearCentralDeviceEnrollment = async (): Promise<{
     const next = { ...config, updatedAt: new Date().toISOString() }
 
     // Removed rather than set to undefined, so the stored row carries no
-    // empty enrollment key at all.
+    // empty key at all.
     delete next.centralDeviceEnrollment
+    delete next.centralDeviceOfflineAuthorization
 
     await db.config.put(next)
 

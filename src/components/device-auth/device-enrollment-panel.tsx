@@ -4,6 +4,7 @@ import type * as React from 'react'
 
 import DeviceIdentitySummary from '@/components/device-auth/device-identity-summary'
 import LocalBadgeSetup from '@/components/device-auth/local-badge-setup'
+import OfflineAuthorizationSummary from '@/components/device-auth/offline-authorization-summary'
 import DeviceLoginForm from '@/components/device-auth/device-login-form'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -26,6 +27,14 @@ import {
   type BadgeClaimFlowResult,
 } from '@/device-auth/badge-claim'
 import { getDeviceSession, logoutDevice } from '@/device-auth/device-api'
+import {
+  acceptOfflineAuthorization,
+  readVerifiedOfflineAuthorization,
+  revokeOfflineAuthorization,
+  type CachedOfflineLease,
+  type OfflineLeaseOutcome,
+} from '@/device-auth/offline-lease'
+import type { OfflineAuthorizationEnvelope } from '@/device-auth/device-session-contract'
 import type { DeviceSessionContext } from '@/device-auth/device-session-contract'
 import { formatBadgeRange } from '@/db/device'
 import { formatEventDateTime } from '@/lib/datetime'
@@ -54,9 +63,16 @@ type PanelState =
         claim: ClaimPlan
         config: EventConfig | undefined
       }
+      /** What became of the lease the server just issued. */
+      offline: OfflineLeaseOutcome
     }
   | { phase: 'signed-out'; enrollment: CentralDeviceEnrollment | null }
-  | { phase: 'last-verified'; enrollment: CentralDeviceEnrollment }
+  | {
+      phase: 'last-verified'
+      enrollment: CentralDeviceEnrollment
+      /** Re-verified from the cached token; never assumed from bytes. */
+      offline: CachedOfflineLease
+    }
   | { phase: 'not-configured' }
   | {
       phase: 'mismatch'
@@ -95,7 +111,10 @@ const DeviceEnrollmentPanel: React.FC = () => {
    * operator decision. The impostor session is ended immediately so the
    * browser is not left holding a cookie it declined to enroll.
    */
-  const persist = async (context: DeviceSessionContext) => {
+  const persist = async (
+    context: DeviceSessionContext,
+    envelope: OfflineAuthorizationEnvelope,
+  ) => {
     const saved = await saveCentralDeviceEnrollment(context)
 
     if (saved.outcome === 'saved') {
@@ -106,11 +125,21 @@ const DeviceEnrollmentPanel: React.FC = () => {
        */
       const badge = await readCentralBadgeRangePlan(context)
 
+      /**
+       * The lease is verified against the pinned public key and checked
+       * against THIS context before it is stored. A signed statement about
+       * another device, or one whose permissions disagree with the session
+       * that delivered it, is dropped — and dropping it never makes the
+       * online session itself look unauthenticated.
+       */
+      const offline = await acceptOfflineAuthorization({ context, envelope })
+
       setState({
         phase: 'authenticated',
         context,
         verifiedAt: saved.enrollment.verifiedAt,
         badge,
+        offline,
       })
 
       return
@@ -154,7 +183,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
       }
 
       if (session.status === 'authenticated') {
-        await persist(session.context)
+        await persist(session.context, session.offlineAuthorization)
 
         return
       }
@@ -168,15 +197,35 @@ const DeviceEnrollmentPanel: React.FC = () => {
       /**
        * Offline, or the server could not be reached. A cached enrollment is
        * shown as the LAST VERIFIED identity — never as an authenticated one.
+       *
+       * The cached lease is RE-VERIFIED here rather than assumed: this is the
+       * one state where it carries weight, so it must earn it. It is never
+       * cleared on this path — an unreachable server is not a revocation.
        */
       if (session.status === 'unreachable') {
+        const offline = await readVerifiedOfflineAuthorization()
+
         setState(
           enrollment === undefined
             ? { phase: 'signed-out', enrollment: null }
-            : { phase: 'last-verified', enrollment },
+            : { phase: 'last-verified', enrollment, offline },
         )
 
         return
+      }
+
+      /**
+       * DEFINITIVE REVOCATION. The server answered and declined the session:
+       * expired, `session_version` reset by a password change, device
+       * disabled, event deactivated, credentials removed, device deleted. The
+       * offline lease is central authority and must not outlive that.
+       *
+       * Only `unauthenticated` does this. `unreachable`, `not-configured` and
+       * `unexpected` are all absence of an answer, and a bad network must
+       * never disable a desk that is offline by design.
+       */
+      if (session.status === 'unauthenticated') {
+        await revokeOfflineAuthorization()
       }
 
       setState({ phase: 'signed-out', enrollment: enrollment ?? null })
@@ -305,9 +354,26 @@ const DeviceEnrollmentPanel: React.FC = () => {
     // a range this browser does not have.
     const badge = await readCentralBadgeRangePlan(context)
 
+    /**
+     * A claim CHANGES central badge ownership, so the server re-issued the
+     * lease for the post-claim state. It is checked against the range THAT
+     * response established — not the one the session was loaded with, which
+     * the claim is precisely what changed.
+     *
+     * A refused claim issues none, so the cached lease stays as it was.
+     */
+    const offline =
+      result.outcome === 'claimed' || result.outcome === 'claimed-not-adopted'
+        ? await acceptOfflineAuthorization({
+            context,
+            envelope: result.offlineAuthorization,
+            expectedBadgeRange: result.activeBadgeRange,
+          })
+        : state.offline
+
     setIsBusy(false)
     setClaimResult(result)
-    setState({ ...state, context, badge })
+    setState({ ...state, context, badge, offline })
   }
 
   const clearEnrollment = async () => {
@@ -441,6 +507,8 @@ const DeviceEnrollmentPanel: React.FC = () => {
             Access.
           </p>
 
+          <OfflineAuthorizationSummary state={state.offline} isOffline />
+
           <Button
             type="button"
             variant="outline"
@@ -509,6 +577,8 @@ const DeviceEnrollmentPanel: React.FC = () => {
             onRefresh={refresh}
           />
 
+          <OfflineAuthorizationSummary state={state.offline} isOffline={false} />
+
           <div className="flex flex-wrap gap-3">
             <Button
               type="button"
@@ -551,8 +621,8 @@ const DeviceEnrollmentPanel: React.FC = () => {
         )}
 
         <DeviceLoginForm
-          onAuthenticated={(context) => {
-            void persist(context)
+          onAuthenticated={(context, offlineAuthorization) => {
+            void persist(context, offlineAuthorization)
           }}
         />
       </CardContent>

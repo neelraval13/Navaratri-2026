@@ -702,3 +702,140 @@ No use of cached attributes as authority. No release, edit, transfer or extend
 of a central range. No heartbeat. No change to Google Sheets, to the outbox, or
 to sync authentication, which still uses Operator Access. No schema change —
 C2A and C2B both added no migration and use the columns Phase 9C-A provided.
+
+
+## Phase 9C-C3A — the signed offline authorization lease
+
+A desk must keep working through a venue internet outage. But a boolean in
+IndexedDB is not authorization: anyone with the device can edit it. So the
+server signs a short-lived statement of what a device was allowed to do, and
+the browser verifies that signature **offline**.
+
+**C3A builds and displays the artifact. It unlocks nothing.** `/`,
+`/badge-registration` and `/device-registration` still answer to Operator
+Access. Phase 9C-C3B is what wires the lease to event routes.
+
+### Asymmetric, because the browser must verify without a server
+
+ECDSA **P-256 / SHA-256**, through `node:crypto` on the server and the Web
+Crypto API in the browser. No JWT package, no crypto library.
+
+| | |
+|---|---|
+| `EVENT_DEVICE_OFFLINE_PRIVATE_KEY_PKCS8_B64` | server only, PKCS#8 DER base64 — **signs** |
+| `VITE_EVENT_DEVICE_OFFLINE_PUBLIC_KEY_SPKI_B64` | browser, SPKI DER base64 — **verifies** |
+
+An HMAC would mean shipping the signing secret in the bundle, and anyone with
+the bundle could then mint themselves Registration or Prizes access. The
+public key being readable is the *point*: it can check a lease and cannot
+create one.
+
+DER base64 rather than PEM so each value is a single line in a Vercel
+environment variable. Generate them with the commands in `.env.example`;
+never against Production, and never commit the output.
+
+The private key is validated on read — **including the curve**. A P-384 key
+would sign happily and produce a 96-byte signature the browser could never
+accept, and that failure would surface only at a desk with no internet.
+
+### The token
+
+```
+<base64url payload>.<base64url signature>
+```
+
+Signed bytes are `navaratri-device-offline-v1:` + the **encoded** payload, so
+there is no canonical-JSON problem: the bytes on the wire are the bytes that
+were signed. Node signs with `dsaEncoding: 'ieee-p1363'` — the raw r‖s pair
+WebCrypto requires. Node's ECDSA default is DER, which `crypto.subtle.verify`
+rejects outright.
+
+Claims are minimal:
+
+```
+v · t · deviceId · eventId · eventSlug · attributes · activeBadgeRange · iat · exp
+```
+
+Never: a password or hash, a session token or cookie, `sessionVersion`, an
+Admin or operator credential, any attendee data, **`nextBadge`**, or this
+browser's local Phase 7 identity.
+
+`activeBadgeRange` is there because offline Registration will eventually have
+to prove more than "this device once had Registration" — it must say which
+central assignment was authorized. It is **not** an allocator; `nextBadge`
+stays local.
+
+### Lifetime
+
+```
+exp = min(now + 24h, event.endsAt)
+```
+
+At most **24** hours, and never past the event's `endsAt`. An event that has
+already ended produces **no lease at all**. There is no indefinite offline
+authority and no local extension — only the server issues one. The browser
+tolerates five minutes of clock skew, rejects an `iat` beyond it, and treats
+an expired lease as expired however intact its bytes are.
+
+### It is never a central API credential
+
+This is the threat boundary, stated plainly. The token is readable by
+JavaScript, because the browser must verify it with no network. Its power is
+**local authorization until `exp`** — not server authentication.
+
+`/api/device-auth`, `/api/device-badge-claim`, the Admin APIs and
+`/api/sync-registration` all keep requiring their own cookies. No endpoint
+reads the lease, the browser never puts it in a header or a cookie, and
+`release:check` and `verify:9cc3a` both enforce that.
+
+### Where it comes from, and when
+
+Issued beside — never instead of — the session cookie, on operations that
+already happen: **login**, an explicit **session check**, and a **successful
+self-claim** (which changes central badge ownership, so the old lease is
+stale the moment it returns). There is no timer, no polling and no heartbeat.
+
+If signing is unconfigured the response says `offlineAuthorization:
+{ configured: false }`. Online device authentication is unaffected and no
+fake lease is invented.
+
+### Saved only after it verifies
+
+A received token is stored only once its signature holds, its claims parse,
+its clock is sane, **and** it describes the same device, event, attributes and
+badge range the server returned in that same response. A mismatch is dropped
+and reported — and dropping it never makes the online session look
+unauthenticated.
+
+Only the token is stored, as `centralDeviceOfflineAuthorization` — one
+optional field on the existing config row, separate from
+`centralDeviceEnrollment` and `centralBadgeRangeBinding`, with no Dexie
+version bump. **No decoded claim is stored beside it**: a second unsigned copy
+of "what this device may do" would be trivially editable and
+indistinguishable from the signed answer. Every read verifies again.
+
+### Clearing it
+
+| Event | Lease |
+|---|---|
+| Successful device sign-out | **cleared**, with the enrollment, in one transaction |
+| **Failed** sign-out | **kept** — nothing was revoked, and pretending otherwise is a lie the operator acts on |
+| Clear Central Enrollment | **cleared** |
+| Server definitively rejects the session | **cleared** — expired, `session_version` reset, device disabled, event inactive, credentials removed, device deleted |
+| Network unreachable, 503, unexpected | **kept** |
+
+**A network failure is not a revocation.** Treating one as revocation would
+disable a desk at exactly the moment its offline authority is what keeps it
+running. Badge range, `nextBadge`, `centralBadgeRangeBinding`, registrations
+and the outbox survive all of these.
+
+### What the operator sees
+
+`/device-login` gains an informational **Offline Authorization** section, and
+Device Readiness reports the lease read-only. Both show only **verified**
+claims — access, central badge assignment, expiry — never decoded-but-
+unverified ones.
+
+Offline, a valid lease is called *"Offline authorization lease valid"*, never
+**Authenticated**: nobody asked the server, and the only thing proven is the
+signature.

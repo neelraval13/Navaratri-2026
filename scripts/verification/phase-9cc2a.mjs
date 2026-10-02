@@ -500,7 +500,7 @@ check('exactly one module inserts a central badge assignment',
     .filter((file) => /insert\(badgeAssignments\)/.test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')),
   ['server/badge-assignments/reserve.ts'])
-check('  and Admin reserves through it', 
+check('  and Admin reserves through it',
   /reserveBadgeRange\(/.test(stripComments(read('server/admin/registry.ts'))), true)
 
 check('NO migration was added',

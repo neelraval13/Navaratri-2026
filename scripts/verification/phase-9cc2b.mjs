@@ -371,8 +371,13 @@ check('  it sets no cookie', first.cookie, null)
 check('  and carries no credential or registry data',
   /password|hash|salt|scrypt|sessionVersion|enabled|loginName|lastSeen/i
     .test(JSON.stringify(first.body)), false)
+// 9C-C3A adds the re-issued offline lease: a claim changes central badge
+// ownership, so the lease the browser holds is stale the moment it returns.
 check('  its keys are exactly the contract',
-  Object.keys(first.body).sort(), ['activeBadgeRange', 'ok', 'outcome'])
+  Object.keys(first.body).sort(),
+  ['activeBadgeRange', 'offlineAuthorization', 'ok', 'outcome'])
+check('  and the lease envelope is safe when signing is unconfigured',
+  first.body.offlineAuthorization, { configured: false })
 check('  and the range keys too',
   Object.keys(first.body.activeBadgeRange).sort(), ['assignedAt', 'rangeEnd', 'rangeStart'])
 
@@ -799,7 +804,7 @@ check('the panel plans against the updated context, never the stale one',
    /readCentralBadgeRangePlan\(state\.context\)/.test(panelClaimSource)],
   [true, true, false])
 check('  and stores it, so the identity summary updates too',
-  /setState\(\{ \.\.\.state, context, badge \}\)/.test(panelClaimSource), true)
+  /setState\(\{ \.\.\.state, context, badge(, offline)? \}\)/.test(panelClaimSource), true)
 check('  no extra session GET was added',
   [...stripComments(read('src/components/device-auth/device-enrollment-panel.tsx'))
     .matchAll(/getDeviceSession\(\)/g)].length, 1)
@@ -1231,9 +1236,16 @@ check('  and local identity is never replaced by a central one',
   /deviceId:\s*context\.device\.id|deviceName:\s*context\.device\.name/
     .test(stripComments(read('src/db/central-badge-range.ts')
       .replace(/const binding: CentralBadgeRangeBinding = \{[\s\S]*?\n  \}/, ''))), false)
-check('51. no C3 work appeared',
-  /heartbeat|setInterval|offlineAuthorization|permissionCache/i
+/**
+ * 9C-C3A issues an offline lease here, which is why `offlineAuthorization`
+ * now legitimately appears. What C3 must still NOT have is a heartbeat, a
+ * poll, or a cached permission used as authority.
+ */
+check('51. no C3 heartbeat or permission cache appeared',
+  /heartbeat|setInterval|permissionCache|cachedAttributes/i
     .test(stripComments(read('src/device-auth/badge-claim.ts') + claimUi + panelSource)), false)
+check('  and no route is authorized from the lease',
+  /offline/i.test(stripComments(read('src/components/event-app-gate.tsx'))), false)
 
 console.log('\n=== 52-54. DOCS, RELEASE CHECK AND THE SUITE ===')
 const deviceDoc = read('docs/DEVICE_AUTH.md')

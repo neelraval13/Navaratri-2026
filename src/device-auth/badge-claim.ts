@@ -9,6 +9,7 @@ import {
   withActiveBadgeRange,
   type DeviceBadgeRange,
   type DeviceSessionContext,
+  type OfflineAuthorizationEnvelope,
 } from '@/device-auth/device-session-contract'
 
 /**
@@ -36,6 +37,8 @@ export type BadgeClaimFlowResult =
       outcome: 'claimed'
       activeBadgeRange: DeviceBadgeRange
       adoption: 'adopted' | 'aligned' | 'already-adopted'
+      /** Re-issued by the server for the POST-CLAIM central state. */
+      offlineAuthorization: OfflineAuthorizationEnvelope
     }
   /**
    * Central ownership SUCCEEDED and local setup did not. The reservation is
@@ -46,6 +49,8 @@ export type BadgeClaimFlowResult =
   | {
       outcome: 'claimed-not-adopted'
       activeBadgeRange: DeviceBadgeRange
+      /** Central ownership IS real here, so its lease is real too. */
+      offlineAuthorization: OfflineAuthorizationEnvelope
       /**
        * The refusal, when it is one the shared block can explain. `null`
        * covers only the unconfirmed-stack branch, which this flow cannot
@@ -156,6 +161,7 @@ export const claimCentralBadgeRange = async (input: {
       outcome: 'claimed',
       activeBadgeRange: claimed.activeBadgeRange,
       adoption: adoption.outcome,
+      offlineAuthorization: claimed.offlineAuthorization,
     }
   }
 
@@ -163,6 +169,7 @@ export const claimCentralBadgeRange = async (input: {
     outcome: 'claimed-not-adopted',
     activeBadgeRange: claimed.activeBadgeRange,
     plan: adoption.outcome === 'stack-not-confirmed' ? null : adoption,
+    offlineAuthorization: claimed.offlineAuthorization,
   }
 }
 
