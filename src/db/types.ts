@@ -128,8 +128,46 @@ export interface EventConfig {
    * later, deliberate migration.
    */
   centralDeviceEnrollment?: CentralDeviceEnrollment
+  /**
+   * Provenance for a local badge range that was deliberately adopted from a
+   * CENTRAL badge assignment.
+   *
+   * Separate from `centralDeviceEnrollment` on purpose: that records which
+   * central identity this browser verified, this records that the local badge
+   * range above came from that identity's assignment rather than from a
+   * hand-typed Phase 7 setup. A later reconnect needs to tell those two apart.
+   */
+  centralBadgeRangeBinding?: CentralBadgeRangeBinding
   /** ISO 8601 UTC. */
   updatedAt: string
+}
+
+/**
+ * Why this desk's badge range is the range it is.
+ *
+ * PROVENANCE, NOT AN ALLOCATOR. `badgeStart`, `badgeEnd` and `nextBadge` above
+ * remain the only badge state the issuance transaction reads, and `nextBadge`
+ * is never mirrored here — a second copy of the counter is a second thing that
+ * can drift from the physical stack.
+ *
+ * It records enough to reconcile later: which central device and event the
+ * range belongs to, the exact range as assigned, when CENTRAL assigned it, and
+ * when THIS browser adopted it.
+ *
+ * Deliberately absent, and none may be added: `nextBadge`, any password or
+ * hash, the session token, the cookie, `sessionVersion`.
+ */
+export interface CentralBadgeRangeBinding {
+  /** The central `devices.id` UUID that owns the assignment. */
+  deviceId: string
+  /** The central `events.id` UUID. */
+  eventId: string
+  rangeStart: number
+  rangeEnd: number
+  /** ISO 8601 UTC, from the central assignment. Never re-stamped locally. */
+  assignedAt: string
+  /** ISO 8601 UTC, when this browser adopted it. */
+  adoptedAt: string
 }
 
 /**

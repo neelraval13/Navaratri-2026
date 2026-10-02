@@ -106,9 +106,17 @@ snapshot.
 > device locks none of them, and a cached enrollment never counts as
 > authentication — offline, the page shows "last verified", not "authenticated".
 
-The central badge range is **displayed read-only and never imported**. The
-local `badgeStart`, `badgeEnd` and `nextBadge`, and the Phase 7 local
-`deviceId` and `deviceName`, are left exactly as they are.
+A central badge range can now be **adopted** into local badge state, but only
+by an explicit operator action that confirms the physical badges are at the
+desk — a database row proves ownership, not presence. Signing in never adopts.
+
+A fresh desk gets `badgeStart`, `badgeEnd` and `nextBadge = badgeStart`; a desk
+whose range already matches is **aligned**, keeping its counter and its issued
+badges. Any mismatch is blocked with no override. `nextBadge` stays the local
+allocator — issuance still works with no network — and the Phase 7 local
+`deviceId` and `deviceName` are left exactly as they are.
+
+Signing the device out does not clear an adopted range.
 
 Admin and Device authentication are each **one endpoint with three methods** —
 `POST` signs in, `GET` introspects, `DELETE` signs out. Every file under `api/`

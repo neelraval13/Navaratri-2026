@@ -521,10 +521,16 @@ check('  with explicit wording that local state is unchanged',
 check('  and no adoption action',
   /Use this range|Adopt|Apply range|Import range|configureBadgeDistribution/
     .test(stripComments(summarySource)), false)
+/**
+ * Phase 9C-C2A lets this UI DISPLAY local badge state beside the central
+ * assignment — it must, in order to show a range conflict. What it still may
+ * not do is WRITE it: no component opens the database or calls a badge writer.
+ * The single adoption write lives in the domain helper, audited by verify:9cc2a.
+ */
 check('nothing in the device UI writes a badge range',
   walkSource(join(root, 'src/components/device-auth'))
     .concat(walkSource(join(root, 'src/device-auth')))
-    .filter((file) => /configureBadgeDistribution|nextBadge|badgeStart|badgeEnd/
+    .filter((file) => /configureBadgeDistribution\(|registerDevice\(|db\.config\.(put|update)|db\.transaction\(|from '@\/db\/database'/
       .test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')), [])
 check('no self-claim endpoint exists',

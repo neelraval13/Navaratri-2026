@@ -144,6 +144,12 @@ of `/`, `/badge-registration` and `/device-registration`.
 | 3.18 | Each physical device signed in once at `/device-login` as its own central device, on the browser it will actually use | ☐ |
 | 3.19 | Central device names in Admin match the physical labels on the desks | ☐ |
 | 3.20 | No desk enrolled as a device belonging to another desk — a mismatch is refused, but the wrong *first* binding is not | ☐ |
+| 3.21 | Each desk's central badge range adopted at `/device-login`, with the physical badge stack verified at that desk | ☐ |
+| 3.22 | Any desk showing a range conflict reconciled BEFORE the event — adoption is blocked, so that desk cannot issue | ☐ |
+
+Adoption is per-browser and explicit: a central assignment does not start local
+issuance. Central revocation also cannot yet stop an operator-gated or offline
+desk, so a desk that must stop issuing has to be stopped physically.
 
 The third is the one to take seriously: binding a browser to the wrong central
 device succeeds, because it is the first binding. Later phases make badge

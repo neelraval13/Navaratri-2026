@@ -1643,8 +1643,16 @@ There are exactly TWO writers, and each is the only one of its kind:
 - `registerDevice({ deviceName })` — the only device-identity writer. It never
   reads or writes `badgeStart`, `badgeEnd` or `nextBadge`.
 - `configureBadgeDistribution({ badgeStart, badgeEnd, physicalStackConfirmed })`
-  — the only badge-range writer. It requires an already-registered device, a
-  mandatory physical-stack confirmation, and refuses a second run.
+  — the Phase 7 badge-range writer, for a hand-entered range. It requires an
+  already-registered device, a mandatory physical-stack confirmation, and
+  refuses a second run.
+
+Phase 9C-C2A adds `adoptCentralBadgeRange` as a SECOND badge-range writer. It
+exists because the range and its central provenance must commit together, and
+chaining `configureBadgeDistribution` with a separate binding write would be
+two independently committed mutations. It enforces the same canonical invariant
+and still never touches the device identity. A THIRD badge-range writer must
+not be added; `verify:8a` pins the full set.
 
 `holdRegistration`, `issueBadge` and `hasBadgeAvailable` require BADGE
 distribution, not mere registration. A registered prize or dandiya desk must
@@ -1997,6 +2005,70 @@ auth boundary and is not consolidated in this phase.
 Because one path now serves three operations, every firewall rule MUST
 condition on `Method = POST`. Rate-limiting the path alone would throttle
 session checks on reconnect and block sign-outs.
+
+### Adopting A Central Badge Range
+
+The central `badge_assignments` row says which physical numbers a device OWNS.
+It is NOT the allocator: `nextBadge` stays local, because issuing a badge must
+work with no network. Adoption copies the RANGE once and the existing local
+model does the rest.
+
+Ownership is not presence. A database row cannot prove the badge stack is on the
+desk, so adoption is NEVER automatic — not on login, not on
+`GET /api/device-auth`, not on Refresh Device Status. The operator confirms "I
+have physical badges #001-#200 at this device" and the action is unavailable
+until they do. The confirmation is LOCAL operational evidence and is never
+written to Postgres.
+
+A fresh adoption writes `badgeStart`, `badgeEnd`, `nextBadge = badgeStart` — the
+same canonical invariant `configureBadgeDistribution` uses — and
+`badgeConfiguredAt`, which is how the local model already expresses physical
+confirmation. No second confirmation field.
+
+An EXACT-MATCH local range is ALIGNED, not re-set up: `nextBadge`,
+`badgeConfiguredAt` and every issued registration are preserved, because that
+desk has already handed badges out and restarting its counter would reissue
+them. Only the binding is added.
+
+`centralBadgeRangeBinding` is ONE optional field on the EXISTING config row —
+no new store, no index, no Dexie version bump. It holds only `deviceId`,
+`eventId`, `rangeStart`, `rangeEnd`, `assignedAt`, `adoptedAt`.
+
+It is PROVENANCE, never an allocator. `nextBadge` is NEVER mirrored into it: a
+second copy of the counter is a second thing that can drift from the physical
+stack. No password, hash, token, cookie or `sessionVersion` either. It is
+deliberately NOT inside `centralDeviceEnrollment`, which still excludes
+`activeBadgeRange`.
+
+Everything fails closed, and every refusal writes NOTHING: missing local Phase 7
+identity, a device without `registration` (read from the CURRENT session, never
+the cached enrollment), no central assignment, badges issued locally with no
+configured range, a local range that differs from central, a matching range with
+an incoherent `nextBadge`, a binding owned by another central device, and a
+central range that no longer matches the binding. A range mismatch is BLOCKED
+HARD — never replaced, truncated, extended, merged or reset, and no override is
+offered. `nextBadge` is NEVER reconstructed from issued numbers: a gap may be a
+badge already taken out of the stack.
+
+The write is ONE `db.transaction` over `config`, with `registrations` opened
+READ-ONLY to count issued badges. The range and its provenance can never land
+separately, and no registration, held record or outbox row is ever modified.
+
+Local identity stays separate: the central `deviceId` and `deviceName` are never
+written onto the config row's own.
+
+Signing the device out does NOT clear the adopted range, and neither does Clear
+Central Enrollment. Both are auth actions; an adopted range is durable
+operational state that must survive a sign-out or a network loss. Clearing the
+identity while a binding exists warns that the range remains.
+
+C2A does NOT make device auth authoritative. Event routes still use Operator
+Access and the binding is never used as authorization — so central revocation
+CANNOT yet stop an operator-gated or offline desk from issuing. That is C3/D.
+
+There is NO self-claim. With no central assignment there is nothing to adopt and
+no range entry is offered; creating one from the device is 9C-C2B, and it may
+consume one of the two free Function slots.
 
 ### Google Sheets Client
 

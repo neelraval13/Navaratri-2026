@@ -3,17 +3,25 @@ import { useEffect, useState } from 'react'
 import type * as React from 'react'
 
 import DeviceIdentitySummary from '@/components/device-auth/device-identity-summary'
+import LocalBadgeSetup from '@/components/device-auth/local-badge-setup'
 import DeviceLoginForm from '@/components/device-auth/device-login-form'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  adoptCentralBadgeRange,
+  readCentralBadgeRangeBinding,
+  readCentralBadgeRangePlan,
+  type AdoptionPlan,
+} from '@/db/central-badge-range'
 import {
   clearCentralDeviceEnrollment,
   readCentralDeviceEnrollment,
   saveCentralDeviceEnrollment,
 } from '@/db/central-enrollment'
-import type { CentralDeviceEnrollment } from '@/db/types'
+import type { CentralDeviceEnrollment, EventConfig } from '@/db/types'
 import { getDeviceSession, logoutDevice } from '@/device-auth/device-api'
 import type { DeviceSessionContext } from '@/device-auth/device-session-contract'
+import { formatBadgeRange } from '@/db/device'
 import { formatEventDateTime } from '@/lib/datetime'
 
 /**
@@ -26,7 +34,17 @@ import { formatEventDateTime } from '@/lib/datetime'
  */
 type PanelState =
   | { phase: 'checking' }
-  | { phase: 'authenticated'; context: DeviceSessionContext; verifiedAt: string }
+  | {
+      phase: 'authenticated'
+      context: DeviceSessionContext
+      verifiedAt: string
+      /**
+       * Local badge state, read from the COMMITTED config row rather than
+       * assumed from the central assignment. Adoption re-reads it, so the UI
+       * never claims a write that did not happen.
+       */
+      badge: { plan: AdoptionPlan; config: EventConfig | undefined }
+    }
   | { phase: 'signed-out'; enrollment: CentralDeviceEnrollment | null }
   | { phase: 'last-verified'; enrollment: CentralDeviceEnrollment }
   | { phase: 'not-configured' }
@@ -35,6 +53,8 @@ type PanelState =
       enrolled: CentralDeviceEnrollment
       attempted: { deviceId: string; deviceName: string }
       logoutFailed: boolean
+      /** An adopted central badge range that clearing will NOT remove. */
+      adoptedRange: { rangeStart: number; rangeEnd: number } | null
     }
   | { phase: 'failed'; message: string }
 
@@ -53,6 +73,7 @@ type PanelState =
 const DeviceEnrollmentPanel: React.FC = () => {
   const [state, setState] = useState<PanelState>({ phase: 'checking' })
   const [isBusy, setIsBusy] = useState(false)
+  const [badgeError, setBadgeError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   /**
@@ -67,10 +88,18 @@ const DeviceEnrollmentPanel: React.FC = () => {
     const saved = await saveCentralDeviceEnrollment(context)
 
     if (saved.outcome === 'saved') {
+      /**
+       * READ ONLY. Verifying a session never adopts a badge range: a central
+       * assignment proves ownership, not that the physical badges are at this
+       * desk. Only the explicit operator action below writes anything.
+       */
+      const badge = await readCentralBadgeRangePlan(context)
+
       setState({
         phase: 'authenticated',
         context,
         verifiedAt: saved.enrollment.verifiedAt,
+        badge,
       })
 
       return
@@ -86,12 +115,17 @@ const DeviceEnrollmentPanel: React.FC = () => {
     }
 
     const endedSession = await logoutDevice()
+    const binding = await readCentralBadgeRangeBinding()
 
     setState({
       phase: 'mismatch',
       enrolled: saved.enrolled,
       attempted: saved.attempted,
       logoutFailed: !endedSession.ok,
+      adoptedRange:
+        binding === undefined
+          ? null
+          : { rangeStart: binding.rangeStart, rangeEnd: binding.rangeEnd },
     })
   }
 
@@ -174,6 +208,44 @@ const DeviceEnrollmentPanel: React.FC = () => {
     setState({ phase: 'signed-out', enrollment: null })
   }
 
+  /**
+   * The ONLY caller of the adoption write, and only from an authenticated
+   * state. The result is re-read from the committed row, so the summary cannot
+   * show a range this browser did not actually store.
+   */
+  const adopt = async (physicalStackConfirmed: boolean) => {
+    if (isBusy || state.phase !== 'authenticated') {
+      return
+    }
+
+    setIsBusy(true)
+    setBadgeError(null)
+
+    const result = await adoptCentralBadgeRange({
+      context: state.context,
+      physicalStackConfirmed,
+    })
+
+    const badge = await readCentralBadgeRangePlan(state.context)
+
+    setIsBusy(false)
+    setState({ ...state, badge })
+
+    if (result.outcome === 'stack-not-confirmed') {
+      setBadgeError('Confirm the physical badges are at this device first.')
+
+      return
+    }
+
+    if (
+      result.outcome !== 'adopted' &&
+      result.outcome !== 'aligned' &&
+      result.outcome !== 'already-adopted'
+    ) {
+      setBadgeError('That badge range could not be set up. See the status below.')
+    }
+  }
+
   const clearEnrollment = async () => {
     if (isBusy) {
       return
@@ -252,6 +324,20 @@ const DeviceEnrollmentPanel: React.FC = () => {
             it does not touch this desk&rsquo;s badge range, its registrations
             or its operator access.
           </p>
+
+          {/*
+            Said explicitly, because it is the surprising part: an adopted
+            badge range is durable operational state and survives clearing the
+            identity. Nothing cascades.
+          */}
+          {state.adoptedRange === null ? null : (
+            <p className="flex items-start gap-2 text-sm text-destructive">
+              <CircleAlert className="mt-0.5 size-4 shrink-0" />
+              This browser has an adopted central badge range{' '}
+              {formatBadgeRange(state.adoptedRange.rangeStart, state.adoptedRange.rangeEnd)}.
+              Clearing the identity does not remove that local badge range.
+            </p>
+          )}
 
           <Button
             type="button"
@@ -335,6 +421,17 @@ const DeviceEnrollmentPanel: React.FC = () => {
           <DeviceIdentitySummary
             context={state.context}
             verifiedAt={state.verifiedAt}
+          />
+
+          <LocalBadgeSetup
+            deviceName={state.context.device.name}
+            plan={state.badge.plan}
+            config={state.badge.config}
+            isBusy={isBusy}
+            error={badgeError}
+            onAdopt={(physicalStackConfirmed) => {
+              void adopt(physicalStackConfirmed)
+            }}
           />
 
           <div className="flex flex-wrap gap-3">

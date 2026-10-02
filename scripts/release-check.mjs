@@ -98,6 +98,7 @@ const REQUIRED_FILES = [
   'src/device-auth/device-api.ts',
   'src/device-auth/device-session-contract.ts',
   'src/db/central-enrollment.ts',
+  'src/db/central-badge-range.ts',
   'src/pages/device-login-page.tsx',
   'src/shared/event.ts',
   'tsconfig.server.json',
@@ -901,8 +902,19 @@ for (const path of walk(join(ROOT, 'src/components/device-auth'))) {
     enrollmentProblems.push(`${rel(path)} polls on a timer`)
   }
 
-  if (/configureBadgeDistribution|nextBadge|badgeStart|badgeEnd/.test(code)) {
-    enrollmentProblems.push(`${rel(path)} writes local badge state`)
+  /**
+   * Phase 9C-C2A lets this UI DISPLAY local badge state beside the central
+   * assignment, which it must in order to show a range conflict. What it may
+   * not do is write it: no component opens the database or calls the Phase 7
+   * badge writer. The one adoption write lives in the domain helper, which
+   * `release:check` audits separately.
+   */
+  if (/configureBadgeDistribution\(|registerDevice\(/.test(code)) {
+    enrollmentProblems.push(`${rel(path)} calls a device configuration writer`)
+  }
+
+  if (/from '@\/db\/database'|db\.config\.(put|update)|db\.transaction\(/.test(code)) {
+    enrollmentProblems.push(`${rel(path)} writes to the database directly`)
   }
 }
 
@@ -1285,6 +1297,133 @@ for (const file of ['operator-login.ts', 'operator-session.ts', 'operator-logout
     budgetProblems.push(`api/${file} was consolidated; Operator Access must stay untouched`)
   }
 }
+
+// --- I. central badge range adoption stays safe and explicit ---------------
+/**
+ * Central Postgres records which badge numbers a device OWNS. `nextBadge` stays
+ * local, because issuing a badge must work with no network. Adoption copies the
+ * range once, deliberately, and nothing about it may become automatic.
+ */
+const adoptionProblems = []
+const adoptionSource = readText(join(ROOT, 'src/db/central-badge-range.ts'))
+const typesSource = readText(join(ROOT, 'src/db/types.ts'))
+
+if (adoptionSource === null || typesSource === null) {
+  adoptionProblems.push('the adoption domain or the config model could not be read')
+} else {
+  const code = stripComments(adoptionSource)
+
+  // The binding is provenance, never a second allocator or a credential.
+  const bindingShape = /export interface CentralBadgeRangeBinding \{([\s\S]*?)\n\}/
+    .exec(typesSource)?.[1] ?? ''
+
+  if (bindingShape === '') {
+    adoptionProblems.push('CentralBadgeRangeBinding is not declared')
+  }
+
+  for (const forbidden of ['nextBadge', 'password', 'token', 'cookie', 'sessionVersion', 'salt']) {
+    if (bindingShape.includes(forbidden)) {
+      adoptionProblems.push(`CentralBadgeRangeBinding carries ${forbidden}`)
+    }
+  }
+
+  // C1's rule stands: the enrollment never holds the range.
+  const enrollmentShape = /export interface CentralDeviceEnrollment \{([\s\S]*?)\n\}/
+    .exec(typesSource)?.[1] ?? ''
+
+  for (const forbidden of ['activeBadgeRange', 'rangeStart', 'rangeEnd', 'badgeStart', 'badgeEnd']) {
+    if (enrollmentShape.includes(forbidden)) {
+      adoptionProblems.push(`CentralDeviceEnrollment carries ${forbidden}`)
+    }
+  }
+
+  /**
+   * Local identity is never overwritten by a central value.
+   *
+   * Audited at the point of truth: the object literals that are typed
+   * `EventConfig` and handed to `db.config.put`. The binding legitimately
+   * holds the central `deviceId` — that is its purpose — but the config row's
+   * own `deviceId` and `deviceName` must never be assigned from the session.
+   */
+  const configLiterals = [...code.matchAll(/:\s*EventConfig\s*=\s*\{([\s\S]*?)\n      \}/g)]
+    .map((match) => match[1])
+
+  if (configLiterals.length === 0) {
+    adoptionProblems.push('no EventConfig write could be located for auditing')
+  }
+
+  for (const literal of configLiterals) {
+    for (const forbidden of ['deviceId:', 'deviceName:', 'deviceConfiguredAt:']) {
+      if (literal.includes(forbidden)) {
+        adoptionProblems.push(`adoption writes ${forbidden} onto the config row`)
+      }
+    }
+  }
+
+  // Config-only: registrations and the outbox are read, never written.
+  if (/db\.registrations\.(put|add|update|delete|clear)|db\.outbox\./.test(code)) {
+    adoptionProblems.push('adoption mutates registrations or the outbox')
+  }
+
+  // One transaction, so the range and its provenance cannot land separately.
+  if ((code.match(/db\.transaction\(/g) ?? []).length !== 1) {
+    adoptionProblems.push('adoption does not commit in exactly one transaction')
+  }
+
+  // No central write is reachable from the browser's adoption path.
+  if (/fetch\(|method: '(POST|PATCH|PUT|DELETE)'/.test(code)) {
+    adoptionProblems.push('adoption issues a network request')
+  }
+}
+
+// Adoption must never be triggered by signing in or by a session refresh.
+const enrollmentPanel = readText(
+  join(ROOT, 'src/components/device-auth/device-enrollment-panel.tsx'),
+)
+
+if (enrollmentPanel === null) {
+  adoptionProblems.push('the device enrollment panel could not be read')
+} else {
+  const code = stripComments(enrollmentPanel)
+
+  if ((code.match(/adoptCentralBadgeRange\(/g) ?? []).length !== 1) {
+    adoptionProblems.push('adoption is called from more than one place')
+  }
+
+  if (/saved\.outcome === 'saved'[\s\S]{0,400}adoptCentralBadgeRange/.test(code)) {
+    adoptionProblems.push('a successful sign-in adopts the central range automatically')
+  }
+
+  // Signing out is auth only; adopted badge state is durable local state.
+  if (/clearCentralBadgeRange|centralBadgeRangeBinding:\s*undefined/.test(code)) {
+    adoptionProblems.push('sign-out or clear removes the adopted badge state')
+  }
+}
+
+// The two phases that own range creation are not started.
+for (const name of ['device-badge-assignment.ts', 'device-claim-range.ts', 'device-range.ts']) {
+  if (exists(join(ROOT, 'api', name))) {
+    adoptionProblems.push(`api/${name} exists before its phase`)
+  }
+}
+
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const text = readText(path)
+
+  if (text !== null && /claimBadgeRange|selfClaimRange/.test(stripComments(text))) {
+    adoptionProblems.push(`${rel(path)} implements a badge-range self-claim`)
+  }
+}
+
+addCheck(
+  'central-badge-adoption',
+  'A central badge range is adopted locally only by an explicit operator action',
+  adoptionProblems,
+)
 
 addCheck(
   'function-budget',

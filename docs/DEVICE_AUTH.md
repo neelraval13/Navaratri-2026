@@ -413,10 +413,116 @@ background timer and no polling. Reconnect reconciliation is Phase 9C-C3.
 
 ---
 
+---
+
+## Adopting a central badge range (Phase 9C-C2A)
+
+The central assignment says which physical badge numbers a device **owns**. It
+is not the allocator: `nextBadge` stays in IndexedDB, because issuing a badge
+must work with no network. Adoption copies the range **once**, deliberately,
+and the existing local model then does all the work exactly as before.
+
+> ### Ownership is not presence.
+>
+> A row in Postgres proves this device owns `#001–#200`. It cannot prove the
+> badges are on the table. So nothing is automatic: signing in does not adopt,
+> `GET /api/device-auth` does not adopt, and **Refresh Device Status** does not
+> adopt. An operator must confirm *"I have physical badges #001–#200 at this
+> device"*, and the action stays unavailable until they do.
+
+### What `/device-login` shows
+
+A **Local Badge Setup** section, separate from the central summary, so nobody
+has to infer whether this browser can issue badges from the fact that Postgres
+says it owns some:
+
+| State | Meaning |
+|---|---|
+| Local device setup required | transitional: this browser has no Phase 7 identity yet |
+| Not available | the central device lacks the `registration` attribute |
+| Not assigned | no central assignment exists — creating one is 9C-C2B |
+| Ready to adopt | fresh, compatible: the range may be adopted |
+| Ranges match | the local range already equals central — link it, keep the counter |
+| Aligned | adopted; the binding records where the range came from |
+| Conflict | blocked, with both ranges shown and no override |
+
+### Fresh adoption
+
+Writes `badgeStart`, `badgeEnd`, `nextBadge = badgeStart` — the same canonical
+invariant `configureBadgeDistribution` uses — and `badgeConfiguredAt`. The local
+model's physical-stack confirmation is expressed through that timestamp; no
+second confirmation field was invented.
+
+### Exact-match migration
+
+An existing Phase 7 desk whose range already equals the central one is
+**aligned, not re-set up**. `nextBadge`, `badgeConfiguredAt` and every issued
+registration are preserved — this desk has already handed badges out, and
+restarting its counter would reissue them. Only the binding is added.
+
+### `centralBadgeRangeBinding`
+
+One optional field on the existing `config` row — no new store, no index, no
+Dexie version bump:
+
+```
+deviceId · eventId · rangeStart · rangeEnd · assignedAt · adoptedAt
+```
+
+**Provenance, not an allocator.** `nextBadge` is never mirrored here; a second
+copy of the counter is a second thing that can drift from the physical stack.
+No password, hash, token, cookie or `sessionVersion` either. It is deliberately
+*not* inside `centralDeviceEnrollment`, which still excludes `activeBadgeRange`.
+
+It exists so a later reconnect can tell *"this range was adopted from desk-a's
+central assignment"* apart from *"this browser has an old hand-typed Phase 7
+range"*.
+
+### What fails closed
+
+| Situation | Outcome |
+|---|---|
+| No local Phase 7 identity | blocked; a local UUID is never generated, and the central one is never copied into it |
+| No `registration` attribute | blocked — read from the **current** session, not the cached enrollment |
+| No central assignment | blocked |
+| Badges issued locally with no configured range | **blocked** — reconstructing a counter from issued numbers could skip a badge already taken out of the stack |
+| Local range ≠ central range | **blocked hard**, both shown, no override, no truncate, no merge |
+| Local range matches but `nextBadge` is outside it | blocked rather than guessing a replacement |
+| Binding belongs to another central device | blocked; a range is never reassigned silently |
+| Central now reports a different range | blocked; the local range is left exactly as it is |
+
+Every refusal writes **nothing**. The transaction is one `db.transaction` over
+`config`, with `registrations` opened read-only to count issued badges, so the
+range and its provenance can never land separately. No registration, held
+record or outbox row is ever modified.
+
+### Durability
+
+**Signing the device out does not clear the adopted badge range**, and neither
+does **Clear Central Enrollment** — both are auth actions, while an adopted
+range is durable operational state that must survive a sign-out or a network
+loss. Clearing the identity while a binding exists shows a warning saying so.
+Nothing cascades. Authorization and revocation behaviour is Phase 9C-C3.
+
+### Still transitional
+
+C2A does **not** make device auth authoritative. `/`, `/badge-registration` and
+`/device-registration` still answer to Operator Access, the binding is never
+used as authorization, and no device gate exists.
+
+That has an honest consequence worth stating: **central revocation cannot stop
+an operator-gated desk from issuing badges.** Disabling a device centrally
+invalidates its device session, but the event routes do not consult it yet, and
+an offline desk consults nothing. Closing that is C3/D.
+
+No self-claim: if there is no central assignment there is nothing to adopt, and
+`/device-login` offers no range entry. Creating an assignment from the device is
+Phase 9C-C2B.
+
 ## Not in this phase
 
 No device gate on any event route. No offline device authorization. No use of
-cached attributes as authority. No badge-range import or self-claim. No
-heartbeat. No change to Google Sheets, to the outbox, or to sync
+cached attributes as authority. No badge-range SELF-CLAIM — adoption of an
+existing assignment is described above. No heartbeat. No change to Google Sheets, to the outbox, or to sync
 authentication, which still uses Operator Access. No schema change — this phase
 added no migration and uses the columns Phase 9C-A already provided.

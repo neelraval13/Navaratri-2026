@@ -9,7 +9,7 @@
  * grepped. Requires `pnpm build` first for the service-worker assertions.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import { hrefsIn, renderRoute } from './route-render.mjs'
@@ -32,6 +32,14 @@ const check = (label, actual, expected) => {
 const read = (p) => readFileSync(join(root, p), 'utf8')
 /** Guards must scan CODE; a comment describing the guarantee is not a breach. */
 const stripComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+const walkSource = (dir, out = []) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) walkSource(full, out)
+    else if (/\.tsx?$/.test(entry.name)) out.push(full)
+  }
+  return out
+}
 const CONFIGURED = { id: 'event', eventName: 'Navaratri 2026', currency: 'INR', amount: 20,
   timezone: 'Asia/Kolkata', deviceId: '11111111-2222-4333-8444-555555555555',
   deviceName: 'Registration Desk A', badgeStart: 1, badgeEnd: 250, nextBadge: 5,
@@ -145,10 +153,37 @@ const identityWriters = spawnSync('grep', ['-rl', 'registerDevice', join(root, '
   .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort()
 check('device identity has exactly ONE writer', identityWriters,
   ['components/device/device-registration-form.tsx', 'db/device.ts'])
-const badgeWriters = spawnSync('grep', ['-rl', 'configureBadgeDistribution', join(root, 'src')], { encoding: 'utf8' })
-  .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort()
-check('badge range has exactly ONE writer', badgeWriters,
-  ['components/device/badge-distribution-form.tsx', 'db/device.ts'])
+/**
+ * Counted by CALL, comment-stripped: Phase 9C-C2A's adoption helper documents
+ * that it reuses this function's canonical invariant, which is a mention, not
+ * a second caller.
+ */
+const badgeWriters = walkSource(join(root, 'src'))
+  .filter((file) => /configureBadgeDistribution\(/.test(stripComments(readFileSync(file, 'utf8'))))
+  .map((file) => file.replace(`${root}/src/`, '')).sort()
+check('the Phase 7 badge-range writer has exactly ONE caller', badgeWriters,
+  ['components/device/badge-distribution-form.tsx'])
+/**
+ * Phase 9C-C2A adds a SECOND badge-range writer: adopting a central assignment
+ * must commit the range and its provenance together, and chaining
+ * `configureBadgeDistribution` with a separate binding write would be two
+ * independently committed mutations. Both writers are pinned so a third cannot
+ * appear unnoticed.
+ */
+const allBadgeRangeWriters = walkSource(join(root, 'src'))
+  .filter((file) => /badgeStart:\s|badgeEnd:\s|nextBadge:\s/.test(stripComments(readFileSync(file, 'utf8'))))
+  .filter((file) => /db\.config\.put\(/.test(stripComments(readFileSync(file, 'utf8'))))
+  .map((file) => file.replace(`${root}/src/`, '')).sort()
+check('  and every module that writes badge state is accounted for', allBadgeRangeWriters, [
+  // Creates the config row with the bootstrap defaults, which grant nothing.
+  'db/bootstrap.ts',
+  // Phase 9C-C2A: adopts a central assignment, range + provenance in one go.
+  'db/central-badge-range.ts',
+  // Phase 7: the one-time local range setup.
+  'db/device.ts',
+  // Issuance: advances `nextBadge` by exactly one, inside its own transaction.
+  'db/registrations.ts',
+])
 check('  the one-time + existing-data guards are untouched',
   ['already-registered', 'already-configured', 'existing-data'].every((o) => read('src/db/device.ts').includes(o)), true)
 
