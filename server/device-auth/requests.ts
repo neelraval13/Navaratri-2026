@@ -1,9 +1,15 @@
+import { parseBadgeRange } from '../badge-assignments/range.js'
+
 /**
- * Device login request shape.
+ * Device request shapes.
  *
- * Deliberately its own validator rather than a reuse of the Admin one: the
- * realms must stay independently changeable, and this one has a different
- * job — it validates what a DEVICE submits, not what an Admin submits.
+ * Deliberately its own validators rather than a reuse of the Admin ones: the
+ * realms must stay independently changeable, and these have a different job —
+ * they validate what a DEVICE submits, not what an Admin submits.
+ *
+ * The one thing they do share is the badge RANGE model, which is neither
+ * realm's: both reserve rows in the same table under the same database
+ * constraints, so both must accept exactly the same mathematics.
  */
 
 const MAX_SLUG_LENGTH = 64
@@ -71,4 +77,72 @@ export const parseDeviceLoginInput = (body: unknown): DeviceLoginInputResult => 
   }
 
   return { ok: true, value: { eventSlug, loginName, password: body.password } }
+}
+
+export interface DeviceBadgeClaimInput {
+  rangeStart: number
+  rangeEnd: number
+}
+
+export type DeviceBadgeClaimInputResult =
+  | { ok: true; value: DeviceBadgeClaimInput }
+  | { ok: false; message: string }
+
+/**
+ * Identity fields a claim must never carry.
+ *
+ * The authenticated session decides which device and event a claim belongs
+ * to. Accepting any of these — even to ignore them — would invite a caller to
+ * believe it can choose, and would leave a field that a later refactor might
+ * start reading. They are refused outright rather than dropped.
+ */
+export const FORBIDDEN_CLAIM_FIELDS = [
+  'deviceId',
+  'eventId',
+  'eventSlug',
+  'loginName',
+] as const
+
+/**
+ * Validates a badge-range self-claim.
+ *
+ * The range model is the SHARED one, so a device cannot claim a range Admin
+ * could not assign and vice versa.
+ *
+ * `physicalStackConfirmed` must be exactly `true`. The server cannot verify
+ * that physical badges are on the table — only the operator can — but
+ * requiring the flag means a buggy or bypassed client cannot reserve a range
+ * centrally without that deliberate action having been taken. It is a
+ * mutation guard and is never persisted.
+ */
+export const parseDeviceBadgeClaimInput = (
+  body: unknown,
+): DeviceBadgeClaimInputResult => {
+  if (!isRecord(body)) {
+    return { ok: false, message: 'Body must be a JSON object.' }
+  }
+
+  for (const field of FORBIDDEN_CLAIM_FIELDS) {
+    if (field in body) {
+      return {
+        ok: false,
+        message: `${field} is not accepted; the device session identifies the device.`,
+      }
+    }
+  }
+
+  if (body.physicalStackConfirmed !== true) {
+    return {
+      ok: false,
+      message: 'Confirm the physical badges are at this device before claiming a range.',
+    }
+  }
+
+  const range = parseBadgeRange(body)
+
+  if (range.ok === false) {
+    return range
+  }
+
+  return { ok: true, value: range.value }
 }

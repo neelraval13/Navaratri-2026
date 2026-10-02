@@ -1,3 +1,6 @@
+import { BADGE_RESERVATION_CONSTRAINTS } from '../badge-assignments/conflicts.js'
+import { readConstraintName } from '../db/constraints.js'
+
 /**
  * Every conflict Admin can report. Typed, safe, and free of SQL.
  */
@@ -23,43 +26,15 @@ export const ADMIN_CONFLICT_MESSAGES: Record<AdminConflict, string> = {
  * The database is the authority on these conflicts — two concurrent Admins can
  * each pass an application check and still both commit — so its constraint
  * violations are translated rather than pre-empted.
+ *
+ * The badge-assignment names come from the shared reservation primitive, which
+ * Admin and Device self-claim both write through. Restating them here would be
+ * a second place to forget one.
  */
 const CONSTRAINT_CONFLICTS: Record<string, AdminConflict> = {
   devices_event_id_login_name_key: 'login-name-taken',
-  badge_assignments_active_ranges_no_overlap: 'badge-range-overlap',
-  badge_assignments_one_active_per_device: 'badge-range-already-assigned',
-  badge_assignments_device_event_fk: 'device-event-mismatch',
   events_slug_key: 'event-slug-taken',
-}
-
-const readConstraintName = (error: unknown): string | null => {
-  if (typeof error !== 'object' || error === null) {
-    return null
-  }
-
-  const candidate = error as {
-    constraint?: unknown
-    sourceError?: { constraint?: unknown }
-    message?: unknown
-  }
-
-  const direct = candidate.constraint ?? candidate.sourceError?.constraint
-
-  if (typeof direct === 'string') {
-    return direct
-  }
-
-  /**
-   * The HTTP driver does not always surface `constraint` as a field, so the
-   * message is the fallback. Only known names are matched — an unrecognised
-   * error is never guessed at.
-   */
-  const message = typeof candidate.message === 'string' ? candidate.message : ''
-
-  return (
-    Object.keys(CONSTRAINT_CONFLICTS).find((name) => message.includes(name)) ??
-    null
-  )
+  ...BADGE_RESERVATION_CONSTRAINTS,
 }
 
 /**
@@ -71,7 +46,7 @@ const readConstraintName = (error: unknown): string | null => {
  * driver object or the full stack.
  */
 export const mapDatabaseConflict = (error: unknown): AdminConflict | null => {
-  const constraint = readConstraintName(error)
+  const constraint = readConstraintName(error, Object.keys(CONSTRAINT_CONFLICTS))
 
   return constraint === null ? null : (CONSTRAINT_CONFLICTS[constraint] ?? null)
 }

@@ -5,7 +5,10 @@ import {
   type CentralBadgeRangeBinding,
   type EventConfig,
 } from '@/db/types'
-import type { DeviceSessionContext } from '@/device-auth/device-session-contract'
+import {
+  withActiveBadgeRange,
+  type DeviceSessionContext,
+} from '@/device-auth/device-session-contract'
 
 /**
  * Adopting a CENTRAL badge assignment into this browser's LOCAL badge workflow.
@@ -352,14 +355,171 @@ export const readCentralBadgeRangeBinding = async (): Promise<
 }
 
 /**
- * Reads the current plan for display, without adopting anything.
+ * A range the planner is handed purely to be judged, never to be stored.
+ *
+ * Adoption reads `assignedAt` from the CENTRAL assignment; a plan built from
+ * a hypothetical range has no such value, and this marker makes a plan that
+ * escaped into a write obvious instead of plausible. Nothing on these paths
+ * writes, which the suite proves by observing the stored row.
+ */
+const HYPOTHETICAL_ASSIGNED_AT = 'hypothetical-range-never-persisted'
+
+/**
+ * A range this browser could probe its own local state against, when it has
+ * no local range of its own. Any range is equally new to such a browser, so
+ * the numbers carry no meaning beyond being valid.
+ */
+const PROBE_RANGE = { rangeStart: 1, rangeEnd: 1 }
+
+/**
+ * What a SELF-CLAIM could do, when central reports no assignment at all.
+ *
+ * It owns no safety rules of its own. Every verdict below is produced by
+ * running the adoption planner above against the range a claim would create,
+ * so "can this browser safely own range X?" has exactly ONE definition and
+ * the claim UI cannot drift from the adoption UI.
+ */
+export type ClaimPlan =
+  /** Central already owns a range here: adoption, not a claim, applies. */
+  | { outcome: 'central-assignment-exists' }
+  /** No local range and no issued badges: the operator types the stack. */
+  | { outcome: 'claimable-fresh' }
+  /**
+   * A coherent local range exists. ONLY that exact range may be claimed —
+   * letting the operator type a different one would leave the local
+   * allocator immediately at odds with central ownership.
+   */
+  | {
+      outcome: 'claimable-existing'
+      rangeStart: number
+      rangeEnd: number
+      nextBadge: number
+      issuedCount: number
+    }
+  /**
+   * This browser believes it adopted a central range that central no longer
+   * reports. Abnormal, and never resolved by claiming something new.
+   */
+  | { outcome: 'binding-without-assignment'; binding: CentralBadgeRangeBinding }
+  /** Refused by the adoption planner, reported as exactly what it refused. */
+  | { outcome: 'blocked'; plan: AdoptionPlan }
+
+/**
+ * Decides what a claim could do, without touching anything.
+ *
+ * The probe is the whole trick: an existing local range probes ITSELF,
+ * because that is the only range it may claim; a browser with no range probes
+ * a placeholder. Whatever the adoption planner then says about that range is
+ * the answer.
+ */
+export const planCentralBadgeRangeClaim = (input: {
+  config: EventConfig | undefined
+  context: DeviceSessionContext
+  issuedBadgeCount: number
+}): ClaimPlan => {
+  const { config, context, issuedBadgeCount } = input
+
+  // A claim creates a FIRST assignment. With one already recorded there is
+  // nothing to create, and adoption owns the situation.
+  if (context.activeBadgeRange !== null) {
+    return { outcome: 'central-assignment-exists' }
+  }
+
+  const coherentLocalRange =
+    config !== undefined &&
+    isPositiveInteger(config.badgeStart) &&
+    isPositiveInteger(config.badgeEnd) &&
+    config.badgeStart <= config.badgeEnd
+      ? { rangeStart: config.badgeStart, rangeEnd: config.badgeEnd }
+      : null
+
+  const plan = planCentralBadgeRangeAdoption({
+    config,
+    context: withActiveBadgeRange(context, {
+      ...(coherentLocalRange ?? PROBE_RANGE),
+      assignedAt: HYPOTHETICAL_ASSIGNED_AT,
+    }),
+    issuedBadgeCount,
+  })
+
+  if (plan.outcome === 'adoptable') {
+    return { outcome: 'claimable-fresh' }
+  }
+
+  if (plan.outcome === 'alignable') {
+    return {
+      outcome: 'claimable-existing',
+      rangeStart: plan.assignment.rangeStart,
+      rangeEnd: plan.assignment.rangeEnd,
+      nextBadge: plan.nextBadge,
+      issuedCount: issuedBadgeCount,
+    }
+  }
+
+  /**
+   * A binding exists and central reports nothing. The planner can only see
+   * the probe, so it reports a match or a change; either way the real
+   * situation is that local ownership history and central state disagree.
+   */
+  if (plan.outcome === 'already-adopted') {
+    return { outcome: 'binding-without-assignment', binding: plan.binding }
+  }
+
+  if (plan.outcome === 'central-range-changed') {
+    return { outcome: 'binding-without-assignment', binding: plan.binding }
+  }
+
+  return { outcome: 'blocked', plan }
+}
+
+/**
+ * Would this browser be able to adopt `requested`, if central accepted it?
+ *
+ * Asked BEFORE the central reservation, because reserving a range and only
+ * then discovering an obvious local conflict leaves a desk owning numbers it
+ * cannot issue — and nothing releases a central range in this phase.
+ *
+ * The answer is the real planner's, against the real stored row. There is no
+ * second copy of the safety matrix anywhere.
+ */
+export const checkCentralBadgeRangeClaimable = async (input: {
+  context: DeviceSessionContext
+  requested: { rangeStart: number; rangeEnd: number }
+}): Promise<{ ok: true } | { ok: false; plan: AdoptionPlan }> => {
+  const config = await db.config.get(EVENT_CONFIG_ID)
+  const issuedBadgeCount = await db.registrations
+    .where('status')
+    .equals('completed')
+    .count()
+
+  const plan = planCentralBadgeRangeAdoption({
+    config,
+    context: withActiveBadgeRange(input.context, {
+      rangeStart: input.requested.rangeStart,
+      rangeEnd: input.requested.rangeEnd,
+      assignedAt: HYPOTHETICAL_ASSIGNED_AT,
+    }),
+    issuedBadgeCount,
+  })
+
+  return plan.outcome === 'adoptable' || plan.outcome === 'alignable'
+    ? { ok: true }
+    : { ok: false, plan }
+}
+
+/**
+ * Reads the current plans for display, without adopting or claiming anything.
  *
  * The page needs to describe local badge state beside the central assignment,
  * and must never make the operator infer one from the other.
  */
 export const readCentralBadgeRangePlan = async (
   context: DeviceSessionContext,
-): Promise<{ plan: AdoptionPlan; config: EventConfig | undefined }> => {
+): Promise<{
+  plan: AdoptionPlan
+  claim: ClaimPlan
+  config: EventConfig | undefined
+}> => {
   const config = await db.config.get(EVENT_CONFIG_ID)
   const issuedBadgeCount = await db.registrations
     .where('status')
@@ -368,6 +528,7 @@ export const readCentralBadgeRangePlan = async (
 
   return {
     plan: planCentralBadgeRangeAdoption({ config, context, issuedBadgeCount }),
+    claim: planCentralBadgeRangeClaim({ config, context, issuedBadgeCount }),
     config,
   }
 }

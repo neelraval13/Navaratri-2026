@@ -858,15 +858,17 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
 for (const [index, name] of budget.actual.entries()) console.log(`    ${String(index + 1).padStart(2)}  ${name}`)
 
-check('the inventory is exactly the expected ten', budget.actual, [
+// Phase 9C-C2B adds `device-badge-claim`, the one new Function since the
+// consolidation. The Operator and Admin inventories are unchanged.
+check('the inventory is exactly the expected eleven', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'operator-login', 'operator-logout',
-  'operator-session', 'sync-registration',
+  'admin-events', 'device-auth', 'device-badge-claim', 'operator-login',
+  'operator-logout', 'operator-session', 'sync-registration',
 ])
 check('  which is within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and nothing unexpected', budget.problems, [])
 check('no api file is a helper rather than a Function',
   functionChecker.functionEntrypoints()

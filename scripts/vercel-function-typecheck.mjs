@@ -65,6 +65,7 @@ export const EXPECTED_FUNCTIONS = [
   'admin-devices',
   'admin-events',
   'device-auth',
+  'device-badge-claim',
   'operator-login',
   'operator-logout',
   'operator-session',

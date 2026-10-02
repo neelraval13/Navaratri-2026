@@ -254,7 +254,7 @@ console.log(`  ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_
 
 check('the deployment stays within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  at exactly ten Functions', budget.actual.length, 10)
+check('  at exactly eleven Functions', budget.actual.length, 11)
 check('  with no unexpected entrypoint', budget.problems, [])
 check('the six consolidated Functions are GONE, not wrappers',
   ['admin-login', 'admin-session', 'admin-logout',

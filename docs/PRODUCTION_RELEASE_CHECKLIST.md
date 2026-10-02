@@ -155,6 +155,31 @@ The third is the one to take seriously: binding a browser to the wrong central
 device succeeds, because it is the first binding. Later phases make badge
 ownership depend on it.
 
+### Badge-range self-claim (Phase 9C-C2B)
+
+A device with no central assignment can reserve one itself at `/device-login`,
+through `POST /api/device-badge-claim`. It is **online only** and requires the
+device session plus `registration`; the range it reserves must be the physical
+badge stack actually standing at that desk, which no software can verify.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.23 | Every desk's physical badge stack counted and its first/last number written down BEFORE anyone claims | ☐ |
+| 3.24 | Range claimed at the desk that holds the stack, with the confirmation ticked by the person looking at the badges | ☐ |
+| 3.25 | Admin shows each device owning exactly the range its desk physically holds, with no overlaps | ☐ |
+| 3.26 | Any desk that already had a local range claimed THAT range centrally, and its next badge is unchanged afterwards | ☐ |
+| 3.27 | No desk left in "Central range claimed, but local setup could not be completed" — that desk must not issue badges | ☐ |
+| 3.28 | No desk left showing "Claim status could not be confirmed" without a Refresh Device Status to settle it | ☐ |
+
+**There is no undo.** Nothing in the application releases, edits, transfers or
+extends a central badge range, so a range claimed against the wrong desk has to
+be reconciled by hand in the database before the event. Reserve a range only
+when the badges are on the table.
+
+A claim that succeeds centrally and fails locally leaves REAL central ownership
+in place; that is deliberate, so the ledger never disagrees with a human's
+belief about who holds the numbers. Resolve it before the desk opens.
+
 The login rate limit is a Vercel firewall rule configured by hand in the
 Dashboard — no application code creates it, and `release:check` cannot verify
 it.

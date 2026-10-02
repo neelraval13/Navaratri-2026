@@ -1,11 +1,12 @@
-import { CircleAlert, CircleCheck, MonitorSmartphone, Ticket } from 'lucide-react'
+import { CircleAlert, CircleCheck, Ticket } from 'lucide-react'
 import { useState } from 'react'
 import type * as React from 'react'
 
-import { Link } from 'wouter'
-
-import { ROUTES } from '@/app/routes'
-import { Button, buttonVariants } from '@/components/ui/button'
+import AdoptionBlock from '@/components/device-auth/adoption-block'
+import BadgeRangeClaim from '@/components/device-auth/badge-range-claim'
+import BadgeStateRow from '@/components/device-auth/badge-state-row'
+import ClaimResult from '@/components/device-auth/claim-result'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -15,34 +16,29 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import type { AdoptionPlan } from '@/db/central-badge-range'
+import type { AdoptionPlan, ClaimPlan } from '@/db/central-badge-range'
 import { formatBadgeRange } from '@/db/device'
 import type { CentralBadgeRangeBinding, EventConfig } from '@/db/types'
+import type { BadgeClaimFlowResult } from '@/device-auth/badge-claim'
 import { formatBadgeNumber } from '@/lib/badge'
 
 interface LocalBadgeSetupProps {
   deviceName: string
   plan: AdoptionPlan
+  claimPlan: ClaimPlan
+  claimResult: BadgeClaimFlowResult | null
   config: EventConfig | undefined
   isBusy: boolean
   error: string | null
   onAdopt: (physicalStackConfirmed: boolean) => void
+  onClaim: (input: {
+    rangeStart: number
+    rangeEnd: number
+    physicalStackConfirmed: boolean
+  }) => void
+  onRangeEdited: () => void
+  onRefresh: () => void
 }
-
-const Row: React.FC<{ label: string; children: React.ReactNode }> = ({
-  label,
-  children,
-}) => (
-  <div>
-    <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
-      {label}
-    </p>
-
-    <div className="mt-0.5 text-sm">
-      {children}
-    </div>
-  </div>
-)
 
 /**
  * The confirmation an operator must give before this browser starts issuing
@@ -102,25 +98,25 @@ const AdoptDialog: React.FC<{
         </DialogHeader>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Row label="Device">
+          <BadgeStateRow label="Device">
             {deviceName}
-          </Row>
+          </BadgeStateRow>
 
-          <Row label="Central assignment">
+          <BadgeStateRow label="Central assignment">
             <span className="font-heading text-lg font-semibold">
               {range}
             </span>
-          </Row>
+          </BadgeStateRow>
 
-          <Row label="Badge count">
+          <BadgeStateRow label="Badge count">
             {String(count)}
-          </Row>
+          </BadgeStateRow>
 
-          <Row label={isAlignment ? 'Next badge stays' : 'Local next badge after setup'}>
+          <BadgeStateRow label={isAlignment ? 'Next badge stays' : 'Local next badge after setup'}>
             <span className="font-medium">
               {formatBadgeNumber(existingNextBadge ?? rangeStart)}
             </span>
-          </Row>
+          </BadgeStateRow>
         </div>
 
         <Label
@@ -173,7 +169,7 @@ const AdoptDialog: React.FC<{
 const BindingProvenance: React.FC<{ binding: CentralBadgeRangeBinding }> = ({
   binding,
 }) => (
-  <Row label="Central binding">
+  <BadgeStateRow label="Central binding">
     <span className="flex items-center gap-1.5 font-medium">
       <CircleCheck className="size-4" />
       Aligned with central assignment
@@ -182,7 +178,7 @@ const BindingProvenance: React.FC<{ binding: CentralBadgeRangeBinding }> = ({
     <span className="mt-1 block text-xs text-muted-foreground">
       {formatBadgeRange(binding.rangeStart, binding.rangeEnd)}
     </span>
-  </Row>
+  </BadgeStateRow>
 )
 
 /**
@@ -192,14 +188,23 @@ const BindingProvenance: React.FC<{ binding: CentralBadgeRangeBinding }> = ({
  * this browser can issue badges from the fact that Postgres says it owns some.
  * Every blocked state says what is wrong and offers no override — a range
  * mismatch is a badge-uniqueness risk, not a preference.
+ *
+ * When central reports NO assignment the section becomes the self-claim
+ * surface instead, because that is the one situation a device can resolve by
+ * itself while online.
  */
 const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
   deviceName,
   plan,
+  claimPlan,
+  claimResult,
   config,
   isBusy,
   error,
   onAdopt,
+  onClaim,
+  onRangeEdited,
+  onRefresh,
 }) => {
   const localRange =
     config?.badgeEnd === undefined
@@ -212,69 +217,29 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
         Local Badge Setup
       </p>
 
-      {plan.outcome === 'device-not-registered' ? (
-        <div className="space-y-3">
-          <p className="flex items-center gap-2 font-semibold">
-            <MonitorSmartphone className="size-5" />
-            Local device setup required
-          </p>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            This browser still needs its local device setup before a central
-            badge range can be adopted in this transitional phase.
-          </p>
-
-          <Link
-            href={ROUTES.deviceRegistration}
-            className={buttonVariants({ variant: 'outline' })}
-          >
-            Set Up Local Device
-          </Link>
-        </div>
-      ) : null}
-
-      {plan.outcome === 'registration-not-permitted' ? (
-        <div className="space-y-2">
-          <p className="font-semibold">
-            Not available
-          </p>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            This device does not have Registration access, so it cannot hold a
-            badge range. An administrator grants it.
-          </p>
-        </div>
-      ) : null}
-
       {plan.outcome === 'no-central-assignment' ? (
-        <div className="space-y-2">
-          <Row label="Central assignment">
-            <span className="text-muted-foreground">
-              Not assigned
-            </span>
-          </Row>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            An administrator assigns this device a badge range centrally. There
-            is nothing to adopt yet.
-          </p>
-        </div>
+        <BadgeRangeClaim
+          plan={claimPlan}
+          isBusy={isBusy}
+          onClaim={onClaim}
+          onRangeEdited={onRangeEdited}
+        />
       ) : null}
 
       {plan.outcome === 'adoptable' ? (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Row label="Local badge range">
+            <BadgeStateRow label="Local badge range">
               <span className="text-muted-foreground">
                 Not configured
               </span>
-            </Row>
+            </BadgeStateRow>
 
-            <Row label="Central assignment">
+            <BadgeStateRow label="Central assignment">
               <span className="font-heading text-lg font-semibold">
                 {formatBadgeRange(plan.assignment.rangeStart, plan.assignment.rangeEnd)}
               </span>
-            </Row>
+            </BadgeStateRow>
           </div>
 
           <p className="text-sm leading-relaxed">
@@ -296,27 +261,27 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
       {plan.outcome === 'alignable' ? (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Row label="Local badge range">
+            <BadgeStateRow label="Local badge range">
               <span className="font-medium">
                 {localRange}
               </span>
-            </Row>
+            </BadgeStateRow>
 
-            <Row label="Central assignment">
+            <BadgeStateRow label="Central assignment">
               <span className="font-medium">
                 {formatBadgeRange(plan.assignment.rangeStart, plan.assignment.rangeEnd)}
               </span>
-            </Row>
+            </BadgeStateRow>
 
-            <Row label="Status">
+            <BadgeStateRow label="Status">
               Ranges match
-            </Row>
+            </BadgeStateRow>
 
-            <Row label="Next badge">
+            <BadgeStateRow label="Next badge">
               <span className="font-medium">
                 {formatBadgeNumber(plan.nextBadge)}
               </span>
-            </Row>
+            </BadgeStateRow>
           </div>
 
           <p className="text-sm leading-relaxed text-muted-foreground">
@@ -338,129 +303,34 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
 
       {plan.outcome === 'already-adopted' ? (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Row label="Badge range">
+          <BadgeStateRow label="Badge range">
             <span className="font-medium">
               {localRange}
             </span>
-          </Row>
+          </BadgeStateRow>
 
-          <Row label="Next badge">
+          <BadgeStateRow label="Next badge">
             <span className="font-medium">
               {config === undefined ? '' : formatBadgeNumber(config.nextBadge)}
             </span>
-          </Row>
+          </BadgeStateRow>
 
           <BindingProvenance binding={plan.binding} />
         </div>
       ) : null}
 
-      {plan.outcome === 'range-conflict' ? (
-        <div className="space-y-3">
-          <p className="flex items-center gap-2 font-semibold text-destructive">
-            <CircleAlert className="size-5" />
-            Badge ranges do not match
-          </p>
+      {/* Every refusal, rendered once, shared with the self-claim section. */}
+      <AdoptionBlock plan={plan} />
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Row label="Central">
-              <span className="font-medium">
-                {formatBadgeRange(plan.assignment.rangeStart, plan.assignment.rangeEnd)}
-              </span>
-            </Row>
-
-            <Row label="Local">
-              <span className="font-medium">
-                {formatBadgeRange(plan.local.rangeStart, plan.local.rangeEnd)}
-              </span>
-            </Row>
-          </div>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            These ranges do not match. Automatic adoption is blocked to protect
-            badge uniqueness. An administrator must reconcile them.
-          </p>
-        </div>
-      ) : null}
-
-      {plan.outcome === 'incoherent-next-badge' ? (
-        <div className="space-y-3">
-          <p className="flex items-center gap-2 font-semibold text-destructive">
-            <CircleAlert className="size-5" />
-            Local badge counter needs attention
-          </p>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            The local range matches the central assignment, but the next badge
-            number sits outside it. Adoption is blocked rather than guessing a
-            replacement, because a wrong counter reissues a physical badge.
-          </p>
-        </div>
-      ) : null}
-
-      {plan.outcome === 'issued-badges-without-range' ? (
-        <div className="space-y-3">
-          <p className="flex items-center gap-2 font-semibold text-destructive">
-            <CircleAlert className="size-5" />
-            Badges already issued on this browser
-          </p>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {String(plan.issuedCount)} badge
-            {plan.issuedCount === 1 ? ' has' : 's have'} been issued here with no
-            configured range. Adopting now could reissue a badge already handed
-            out, so it is blocked and needs reconciliation.
-          </p>
-        </div>
-      ) : null}
-
-      {plan.outcome === 'binding-device-conflict' ? (
-        <div className="space-y-3">
-          <p className="flex items-center gap-2 font-semibold text-destructive">
-            <CircleAlert className="size-5" />
-            This badge range belongs to a different central device
-          </p>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            The local range {formatBadgeRange(plan.binding.rangeStart, plan.binding.rangeEnd)}{' '}
-            was adopted for another central device. It is never reassigned
-            silently — an administrator must reconcile it.
-          </p>
-        </div>
-      ) : null}
-
-      {plan.outcome === 'central-range-changed' ? (
-        <div className="space-y-3">
-          <p className="flex items-center gap-2 font-semibold text-destructive">
-            <CircleAlert className="size-5" />
-            Central assignment changed
-          </p>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Row label="Adopted">
-              <span className="font-medium">
-                {formatBadgeRange(plan.binding.rangeStart, plan.binding.rangeEnd)}
-              </span>
-            </Row>
-
-            <Row label="Central now">
-              <span className="font-medium">
-                {formatBadgeRange(plan.assignment.rangeStart, plan.assignment.rangeEnd)}
-              </span>
-            </Row>
-          </div>
-
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            The local range is left exactly as it is. Changing it here could
-            reissue or orphan physical badges, so this needs reconciliation.
-          </p>
-        </div>
-      ) : null}
-
-      {plan.outcome === 'missing-config' ? (
-        <p className="text-sm text-muted-foreground">
-          Local storage is not ready. Reload and try again.
-        </p>
-      ) : null}
+      {/*
+        Outside the claim form on purpose. A successful reservation moves this
+        section onto the adoption view, and the report of what just happened —
+        above all "central claimed, local setup failed" — has to survive that
+        move rather than disappear with the form that triggered it.
+      */}
+      {claimResult === null ? null : (
+        <ClaimResult result={claimResult} onRefresh={onRefresh} />
+      )}
     </div>
   )
 }

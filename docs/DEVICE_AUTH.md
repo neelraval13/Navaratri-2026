@@ -515,14 +515,190 @@ an operator-gated desk from issuing badges.** Disabling a device centrally
 invalidates its device session, but the event routes do not consult it yet, and
 an offline desk consults nothing. Closing that is C3/D.
 
-No self-claim: if there is no central assignment there is nothing to adopt, and
-`/device-login` offers no range entry. Creating an assignment from the device is
-Phase 9C-C2B.
+## Phase 9C-C2B — authenticated online badge-range self-claim
+
+C2A could only adopt an assignment an Admin had already made. C2B lets a device
+that owns **no** central range reserve one itself, while online and signed in.
+
+```
+POST /api/device-badge-claim      11 / 12 Vercel Functions, headroom 1
+```
+
+### The request
+
+```json
+{ "rangeStart": 201, "rangeEnd": 300, "physicalStackConfirmed": true }
+```
+
+That is the whole body. **`deviceId`, `eventId`, `eventSlug` and `loginName` are
+refused outright**, not ignored: the authenticated session decides which device
+and event a claim belongs to, and a field a caller believes it can choose is one
+a later refactor might start reading.
+
+`physicalStackConfirmed` must be exactly `true`. The server cannot see the
+badges — only the operator can — but requiring the flag means a buggy or
+bypassed client cannot reserve a range without that deliberate action having
+happened. It is a **mutation guard and is never persisted**: no column, no
+migration, nothing in the reservation row. The local `badgeConfiguredAt`
+continues to express the local setup event.
+
+### Authentication
+
+The endpoint authenticates with `__Host-navaratri_device_session` and nothing
+else, through the same primitives `GET /api/device-auth` uses. **A claim fails
+wherever that session check would fail**: an unknown or tampered cookie, a
+`session_version` behind the row, a disabled device, a deactivated event, an
+unprovisioned `password_hash`. An Admin or operator cookie authenticates
+nothing here. Every one of those is the same generic 401, and none of them
+writes.
+
+`registration` is then required from the **current** Postgres attribute set, not
+from the token and not from the cached enrollment — an Admin may have removed it
+after the form was rendered. Without it: `403 registration-required`, no central
+mutation. `prizes` alone can never claim badge numbers.
+
+### One shared central writer
+
+`server/badge-assignments/reserve.ts` is the ONLY module in the repository that
+inserts a `badge_assignments` row. Admin preassignment and Device self-claim both
+go through it, so the insert and the interpretation of a constraint violation
+exist once.
+
+Their **authorization layers stay separate**: Admin checks that the device it
+picked exists, belongs to the event, is enabled and holds `registration`; a
+device proves its own session. Admin never imports device session code, and the
+claim endpoint never imports Admin auth. The range *model* —
+`server/badge-assignments/range.ts` — is shared too, so a device cannot claim a
+range Admin could not assign.
+
+### Postgres is the authority
+
+Prechecks exist for a useful message, never for safety. Two writers can each
+read "no overlap" and both proceed; what stops them is the database:
+
+| Constraint | Conflict | Response |
+|---|---|---|
+| `badge_assignments_active_ranges_no_overlap` (GiST **exclusion constraint**) | `range-overlap` | 409 |
+| `badge_assignments_one_active_per_device` (partial unique index) | `already-assigned` | 409 |
+| `badge_assignments_device_event_fk` | `device-event-mismatch` | 409, fails closed |
+
+`range-overlap` never says which device holds the numbers. An unrecognised
+database error is rethrown and becomes a generic 500; no SQL, table name or
+connection string reaches the caller or the log.
+
+#### Internal names, public names
+
+The database layer and the wire use different spellings on purpose, and
+exactly one place translates between them —
+`PUBLIC_BADGE_CLAIM_CONFLICT` in `server/badge-assignments/conflicts.ts`:
+
+| Internal | Public |
+|---|---|
+| `badge-range-overlap` | `range-overlap` |
+| `badge-range-already-assigned` | `already-assigned` |
+| `device-event-mismatch` | `device-event-mismatch` |
+
+The map is a total `Record` over the internal conflicts, so adding one without
+deciding its public name fails to compile. The public set lives in
+`src/shared/badge-claim-contract.ts` and the browser recognises it with that
+module's own guard, so neither side can drift onto the other's spelling. A
+Postgres constraint name is never a wire value.
+
+#### The error arrives wrapped
+
+Drizzle rethrows every driver error as `DrizzleQueryError`, whose message is
+`Failed query: …` and whose `cause` carries the real Postgres error:
+
+```
+DrizzleQueryError        message: "Failed query: insert into …"
+  └─ cause: NeonDbError  constraint: "badge_assignments_…", code: "23P01"
+       └─ sourceError: …
+```
+
+`readConstraintName` therefore walks the chain. Reading only the top level
+mapped **nothing** in production while passing every test written against a
+bare error object — an overlapping badge range reached the operator as *"The
+server returned an unexpected response."*, and every Admin conflict
+(`login-name-taken`, `event-slug-taken`, both badge conflicts) degraded to a
+generic 500 the same way. The verification suite's stand-in database now
+throws the wrapped shape, so the gap cannot reopen.
+
+### Retries are idempotent
+
+| Situation | Answer |
+|---|---|
+| This device already owns the **same** range | `200 already-claimed`, the authoritative row, no second insert |
+| This device already owns a **different** range | `409 already-assigned`, **with its own real range**, never replaced |
+| A concurrent writer committed between the check and the insert | the one-active-per-device violation is caught, the current assignment is **re-read**, and the two answers above apply |
+
+That last row is also what recovers a response lost in flight: replaying the
+request is safe.
+
+### The local preflight comes first
+
+Before any request is sent, the browser proves against its OWN IndexedDB that it
+could safely adopt the range if Postgres accepted it. There is exactly **one**
+definition of "can this browser own range X?" — the C2A adoption planner — and
+the claim planner and the preflight both run it. The safety matrix is not copied
+into the UI.
+
+Reserving first and only then discovering a local conflict would leave a desk
+owning numbers it cannot issue, and **nothing releases a central range in this
+phase.**
+
+### What the operator sees, in the existing Local Badge Setup section
+
+| Local state | Offered |
+|---|---|
+| No local range, no issued badges | **Badge Range Setup**: start, end, live badge count, mandatory confirmation, `Claim & Set Up #201–#300` |
+| A coherent local range (with or without issued badges) | the range **read-only**, its next badge and completed count, `Claim Existing #001–#200 Centrally` |
+| Issued badges but no coherent range | blocked |
+| An incoherent local range or counter | blocked |
+| A binding whose central assignment is gone | blocked: *"Local badge ownership history does not match the current central state."* |
+| A binding for a different central device | blocked |
+
+**There is no suggested range and no "next free range" button.** No global
+allocator exists, and inventing one would let the software rather than the
+physical badge stack decide which numbers a desk hands out. An existing local
+range may claim only ITSELF — typing a different one would put the local
+allocator immediately at odds with central ownership.
+
+The happy path is ONE deliberate action: confirm the stack → preflight →
+reserve → adopt the range the **server** returned, through the same C2A
+transaction. C2B has no local badge writer of its own.
+
+### The two distributed failures
+
+There is no transaction across Postgres and IndexedDB, so both are handled
+explicitly.
+
+**Central succeeded, local setup did not.** The reservation is real and is
+**not rolled back** — undoing it automatically would hand the numbers back while
+a human still believes this desk owns them. The page says so, shows both the
+central assignment and the local reason, and tells the operator not to issue
+badges from this device until it is reconciled. The next session check surfaces
+the assignment and C2A's ordinary alignment or conflict UI becomes the recovery
+path.
+
+**The response was lost.** A network failure or timeout is reported as *"Claim
+status could not be confirmed."*, never as a failure: the reservation may have
+committed. Nothing local changes, nothing is retried automatically, and the
+operator re-checks central state with **Refresh Device Status**.
+
+### Still true
+
+Central owns the RANGE; **`nextBadge` stays local** and is never reset by a
+claim. There is no `next_badge`, `last_issued_badge` or `claimed_count` column,
+and issuing a badge updates no central row. No attendee data enters Postgres.
+The claim is **online only** — there is no offline path, no polling and no
+heartbeat.
 
 ## Not in this phase
 
-No device gate on any event route. No offline device authorization. No use of
-cached attributes as authority. No badge-range SELF-CLAIM — adoption of an
-existing assignment is described above. No heartbeat. No change to Google Sheets, to the outbox, or to sync
-authentication, which still uses Operator Access. No schema change — this phase
-added no migration and uses the columns Phase 9C-A already provided.
+No device gate on any event route — `/`, `/badge-registration` and
+`/device-registration` still answer to Operator Access, and an operator may see
+both sign-ins during this transitional period. No offline device authorization.
+No use of cached attributes as authority. No release, edit, transfer or extend
+of a central range. No heartbeat. No change to Google Sheets, to the outbox, or
+to sync authentication, which still uses Operator Access. No schema change —
+C2A and C2B both added no migration and use the columns Phase 9C-A provided.

@@ -75,11 +75,15 @@ const parseAttributes = (value: unknown): DeviceAttribute[] | null => {
   return [...new Set(value)].sort()
 }
 
-const parseBadgeRange = (value: unknown): DeviceBadgeRange | null | 'invalid' => {
-  if (value === null || value === undefined) {
-    return null
-  }
-
+/**
+ * A badge range that MUST be present, projected field by field.
+ *
+ * Exported because the self-claim response carries one too, and both answers
+ * must be validated by the same rules — a range is what decides which
+ * physical badges a desk hands out, so a response that merely looks right is
+ * not good enough.
+ */
+export const parseDeviceBadgeRange = (value: unknown): DeviceBadgeRange | null => {
   if (
     !isRecord(value) ||
     !isPositiveInteger(value.rangeStart) ||
@@ -87,7 +91,7 @@ const parseBadgeRange = (value: unknown): DeviceBadgeRange | null | 'invalid' =>
     value.rangeStart > value.rangeEnd ||
     !isNonEmpty(value.assignedAt)
   ) {
-    return 'invalid'
+    return null
   }
 
   return {
@@ -95,6 +99,15 @@ const parseBadgeRange = (value: unknown): DeviceBadgeRange | null | 'invalid' =>
     rangeEnd: value.rangeEnd,
     assignedAt: value.assignedAt,
   }
+}
+
+/** The session's range is OPTIONAL: a device may legitimately own none. */
+const parseBadgeRange = (value: unknown): DeviceBadgeRange | null | 'invalid' => {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  return parseDeviceBadgeRange(value) ?? 'invalid'
 }
 
 /**
@@ -165,3 +178,35 @@ export const parseDeviceSessionContext = (
     activeBadgeRange,
   }
 }
+
+/**
+ * The same context, carrying a DIFFERENT active badge range.
+ *
+ * Used where an authoritative range arrives separately from the session that
+ * proved the identity — a freshly reserved one from the claim endpoint, or a
+ * hypothetical one being tested for local compatibility before anything is
+ * reserved at all.
+ *
+ * Projected field by field, exactly as the parser builds it, so a future
+ * server field can never ride along into something that gets persisted.
+ */
+export const withActiveBadgeRange = (
+  context: DeviceSessionContext,
+  activeBadgeRange: DeviceBadgeRange | null,
+): DeviceSessionContext => ({
+  device: {
+    id: context.device.id,
+    eventId: context.device.eventId,
+    name: context.device.name,
+    loginName: context.device.loginName,
+    attributes: [...context.device.attributes],
+    lastSeenAt: context.device.lastSeenAt,
+  },
+  event: {
+    id: context.event.id,
+    slug: context.event.slug,
+    name: context.event.name,
+    timezone: context.event.timezone,
+  },
+  activeBadgeRange,
+})

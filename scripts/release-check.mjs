@@ -96,6 +96,9 @@ const REQUIRED_FILES = [
   'src/shared/device-password.ts',
   'api/device-auth.ts',
   'src/device-auth/device-api.ts',
+  'src/shared/badge-claim-contract.ts',
+  'server/badge-assignments/conflicts.ts',
+  'server/db/constraints.ts',
   'src/device-auth/device-session-contract.ts',
   'src/db/central-enrollment.ts',
   'src/db/central-badge-range.ts',
@@ -1190,6 +1193,7 @@ const EXPECTED_FUNCTIONS = [
   'admin-devices.ts',
   'admin-events.ts',
   'device-auth.ts',
+  'device-badge-claim.ts',
   'operator-login.ts',
   'operator-logout.ts',
   'operator-session.ts',
@@ -1400,22 +1404,10 @@ if (enrollmentPanel === null) {
   }
 }
 
-// The two phases that own range creation are not started.
+// Range creation has exactly one endpoint; the alternatives never appeared.
 for (const name of ['device-badge-assignment.ts', 'device-claim-range.ts', 'device-range.ts']) {
   if (exists(join(ROOT, 'api', name))) {
-    adoptionProblems.push(`api/${name} exists before its phase`)
-  }
-}
-
-for (const path of walk(join(ROOT, 'src'))) {
-  if (!isTextFile(basename(path))) {
-    continue
-  }
-
-  const text = readText(path)
-
-  if (text !== null && /claimBadgeRange|selfClaimRange/.test(stripComments(text))) {
-    adoptionProblems.push(`${rel(path)} implements a badge-range self-claim`)
+    adoptionProblems.push(`api/${name} is a second badge-range endpoint`)
   }
 }
 
@@ -1424,6 +1416,221 @@ addCheck(
   'A central badge range is adopted locally only by an explicit operator action',
   adoptionProblems,
 )
+
+// --- I2. authenticated online badge-range self-claim ----------------------
+/**
+ * A device may reserve a badge range centrally while online. Postgres decides
+ * OWNERSHIP; the local `nextBadge` remains the allocator, because issuing a
+ * badge must work with no network.
+ */
+const selfClaimProblems = []
+const CLAIM_ENDPOINT = 'api/device-badge-claim.ts'
+const claimSource = readText(join(ROOT, CLAIM_ENDPOINT))
+const reserveSource = readText(join(ROOT, 'server/badge-assignments/reserve.ts'))
+const claimRequestSource = readText(join(ROOT, 'server/device-auth/requests.ts'))
+const claimFlowSource = readText(join(ROOT, 'src/device-auth/badge-claim.ts'))
+
+if (claimSource === null || reserveSource === null || claimRequestSource === null ||
+    claimFlowSource === null) {
+  selfClaimProblems.push('the self-claim endpoint, writer, validator or flow could not be read')
+} else {
+  const endpoint = stripComments(claimSource)
+  const validator = stripComments(claimRequestSource)
+  const flow = stripComments(claimFlowSource)
+
+  // The METHOD surface: POST only, and nothing else under api/ claims a range.
+  if (/export (async )?function (GET|PUT|PATCH|DELETE)\(/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} exports a method other than POST`)
+  }
+
+  // IDENTITY COMES FROM THE COOKIE, never from the body.
+  if (!/authorizeDeviceRequest\(/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} does not authenticate the device session`)
+  }
+
+  if (!/authorized\.context/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} does not take its identity from the session context`)
+  }
+
+  for (const field of ['deviceId', 'eventId', 'eventSlug', 'loginName']) {
+    // Any read of an identity field off a request-shaped value. The endpoint
+    // legitimately WRITES `deviceId:`/`eventId:` when it reserves, from the
+    // session context — what it may never do is read one from the caller.
+    if (new RegExp(`\\b(body|raw|payload|parsed|json|claim)\\b[^\\n]{0,60}\\.${field}\\b`).test(endpoint) ||
+        new RegExp(`${field}[^\\n]{0,40}=[^\\n]{0,40}\\b(body|raw|payload|parsed|json)\\b`).test(endpoint)) {
+      selfClaimProblems.push(`${CLAIM_ENDPOINT} reads ${field} from the request body`)
+    }
+
+    if (!new RegExp(`'${field}'`).test(validator)) {
+      selfClaimProblems.push(`the claim validator does not refuse a ${field} field`)
+    }
+  }
+
+  // The two server-side preconditions that cannot be delegated to a browser.
+  if (!/BADGE_RANGE_REQUIRED_ATTRIBUTE|'registration'/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} does not require Registration server-side`)
+  }
+
+  if (!/physicalStackConfirmed !== true/.test(validator)) {
+    selfClaimProblems.push('the claim validator does not require an exact physical confirmation')
+  }
+
+  // The confirmation is a mutation guard, never persisted.
+  for (const [file, text] of [
+    ['server/db/schema.ts', readText(join(ROOT, 'server/db/schema.ts')) ?? ''],
+    ['server/badge-assignments/reserve.ts', reserveSource],
+  ]) {
+    if (/physical_?[sS]tack|physical_confirmed|physicalStackConfirmed/.test(text)) {
+      selfClaimProblems.push(`${file} persists the physical-stack confirmation`)
+    }
+  }
+
+  // ONE central writer, shared with Admin.
+  const inserters = [...walk(join(ROOT, 'server')), ...walk(join(ROOT, 'api'))]
+    .filter((path) => extname(path) === '.ts')
+    .filter((path) => /insert\(badgeAssignments\)/.test(stripComments(readText(path) ?? '')))
+    .map((path) => rel(path))
+
+  if (inserters.length !== 1 || inserters[0] !== 'server/badge-assignments/reserve.ts') {
+    selfClaimProblems.push(
+      `central badge assignments are inserted in ${String(inserters.length)} place(s): ${inserters.join(', ')}`,
+    )
+  }
+
+  const registrySource = readText(join(ROOT, 'server/admin/registry.ts')) ?? ''
+
+  if (!/reserveBadgeRange\(/.test(stripComments(registrySource))) {
+    selfClaimProblems.push('Admin does not use the shared central reservation primitive')
+  }
+
+  // Central ownership is a RANGE. There is no central counter.
+  for (const name of ['next_badge', 'nextBadge', 'last_issued_badge', 'claimed_count']) {
+    if (stripComments(reserveSource).includes(name)) {
+      selfClaimProblems.push(`the central reservation primitive carries ${name}`)
+    }
+  }
+
+  // No attendee data is introduced centrally.
+  for (const name of ['attendee', 'normalizedName', 'paymentMethod']) {
+    if (stripComments(reserveSource).includes(name) || endpoint.includes(name)) {
+      selfClaimProblems.push(`the self-claim path names attendee data (${name})`)
+    }
+  }
+
+  // A central range is never released, by anyone.
+  for (const path of [...walk(join(ROOT, 'server')), ...walk(join(ROOT, 'api')), ...walk(join(ROOT, 'src'))]) {
+    if (extname(path) !== '.ts' && extname(path) !== '.tsx') {
+      continue
+    }
+
+    if (/releaseBadgeRange|releasedAt:\s*new Date|\.set\(\{\s*releasedAt/
+      .test(stripComments(readText(path) ?? ''))) {
+      selfClaimProblems.push(`${rel(path)} releases a central badge range`)
+    }
+  }
+
+  // C2A stays the ONLY local badge-range adoption writer.
+  if (/db\.config|db\.transaction|badgeStart:|badgeEnd:|nextBadge:/.test(flow)) {
+    selfClaimProblems.push('the claim flow writes local badge state directly')
+  }
+
+  if (!/adoptCentralBadgeRange\(/.test(flow)) {
+    selfClaimProblems.push('the claim flow does not reuse the C2A adoption transaction')
+  }
+
+  // The local preflight runs BEFORE the central reservation.
+  if (!/checkCentralBadgeRangeClaimable\(/.test(flow)) {
+    selfClaimProblems.push('the claim flow does not run the local preflight')
+  }
+
+  /**
+   * Scanned from the function BODY, not the module: the import list names
+   * both helpers before either is called, so comparing positions in the whole
+   * file would compare two import lines and always pass.
+   */
+  const flowBody = flow.slice(flow.indexOf('export const claimCentralBadgeRange'))
+
+  if (flowBody.indexOf('checkCentralBadgeRangeClaimable') === -1 ||
+      flowBody.indexOf('claimDeviceBadgeRange(') === -1 ||
+      flowBody.indexOf('checkCentralBadgeRangeClaimable') > flowBody.indexOf('claimDeviceBadgeRange(')) {
+    selfClaimProblems.push('the claim flow reserves centrally before checking local state')
+  }
+
+  if (flowBody.indexOf('claimDeviceBadgeRange(') > flowBody.indexOf('adoptCentralBadgeRange(')) {
+    selfClaimProblems.push('the claim flow adopts locally before the central reservation')
+  }
+
+  // Online only, and never polled.
+  if (/setInterval|setTimeout|navigator\.onLine/.test(flow)) {
+    selfClaimProblems.push('the claim flow polls, retries on a timer or guesses connectivity')
+  }
+
+  for (const path of walk(join(ROOT, 'src'))) {
+    if (!isTextFile(basename(path))) {
+      continue
+    }
+
+    const text = stripComments(readText(path) ?? '')
+
+    if (/device-badge-claim/.test(text) && rel(path) !== 'src/device-auth/device-api.ts') {
+      selfClaimProblems.push(`${rel(path)} names the claim endpoint outside the device client`)
+    }
+
+    // A Postgres constraint name is a server detail and never a wire value.
+    if (/badge_assignments_|devices_event_id_login_name_key|events_slug_key/.test(text)) {
+      selfClaimProblems.push(`${rel(path)} exposes an internal constraint name to the browser`)
+    }
+  }
+
+  /**
+   * The internal-to-public conflict translation must exist in ONE place, and
+   * the client must recognise the public spelling by the SHARED definition
+   * rather than by a literal it keeps in step by hand.
+   */
+  const conflictsSource = stripComments(
+    readText(join(ROOT, 'server/badge-assignments/conflicts.ts')) ?? '',
+  )
+  const clientSource = stripComments(readText(join(ROOT, 'src/device-auth/device-api.ts')) ?? '')
+
+  if (!/PUBLIC_BADGE_CLAIM_CONFLICT/.test(conflictsSource)) {
+    selfClaimProblems.push('the internal-to-public conflict translation is missing')
+  }
+
+  if (!/PUBLIC_BADGE_CLAIM_CONFLICT/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} does not translate conflicts through the shared map`)
+  }
+
+  if (!/isBadgeClaimConflict/.test(clientSource)) {
+    selfClaimProblems.push('the claim client does not parse the conflict with the shared guard')
+  }
+
+  /**
+   * Drizzle rethrows every driver error wrapped, with the real Postgres error
+   * on `cause`. A reader that inspects only the top level maps NOTHING in
+   * production while passing every test built on a bare error object — which
+   * is how an overlapping badge range reached an operator as an unexpected
+   * response.
+   */
+  const constraintReader = stripComments(
+    readText(join(ROOT, 'server/db/constraints.ts')) ?? '',
+  )
+
+  if (!/\.cause/.test(constraintReader)) {
+    selfClaimProblems.push('the constraint reader does not follow the wrapped error cause')
+  }
+}
+
+addCheck(
+  'badge-self-claim',
+  'A device may claim a badge range centrally only while authenticated and online',
+  selfClaimProblems,
+)
+
+if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 1) {
+  budgetProblems.push(
+    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 1`,
+  )
+}
 
 addCheck(
   'function-budget',

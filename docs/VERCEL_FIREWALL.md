@@ -140,6 +140,25 @@ is doing real work, so it must be set explicitly.
 
 ---
 
+## Why the claim endpoint gets no rule
+
+`POST /api/device-badge-claim` is **not** a login. It is refused outright
+without a valid `__Host-navaratri_device_session`, so there is no credential
+to guess at it and no enumeration surface to throttle.
+
+What protects it is the database, not request volume: active badge ranges
+cannot overlap within an event (a GiST exclusion constraint) and a device may
+hold at most one active assignment (a partial unique index). A caller holding
+a real device session can repeat the request as often as it likes and still
+produce exactly one row — a repeat of the same range is answered
+`already-claimed`, and a different one `already-assigned`.
+
+Rate-limiting the path would also throttle the legitimate retry that recovers
+a response lost in flight, which is the one case where retrying is the correct
+behaviour.
+
+---
+
 ## This is a layer, not a replacement
 
 Every existing application protection stays exactly as it is:

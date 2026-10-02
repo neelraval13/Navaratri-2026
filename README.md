@@ -118,18 +118,42 @@ allocator — issuance still works with no network — and the Phase 7 local
 
 Signing the device out does not clear an adopted range.
 
+A device that owns **no** central range can now reserve one itself, while
+online and signed in, through `POST /api/device-badge-claim`. The body carries
+only the range and the physical-stack confirmation — the session is the
+identity, so `deviceId`, `eventId`, `eventSlug` and `loginName` are refused
+rather than ignored. `registration` is re-read from Postgres on the request.
+
+Admin preassignment and device self-claim write through **one** shared
+reservation primitive, and the database is the authority: a GiST exclusion
+constraint and a partial unique index, not a `SELECT`, are what stop two
+writers. Retries are idempotent — the same range returns `already-claimed`, a
+different one returns `already-assigned` with this device's real range, and
+neither creates a second row.
+
+Before anything is sent, the browser proves against its own IndexedDB that it
+could adopt the range, using the *same* planner the adoption UI uses. A desk
+that already has a coherent range may claim only that exact range, read-only,
+and keeps its `nextBadge`. There is **no suggested range** — no global
+allocator exists, and the physical stack decides.
+
+The two distributed failures are explicit: a claim that succeeded centrally but
+could not be set up locally is reported loudly and **is not rolled back**, and
+a lost response is reported as *"Claim status could not be confirmed."* with a
+Refresh Device Status action, never as a failure.
+
 Admin and Device authentication are each **one endpoint with three methods** —
 `POST` signs in, `GET` introspects, `DELETE` signs out. Every file under `api/`
 is a Vercel Function and the Hobby plan allows twelve; this deployment uses
-**10**, with two spare.
+**11**, with one spare.
 
 See `docs/DEVICE_AUTH.md`.
 
 **Still deliberately absent:** any device gate on an event route, offline
-device authorization, badge-range import or self-claim, and a heartbeat.
-`/device-registration` remains the transitional *local* badge-device setup,
-distinct from `/device-login`, which is the *central* identity. Those converge
-in Phase 9C-C2 and 9C-C3.
+device authorization, a heartbeat, and any way to release, edit or transfer a
+central badge range. `/device-registration` remains the transitional *local*
+badge-device setup, distinct from `/device-login`, which is the *central*
+identity. Those converge in Phase 9C-C3 and beyond.
 
 ## Central database (Phase 9A — foundation only)
 

@@ -3,6 +3,11 @@ import { randomUUID } from 'node:crypto'
 import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 
 import type { DeviceAttribute } from '../../src/shared/device-attributes.js'
+import {
+  readActiveBadgeAssignment,
+  reserveBadgeRange,
+  type CentralBadgeRange,
+} from '../badge-assignments/reserve.js'
 import { getDatabase } from '../db/client.js'
 import {
   badgeAssignments,
@@ -52,11 +57,11 @@ export interface AdminEvent {
   active: boolean
 }
 
-export interface AdminBadgeRange {
-  rangeStart: number
-  rangeEnd: number
-  assignedAt: string
-}
+/**
+ * The central assignment, exactly as the shared reservation primitive returns
+ * it. Aliased rather than restated so Admin cannot drift from the writer.
+ */
+export type AdminBadgeRange = CentralBadgeRange
 
 /**
  * What Admin is allowed to see about a device.
@@ -216,29 +221,8 @@ const readAttributes = async (deviceId: string): Promise<string[]> => {
   return rows.map((row) => row.attribute)
 }
 
-const readActiveAssignment = async (
-  deviceId: string,
-): Promise<AdminBadgeRange | null> => {
-  const rows = await getDatabase()
-    .select()
-    .from(badgeAssignments)
-    .where(
-      and(eq(badgeAssignments.deviceId, deviceId), isNull(badgeAssignments.releasedAt)),
-    )
-
-  const [row] = rows
-
-  return row === undefined
-    ? null
-    : {
-        rangeStart: row.rangeStart,
-        rangeEnd: row.rangeEnd,
-        assignedAt: row.assignedAt.toISOString(),
-      }
-}
-
 const hasActiveAssignment = async (deviceId: string): Promise<boolean> => {
-  return (await readActiveAssignment(deviceId)) !== null
+  return (await readActiveBadgeAssignment(deviceId)) !== null
 }
 
 /**
@@ -337,7 +321,7 @@ export const updateDeviceConfiguration = async (
   const [device, currentAttributes, activeBadgeRange] = await Promise.all([
     readDevice(deviceId),
     readAttributes(deviceId),
-    readActiveAssignment(deviceId),
+    readActiveBadgeAssignment(deviceId),
   ])
 
   if (device === null) {
@@ -484,12 +468,22 @@ export const setDevicePassword = async (
 }
 
 /**
- * Assigns a device its FIRST badge range.
+ * Assigns a device its FIRST badge range, on an ADMIN's authority.
  *
  * There is deliberately no edit, replace, release, transfer or extend here.
  * Changing a range while devices operate offline is how two attendees end up
  * with the same badge, and doing it safely is a reconciliation problem for a
  * later phase.
+ *
+ * The preconditions below are Admin's own: an Admin picks the device, so the
+ * device must be found, belong to the event, be enabled and hold
+ * `registration`. The row itself is written by the SHARED reservation
+ * primitive, which Device self-claim also uses — the two realms authorize
+ * differently and reserve identically.
+ *
+ * Postgres remains authoritative. Overlap, one-active-per-device and event
+ * consistency are enforced by constraints, not by the checks above, because
+ * two Admins can race.
  */
 export const assignBadgeRange = async (
   eventId: string,
@@ -513,35 +507,13 @@ export const assignBadgeRange = async (
     return { ok: false, blocked }
   }
 
-  try {
-    // Postgres remains authoritative: overlap, one-active-per-device and
-    // event consistency are all enforced by constraints, not by the checks
-    // above, because two Admins can race.
-    const [row] = await getDatabase()
-      .insert(badgeAssignments)
-      .values({
-        eventId,
-        deviceId,
-        rangeStart: range.rangeStart,
-        rangeEnd: range.rangeEnd,
-      })
-      .returning()
+  const reserved = await reserveBadgeRange({ eventId, deviceId, range })
 
-    return {
-      ok: true,
-      value: {
-        rangeStart: row.rangeStart,
-        rangeEnd: row.rangeEnd,
-        assignedAt: row.assignedAt.toISOString(),
-      },
-    }
-  } catch (error: unknown) {
-    const conflict = mapDatabaseConflict(error)
-
-    if (conflict === null) {
-      throw error
-    }
-
-    return { ok: false, conflict }
+  // The reservation conflicts are a subset of the Admin ones and share their
+  // names, so the existing 409 contract is unchanged.
+  if (reserved.ok === false) {
+    return { ok: false, conflict: reserved.conflict }
   }
+
+  return { ok: true, value: reserved.value }
 }

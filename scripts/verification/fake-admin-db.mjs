@@ -15,6 +15,14 @@ export const state = {
   applied: [],
   /** Set to a message to make the NEXT applied write throw. */
   failNextWrite: null,
+  /**
+   * Called once, immediately before the next applied write.
+   *
+   * Scripts a CONCURRENT writer committing between a request's check and its
+   * own insert — the one interleaving that "SELECT then INSERT" cannot see
+   * and that only the database constraint catches.
+   */
+  beforeNextWrite: null,
 }
 
 export const reset = () => {
@@ -24,6 +32,7 @@ export const reset = () => {
   state.events = []
   state.applied = []
   state.failNextWrite = null
+  state.beforeNextWrite = null
 }
 
 const clone = (value) => (value === undefined ? undefined : structuredClone(value))
@@ -90,7 +99,80 @@ const applyExpression = (row, expression) => {
   return (row[column] ?? 0) + Number(increment[1])
 }
 
+/**
+ * The three guarantees the migrations place on `badge_assignments`, enforced
+ * here the way Postgres enforces them: at INSERT time, after any application
+ * check the caller may have made.
+ *
+ * This is what makes a race test mean something. A fake that happily inserts
+ * an overlapping row would let "SELECT then INSERT" look safe, which is
+ * exactly the mistake the real constraints exist to catch.
+ */
+const constraintViolation = (name) => {
+  /**
+   * WRAPPED, exactly as production throws it.
+   *
+   * Drizzle rethrows every driver error as `DrizzleQueryError`, whose message
+   * is `Failed query: …` and whose `cause` holds the real Postgres error. A
+   * fake that threw a bare object with a top-level `constraint` let a reader
+   * that never looked at `cause` pass every test while mapping nothing in
+   * production — which is how an overlapping badge range reached an operator
+   * as "The server returned an unexpected response."
+   */
+  const postgres = new Error(`conflicting key value violates constraint "${name}"`)
+
+  postgres.name = 'NeonDbError'
+  postgres.code = name.includes('no_overlap') ? '23P01' : '23505'
+  postgres.constraint = name
+
+  const wrapped = new Error(
+    `Failed query: insert into "badge_assignments" ...\nparams: `,
+  )
+
+  wrapped.name = 'DrizzleQueryError'
+  wrapped.cause = postgres
+
+  return wrapped
+}
+
+const guardBadgeAssignment = (row) => {
+  const device = state.devices.get(row.deviceId)
+
+  // The composite foreign key: a range cannot pair an event with a device
+  // belonging to a different one.
+  if (device === undefined || device.eventId !== row.eventId) {
+    throw constraintViolation('badge_assignments_device_event_fk')
+  }
+
+  const active = state.assignments.filter((entry) => entry.releasedAt === null ||
+    entry.releasedAt === undefined)
+
+  // Partial unique index on (device_id) WHERE released_at IS NULL.
+  if (active.some((entry) => entry.deviceId === row.deviceId)) {
+    throw constraintViolation('badge_assignments_one_active_per_device')
+  }
+
+  // GiST exclusion constraint: active ranges within one event may not overlap.
+  if (
+    active.some(
+      (entry) =>
+        entry.eventId === row.eventId &&
+        row.rangeStart <= entry.rangeEnd &&
+        entry.rangeStart <= row.rangeEnd,
+    )
+  ) {
+    throw constraintViolation('badge_assignments_active_ranges_no_overlap')
+  }
+}
+
 const guardFailure = () => {
+  if (state.beforeNextWrite !== null) {
+    const commit = state.beforeNextWrite
+
+    state.beforeNextWrite = null
+    commit()
+  }
+
   if (state.failNextWrite !== null) {
     const message = state.failNextWrite
 
@@ -198,6 +280,7 @@ const insertBuilder = (table) => {
             row.id ??= `assignment-${String(nextId++)}`
             row.assignedAt ??= new Date('2026-01-01T00:00:00.000Z')
             row.releasedAt ??= null
+            guardBadgeAssignment(row)
             state.assignments.push(row)
           } else if (target === 'events') {
             row.id ??= `event-${String(nextId++)}`

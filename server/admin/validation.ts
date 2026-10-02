@@ -4,6 +4,12 @@ import {
   type DeviceAttribute,
 } from '../../src/shared/device-attributes.js'
 import { checkPasswordPair } from '../../src/shared/device-password.js'
+import {
+  parseBadgeRange,
+  type BadgeRangeInput,
+} from '../badge-assignments/range.js'
+
+export type { BadgeRangeInput }
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -357,34 +363,16 @@ export const parseDeviceConfigurationInput = (
   return { ok: true, value: { eventId, fields, attributes } }
 }
 
-export interface BadgeRangeInput {
-  rangeStart: number
-  rangeEnd: number
-}
-
-const isPositiveInteger = (value: unknown): value is number => {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0
-}
-
+/**
+ * The range model is SHARED with Device self-claim.
+ *
+ * Both reserve rows in the same table under the same database constraints, so
+ * they must accept exactly the same mathematics. Keeping a second copy here
+ * is how one of them would quietly start accepting a range the other refuses.
+ */
 export const parseBadgeRangeInput = (
   body: unknown,
-): ValidationResult<BadgeRangeInput> => {
-  if (!isRecord(body)) {
-    return { ok: false, message: 'Body must be a JSON object.' }
-  }
-
-  const { rangeStart, rangeEnd } = body
-
-  if (!isPositiveInteger(rangeStart) || !isPositiveInteger(rangeEnd)) {
-    return { ok: false, message: 'Badge numbers must be positive whole numbers.' }
-  }
-
-  if (rangeStart > rangeEnd) {
-    return { ok: false, message: 'The first badge must not be after the last badge.' }
-  }
-
-  return { ok: true, value: { rangeStart, rangeEnd } }
-}
+): ValidationResult<BadgeRangeInput> => parseBadgeRange(body)
 
 export type BadgeAssignmentBlock =
   | 'device-not-found'

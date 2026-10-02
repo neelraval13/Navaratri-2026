@@ -533,21 +533,30 @@ check('nothing in the device UI writes a badge range',
     .filter((file) => /configureBadgeDistribution\(|registerDevice\(|db\.config\.(put|update)|db\.transaction\(|from '@\/db\/database'/
       .test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')), [])
-check('no self-claim endpoint exists',
-  ['device-claim-range.ts', 'device-badge-assignment.ts', 'device-enroll.ts']
-    .filter((file) => existsSync(join(root, 'api', file))), [])
-check('  nor a self-claim function',
+/**
+ * Phase 9C-C2B added self-claim. It is exactly ONE endpoint with one name,
+ * and C1's rule still holds underneath it: the credential's own lifecycle
+ * stays on the single consolidated auth endpoint, and nothing invented a
+ * second way in.
+ */
+check('the self-claim surface is exactly one endpoint',
+  ['device-claim-range.ts', 'device-badge-assignment.ts', 'device-enroll.ts',
+   'device-badge-claim.ts']
+    .filter((file) => existsSync(join(root, 'api', file))), ['device-badge-claim.ts'])
+check('  with no second self-claim implementation',
   walkSource(join(root, 'src')).concat(walkSource(join(root, 'server')))
-    .filter((file) => /claimBadgeRange|selfClaimRange|adoptCentralRange/
+    .filter((file) => /selfClaimRange|adoptCentralRange/
       .test(readFileSync(file, 'utf8'))), [])
-check('  and the only central calls are login, session and logout',
+check('  the auth endpoint still serves only login, session and logout',
   [...stripComments(read('src/device-auth/device-api.ts'))
-    .matchAll(/method: '(POST|GET|DELETE)'/g)].map((match) => match[1]).sort(),
+    .matchAll(/request\(DEVICE_AUTH_ENDPOINT, \{\s*method: '(POST|GET|DELETE)'/g)]
+    .map((match) => match[1]).sort(),
   ['DELETE', 'GET', 'POST'])
-check('  all against the one consolidated endpoint',
+check('  and the claim is the only call that is not against it',
   [...stripComments(read('src/device-auth/device-api.ts'))
     .matchAll(/request\((\w+)/g)].map((match) => match[1]).filter((name) => name.endsWith('ENDPOINT')),
-  ['DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT'])
+  ['DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT',
+   'DEVICE_BADGE_CLAIM_ENDPOINT'])
 
 console.log('\n=== 33-37. NOTHING ELSE CHANGED ===')
 const dexie = read('src/db/database.ts')

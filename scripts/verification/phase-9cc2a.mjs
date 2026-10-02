@@ -364,14 +364,18 @@ check('the offline branches cannot reach adoption',
   /'last-verified'[\s\S]{0,600}adoptCentralBadgeRange/.test(panelSource), false)
 check('  a cached enrollment alone never carries an assignment',
   /activeBadgeRange/.test(stripComments(read('src/db/central-enrollment.ts'))), false)
-check('no central write is reachable from the device client',
-  /POST|PATCH|PUT|DELETE/.test(
+check('no central write is reachable from the adoption domain',
+  /POST|PATCH|PUT|DELETE|fetch\(/.test(
     stripComments(read('src/db/central-badge-range.ts'))), false)
-check('  and no badge-claim call exists anywhere in src/',
+/**
+ * C2B added a self-claim, and this is where its boundary is pinned: the
+ * endpoint is named in exactly one client module, and the adoption domain —
+ * the thing that writes local badge state — still does not know it exists.
+ */
+check('  the claim endpoint is named in exactly one client module',
   walk(join(root, 'src'))
-    .filter((file) => /claimBadgeRange|device-badge-assignment|device-claim-range|device-range/
-      .test(stripComments(readFileSync(file, 'utf8'))))
-    .map((file) => file.replace(`${root}/`, '')), [])
+    .filter((file) => /device-badge-claim/.test(stripComments(readFileSync(file, 'utf8'))))
+    .map((file) => file.replace(`${root}/`, '')), ['src/device-auth/device-api.ts'])
 
 console.log('\n=== 68-72. ISSUANCE REGRESSION (existing domain code) ===')
 seed(LOCAL_BASE)
@@ -402,7 +406,15 @@ check('  and reads no central module',
     .test(read('src/db/registrations.ts')), false)
 
 console.log('\n=== 42-54. THE DEVICE LOGIN UI ===')
+/**
+ * Phase 9C-C2B split this section into three components: the adoption states
+ * stayed here, every REFUSAL moved into the shared block that the self-claim
+ * section also renders, and the claim surface became its own file. The
+ * behaviour asserted below is unchanged; only where it lives has moved.
+ */
 const setupSource = read('src/components/device-auth/local-badge-setup.tsx')
+const blockSource = read('src/components/device-auth/adoption-block.tsx')
+const claimSource = read('src/components/device-auth/badge-range-claim.tsx')
 check('local badge state has its own section',
   /Local Badge Setup/.test(setupSource), true)
 check('  a fresh range offers adoption',
@@ -412,13 +424,14 @@ check('  the action is explicitly worded, never "Continue"',
   [/Set Up \$\{range\} On This Device/.test(setupSource),
    /^\s*(Continue|Confirm|Use)\s*$/m.test(setupSource)], [true, false])
 check('  no adoption control without the registration attribute',
-  /registration-not-permitted'[\s\S]{0,400}Not available/.test(setupSource), true)
+  /registration-not-permitted'[\s\S]{0,400}Not available/.test(blockSource), true)
 check('  nor with no central assignment',
-  /no-central-assignment'[\s\S]{0,400}Not assigned/.test(setupSource), true)
+  [/no-central-assignment'[\s\S]{0,200}<BadgeRangeClaim/.test(setupSource),
+   /Not assigned/.test(claimSource)], [true, true])
 check('  a missing local identity links to device registration',
-  [/ROUTES\.deviceRegistration/.test(setupSource),
-   /Set Up Local Device/.test(setupSource),
-   /local device setup before a central\s*\n?\s*badge range/.test(setupSource)], [true, true, true])
+  [/ROUTES\.deviceRegistration/.test(blockSource),
+   /Set Up Local Device/.test(blockSource),
+   /local device setup before a central\s*\n?\s*badge range/.test(blockSource)], [true, true, true])
 check('the confirmation requires the physical stack',
   [/I have physical badges \{range\} at this device\./.test(setupSource),
    /disabled=\{!confirmed \|\| isBusy\}/.test(setupSource)], [true, true])
@@ -434,10 +447,10 @@ check('  and warns that issuance becomes local and offline',
 check('an exact match shows "Ranges match" and the current next badge',
   [/Ranges match/.test(setupSource), /Next badge/.test(setupSource),
    /Link Existing Range To Central Assignment/.test(setupSource)], [true, true, true])
-check('a mismatch shows BOTH ranges', /plan\.local\.rangeStart/.test(setupSource), true)
+check('a mismatch shows BOTH ranges', /plan\.local\.rangeStart/.test(blockSource), true)
 check('  and offers no override',
   /Use central anyway|Override|Force|Replace range|Fix range/i
-    .test(stripComments(setupSource)), false)
+    .test(stripComments(setupSource + blockSource + claimSource)), false)
 check('a successful adoption shows the aligned binding',
   /Aligned with central assignment/.test(setupSource), true)
 check('the summary is re-read from the committed row',
@@ -461,21 +474,34 @@ check('  the binding is never used as authorization',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-check('the Function inventory is still exactly ten', budget.actual.length, 10)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+// C2B added exactly one Function; C2A's own guarantees below are unchanged.
+check('the Function inventory is exactly eleven', budget.actual.length, 11)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and nothing unexpected', budget.problems, [])
-check('no device range endpoint was added',
-  ['device-badge-assignment.ts', 'device-claim-range.ts', 'device-range.ts']
-    .filter((file) => existsSync(join(root, 'api', file))), [])
+check('the only device range endpoint is the C2B self-claim',
+  ['device-badge-assignment.ts', 'device-claim-range.ts', 'device-range.ts',
+   'device-badge-claim.ts']
+    .filter((file) => existsSync(join(root, 'api', file))), ['device-badge-claim.ts'])
 check('device auth GET remains read-only',
   /db\.insert|db\.update|db\.delete|badgeAssignments/
     .test(stripComments(read('api/device-auth.ts'))), false)
 check('  and its session loader writes nothing but last_seen_at on login',
   [...stripComments(read('server/device-auth/authenticate.ts'))
     .matchAll(/\.update\(/g)].length, 1)
-check('Admin remains the only central assignment writer',
-  /insert\(badgeAssignments\)/.test(read('server/admin/registry.ts')), true)
+/**
+ * C2A's rule was "Admin is the only central assignment writer". C2B adds
+ * Device self-claim, so the rule becomes the stronger one: there is exactly
+ * ONE place that inserts a `badge_assignments` row, and both realms go
+ * through it.
+ */
+check('exactly one module inserts a central badge assignment',
+  walk(join(root, 'server'))
+    .filter((file) => /insert\(badgeAssignments\)/.test(stripComments(readFileSync(file, 'utf8'))))
+    .map((file) => file.replace(`${root}/`, '')),
+  ['server/badge-assignments/reserve.ts'])
+check('  and Admin reserves through it', 
+  /reserveBadgeRange\(/.test(stripComments(read('server/admin/registry.ts'))), true)
 
 check('NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),

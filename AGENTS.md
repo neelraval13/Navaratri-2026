@@ -1528,6 +1528,134 @@ says so rather than claiming the cookie is gone.
 There is NO polling and NO heartbeat. The session is checked on mount, after a
 login, and on an explicit Refresh Device Status.
 
+### Badge Range Self-Claim
+
+`POST /api/device-badge-claim` lets an AUTHENTICATED device that owns no
+central range reserve one. It is the only new Function of this phase and the
+only endpoint that creates a badge assignment from a device.
+
+Self-claim is ONLINE ONLY. There is no offline path, no queue, no retry timer,
+no polling and no heartbeat. A device may NEVER establish a new badge range
+purely offline.
+
+The body is `rangeStart`, `rangeEnd` and `physicalStackConfirmed` and nothing
+else. `deviceId`, `eventId`, `eventSlug` and `loginName` are REFUSED rather
+than ignored — the authenticated session is the identity, and a field the
+caller believes it can choose is one a later refactor might start reading.
+
+`physicalStackConfirmed` must be exactly `true`. It is a MUTATION GUARD and is
+never persisted: no column, no migration, nothing in the reservation row. The
+server cannot see the badges; requiring the flag means a bypassed client
+cannot reserve a range without that deliberate action having happened. Local
+`badgeConfiguredAt` continues to express the local setup event.
+
+The claim fails wherever `GET /api/device-auth` would fail, through the same
+primitives — unknown or tampered cookie, stale `session_version`, disabled
+device, inactive event, unprovisioned `password_hash` — as one generic 401 that
+writes nothing. `registration` is then required from the CURRENT Postgres
+attribute set, never from the token and never from the cached enrollment;
+without it the answer is `403 registration-required` and no central mutation.
+
+### One Shared Central Reservation Primitive
+
+`server/badge-assignments/reserve.ts` is the ONLY module that inserts a
+`badge_assignments` row. Admin preassignment and Device self-claim both write
+through it, and `server/badge-assignments/range.ts` gives both the same
+mathematical range model, so a device cannot claim a range Admin could not
+assign. Do not add a second inserter.
+
+Their AUTHORIZATION layers stay separate and must. Admin never imports device
+session code and the claim endpoint never imports Admin auth; only the writer,
+the range model and the constraint map are shared.
+
+PRECHECKS ARE FOR THE MESSAGE, NEVER FOR SAFETY. `SELECT` then `INSERT` does
+not prevent a race: the GiST exclusion constraint and the partial unique index
+do. An unrecognised database error is rethrown and becomes a generic 500, and
+no SQL, table name or connection string reaches the caller or the log.
+`range-overlap` never names the other device.
+
+THE DRIVER ERROR ARRIVES WRAPPED. Drizzle rethrows every one as
+`DrizzleQueryError`, whose message is `Failed query: …` and whose `cause`
+holds the real Postgres error with its `constraint` field.
+`readConstraintName` must WALK THAT CHAIN; inspecting only the top level maps
+nothing in production while passing every test written against a bare error
+object, which is exactly how an overlapping badge range once reached an
+operator as "The server returned an unexpected response." The stand-in
+database in the verification suites throws the wrapped shape for that reason.
+
+INTERNAL AND PUBLIC CONFLICT NAMES ARE DIFFERENT, and exactly ONE map
+translates between them: `PUBLIC_BADGE_CLAIM_CONFLICT` in
+`server/badge-assignments/conflicts.ts`, a total `Record` over the internal
+conflicts, so adding one without a public name fails to compile. The public
+set lives in `src/shared/badge-claim-contract.ts` and the browser parses it
+with that module's guard, so the client never has to know both spellings. A
+Postgres constraint name is NEVER a wire value.
+
+An overlapping range is an ORDINARY OPERATIONAL CONFLICT, not a technical
+error. It names the range the operator typed back to them and tells them to
+check the physical stack; it never says "unexpected response", "constraint",
+"database" or "server error", and never which device holds the numbers.
+
+Retries are IDEMPOTENT. The same range again returns `already-claimed` with the
+authoritative row and no second insert; a different range returns
+`already-assigned` WITH this device's real range and never replaces it. When a
+concurrent writer commits between the check and the insert, the
+one-active-per-device violation is caught and the current assignment is
+RE-READ, which is also what recovers a response lost in flight.
+
+### Claim Preflight And The Two Distributed Failures
+
+Before any request is sent, the browser proves against its OWN IndexedDB that
+it could safely adopt the range if Postgres accepted it. There is exactly ONE
+definition of "can this browser own range X?" — the C2A adoption planner — and
+the claim planner and the preflight both call it. The safety matrix is never
+copied into the UI.
+
+Reserving first and discovering a local conflict afterwards would leave a desk
+owning numbers it cannot issue, and NOTHING RELEASES A CENTRAL RANGE.
+
+There is no transaction across Postgres and IndexedDB, so both failures are
+handled explicitly:
+
+- CENTRAL SUCCEEDED, LOCAL DID NOT. The reservation is real and is never rolled
+  back automatically. The page says so, shows the central assignment and the
+  local reason, and tells the operator not to issue badges from this device
+  until it is reconciled. The next session check surfaces the assignment and
+  C2A's ordinary alignment or conflict UI is the recovery path.
+- THE RESPONSE WAS LOST. A network failure or timeout is reported as "Claim
+  status could not be confirmed.", never as a failure, because the reservation
+  may have committed. Nothing local changes, nothing is retried automatically,
+  and the operator re-checks with Refresh Device Status.
+
+C2B has NO local badge writer of its own. The successful path ends by calling
+the C2A adoption transaction with the range the SERVER returned.
+
+### No Suggested Range
+
+There is no global allocator, so the UI never prefills, suggests or scans for a
+"next free range", and no such control may be added. The PHYSICAL badge stack
+decides what the operator enters; Postgres only accepts or rejects ownership.
+
+A desk that already holds a coherent local range may claim ONLY that exact
+range, shown read-only — typing a different one would put the local allocator
+immediately at odds with central ownership.
+
+A PHYSICAL CONFIRMATION IS FOR ONE EXACT RANGE. Editing either boundary resets
+`physicalStackConfirmed` and dismisses the previous result: someone who
+confirmed "#401-#500" and then typed "#501-#600" has confirmed nothing about
+the second stack, and a refusal describing the old numbers must not be left
+sitting beside the new ones. A refused claim keeps both inputs exactly as
+entered, so the operator edits rather than retypes. Its `nextBadge` and its completed
+registrations are preserved by the C2A alignment. Issued badges with no
+coherent range, an incoherent range or counter, a binding whose central
+assignment is gone, and a binding for another central device all BLOCK with no
+override.
+
+Rate limiting: `POST /api/device-badge-claim` is authenticated by the device
+session and the database constraints are authoritative, so it gets no
+unauthenticated login-style firewall rule. The `POST /api/device-auth` rule is
+unchanged.
+
 ## Central Database
 
 PostgreSQL (Neon) is the CENTRAL OPERATIONAL AUTHORITY: events, devices,
@@ -1963,20 +2091,21 @@ the build has already succeeded, at "Deploying outputs…". No build step
 reports it, so the budget is a durable check, not something a green build
 proves.
 
-Current inventory: **10 of 12, two slots of headroom.**
+Current inventory: **11 of 12, one slot of headroom.**
 
 ```
 admin-auth · admin-badge-assignment · admin-device-password · admin-devices
-admin-events · device-auth · operator-login · operator-logout
-operator-session · sync-registration
+admin-events · device-auth · device-badge-claim · operator-login
+operator-logout · operator-session · sync-registration
 ```
 
 A shared helper NEVER belongs under `api/` — it costs a deployment Function
 for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
-on an `api/` file that exports no HTTP method, and on any file outside the
-expected inventory, so headroom cannot be consumed quietly.
+on an `api/` file that exports no HTTP method, on any file outside the
+expected inventory, and on a headroom other than the one this checkpoint
+expects, so headroom cannot be consumed quietly.
 
-The two spare slots are headroom, not permission to start the next phase.
+The last spare slot is headroom, not permission to start the next phase.
 
 ### Auth Realms Are Consolidated By HTTP Method
 

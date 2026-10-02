@@ -12,6 +12,7 @@ import {
   readCentralBadgeRangeBinding,
   readCentralBadgeRangePlan,
   type AdoptionPlan,
+  type ClaimPlan,
 } from '@/db/central-badge-range'
 import {
   clearCentralDeviceEnrollment,
@@ -19,6 +20,11 @@ import {
   saveCentralDeviceEnrollment,
 } from '@/db/central-enrollment'
 import type { CentralDeviceEnrollment, EventConfig } from '@/db/types'
+import {
+  claimCentralBadgeRange,
+  contextAfterClaim,
+  type BadgeClaimFlowResult,
+} from '@/device-auth/badge-claim'
 import { getDeviceSession, logoutDevice } from '@/device-auth/device-api'
 import type { DeviceSessionContext } from '@/device-auth/device-session-contract'
 import { formatBadgeRange } from '@/db/device'
@@ -40,10 +46,14 @@ type PanelState =
       verifiedAt: string
       /**
        * Local badge state, read from the COMMITTED config row rather than
-       * assumed from the central assignment. Adoption re-reads it, so the UI
-       * never claims a write that did not happen.
+       * assumed from the central assignment. Adoption and self-claim both
+       * re-read it, so the UI never claims a write that did not happen.
        */
-      badge: { plan: AdoptionPlan; config: EventConfig | undefined }
+      badge: {
+        plan: AdoptionPlan
+        claim: ClaimPlan
+        config: EventConfig | undefined
+      }
     }
   | { phase: 'signed-out'; enrollment: CentralDeviceEnrollment | null }
   | { phase: 'last-verified'; enrollment: CentralDeviceEnrollment }
@@ -74,6 +84,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
   const [state, setState] = useState<PanelState>({ phase: 'checking' })
   const [isBusy, setIsBusy] = useState(false)
   const [badgeError, setBadgeError] = useState<string | null>(null)
+  const [claimResult, setClaimResult] = useState<BadgeClaimFlowResult | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   /**
@@ -177,6 +188,8 @@ const DeviceEnrollmentPanel: React.FC = () => {
   }, [attempt])
 
   const refresh = () => {
+    setClaimResult(null)
+    setBadgeError(null)
     setState({ phase: 'checking' })
     setAttempt((previous) => previous + 1)
   }
@@ -244,6 +257,57 @@ const DeviceEnrollmentPanel: React.FC = () => {
     ) {
       setBadgeError('That badge range could not be set up. See the status below.')
     }
+  }
+
+  /**
+   * The ONE deliberate action behind a self-claim: confirm the stack, prove
+   * locally that the range could be adopted, reserve it centrally, then adopt
+   * the range the SERVER returned.
+   *
+   * It writes no badge field itself. The local write is the same adoption
+   * transaction the explicit Adopt action uses, which stays the only
+   * implementation of "a central range becomes this desk's range".
+   */
+  const claim = async (input: {
+    rangeStart: number
+    rangeEnd: number
+    physicalStackConfirmed: boolean
+  }) => {
+    if (isBusy || state.phase !== 'authenticated') {
+      return
+    }
+
+    setIsBusy(true)
+    setClaimResult(null)
+
+    const result = await claimCentralBadgeRange({
+      context: state.context,
+      rangeStart: input.rangeStart,
+      rangeEnd: input.rangeEnd,
+      physicalStackConfirmed: input.physicalStackConfirmed,
+    })
+
+    /**
+     * The context was fetched BEFORE this device owned a range, so a
+     * successful reservation makes it stale the moment it returns. Both plans
+     * are therefore computed against the context the SERVER's answer implies,
+     * never the one still sitting in state — planning against the stale copy
+     * is what briefly told a desk that had just claimed its range that its
+     * ownership history did not match central.
+     *
+     * No second `GET /api/device-auth` is involved: the authoritative range
+     * arrived in the claim response and is already in hand.
+     */
+    const context = contextAfterClaim(state.context, result)
+
+    // Re-read from the committed row, whatever happened: a claim that
+    // succeeded centrally and failed locally must not leave the page showing
+    // a range this browser does not have.
+    const badge = await readCentralBadgeRangePlan(context)
+
+    setIsBusy(false)
+    setClaimResult(result)
+    setState({ ...state, context, badge })
   }
 
   const clearEnrollment = async () => {
@@ -426,12 +490,23 @@ const DeviceEnrollmentPanel: React.FC = () => {
           <LocalBadgeSetup
             deviceName={state.context.device.name}
             plan={state.badge.plan}
+            claimPlan={state.badge.claim}
+            claimResult={claimResult}
             config={state.badge.config}
             isBusy={isBusy}
             error={badgeError}
             onAdopt={(physicalStackConfirmed) => {
               void adopt(physicalStackConfirmed)
             }}
+            onClaim={(input) => {
+              void claim(input)
+            }}
+            /* The old result described the old numbers; it is not the new
+               range's answer, so it is dismissed rather than left to mislead. */
+            onRangeEdited={() => {
+              setClaimResult(null)
+            }}
+            onRefresh={refresh}
           />
 
           <div className="flex flex-wrap gap-3">
