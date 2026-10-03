@@ -1,46 +1,56 @@
 import type * as React from 'react'
 
 import DatabaseGate from '@/components/database-gate'
-import OperatorAccessBanner from '@/components/operator/operator-access-banner'
-import OperatorAccessGate from '@/components/operator/operator-access-gate'
+import DeviceEventAuthorizationProvider from '@/components/device-auth/device-event-authorization-provider'
+import EventAccessBanner from '@/components/event-access/event-access-banner'
+import EventSyncManager from '@/components/event-access/event-sync-manager'
 import StorageManager from '@/components/storage-manager'
-import SyncManager from '@/components/sync-manager'
 
 interface EventAppGateProps {
   children: React.ReactNode
 }
 
 /**
- * The event application shell: Operator Access, the local database, and the
- * app-global managers.
+ * The event application shell: the local database, device event
+ * authorization, and the app-global managers.
  *
  * Mounted for the EVENT routes only. `/admin` is a separate security realm
- * and must not sit behind Operator Access, nor mount the offline registration
+ * and must not sit behind any of this, nor mount the offline registration
  * workflow merely to manage a central registry.
  *
- * It wraps one route pattern covering every event page, so navigating between
- * them keeps this subtree mounted — SyncManager must not restart on each
- * navigation, and DatabaseGate must not re-run bootstrap.
+ * DATABASE FIRST, and this ordering is load-bearing. Device authorization has
+ * to read the verified offline lease, the badge configuration and the central
+ * enrollment out of IndexedDB before it can decide anything, so bootstrap
+ * cannot sit behind the access gate any more. Bootstrap writes only the
+ * default local config row — no attendee data, no credential — so running it
+ * before a credential is presented reveals nothing and costs nothing.
  *
- * The access gate renders IN PLACE and never navigates, so a deep link to
- * /badge-registration survives authentication and resumes at that same URL.
+ * The per-module gates live further in, at the routes, because the answer
+ * differs per module: `/device-registration` changes this browser's own
+ * transitional identity and stays Operator-only, while `/` and
+ * `/badge-registration` accept a device grant.
+ *
+ * One route pattern covers every event page, so navigating between them keeps
+ * this subtree mounted: the provider must not re-check the session on each
+ * navigation, SyncManager must not restart, and DatabaseGate must not re-run
+ * bootstrap.
  */
 const EventAppGate: React.FC<EventAppGateProps> = ({ children }) => {
   return (
-    <OperatorAccessGate>
-      <OperatorAccessBanner />
+    <DatabaseGate>
+      {/* Starts only once bootstrap has succeeded, and renders nothing. */}
+      <StorageManager />
 
-      <DatabaseGate>
-        {/* Both start only once bootstrap has succeeded, and render nothing. */}
-        <StorageManager />
+      <DeviceEventAuthorizationProvider>
+        <EventAccessBanner />
 
         {/* App-global, outside the page routes on purpose: a pending outbox
             row must keep draining on Home and on every other module. */}
-        <SyncManager />
+        <EventSyncManager />
 
         {children}
-      </DatabaseGate>
-    </OperatorAccessGate>
+      </DeviceEventAuthorizationProvider>
+    </DatabaseGate>
   )
 }
 

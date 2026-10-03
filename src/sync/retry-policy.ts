@@ -14,6 +14,9 @@ const ATTENTION_CODES: readonly OutboxSyncErrorCode[] = [
   'sync-not-configured',
   'badge-conflict',
   'sheet-shape-conflict',
+  // The badge is outside this device's current central assignment. Retrying
+  // cannot move it back in; a human decides which desk owns that number.
+  'device-badge-range-mismatch',
 ]
 
 /**

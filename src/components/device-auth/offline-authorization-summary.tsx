@@ -48,11 +48,11 @@ const VerifiedClaims: React.FC<{ claims: DeviceOfflineClaims }> = ({ claims }) =
 /**
  * This browser's signed offline authorization lease.
  *
- * INFORMATIONAL IN THIS PHASE. It unlocks nothing: `/`,
- * `/badge-registration` and `/device-registration` still answer to Operator
- * Access, and a valid lease changes none of that. It exists so an organizer
- * can see, before the venue's internet fails, whether this desk would still
- * be authorized.
+ * Since Phase 9C-C3B a valid lease is real offline authority for the event
+ * modules this device is eligible for — not a blanket unlock, and never for
+ * `/device-registration`, which answers to Operator Access alone. This
+ * section exists so an organizer can see, BEFORE the venue's internet fails,
+ * whether this desk would still be authorized and until when.
  *
  * The wording is deliberate. A verified lease offline is never called
  * "Authenticated": nobody asked the server. It says the LEASE is valid,
@@ -75,9 +75,10 @@ const OfflineAuthorizationSummary: React.FC<OfflineAuthorizationSummaryProps> = 
         </p>
 
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Offline authorization signing is not set up for this deployment.
-          Online device sign-in is unaffected, and event operations continue to
-          use Operator Access.
+          Offline authorization signing is not set up for this deployment. An
+          online device can still use Device access; with no lease to verify,
+          eligible event operations fall back to Operator Access whenever this
+          browser is offline.
         </p>
       </div>
     ) : null}
@@ -158,9 +159,15 @@ const OfflineAuthorizationSummary: React.FC<OfflineAuthorizationSummaryProps> = 
       </p>
     ) : null}
 
+    {/*
+      Deliberately "eligible": a valid lease is not a blanket unlock. Which
+      operations open still depends on this device's access and, for
+      registration, on its badge setup agreeing with the central assignment.
+    */}
     <p className="text-xs leading-relaxed text-muted-foreground">
-      Event operations still use Operator Access. An offline authorization
-      lease does not unlock them yet.
+      When this signed lease is valid, eligible event operations can continue
+      offline until the time above. Device Registration still requires
+      Operator Access.
     </p>
   </div>
 )

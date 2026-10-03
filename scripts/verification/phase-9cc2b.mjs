@@ -1159,9 +1159,14 @@ check('22. the binding reconciliation state blocks hard',
    /binding-without-assignment'[\s\S]{0,1400}needs reconciliation/.test(claimUi)], [true, true])
 check('  and offers no override anywhere in the claim UI',
   /Override|Force|Claim anyway|Ignore|Replace range/i.test(stripComments(claimUi)), false)
+/**
+ * 9C-C3B's authorization provider READS the config row to evaluate badge
+ * ownership. Writing is still forbidden — and so is touching registrations
+ * or the outbox at all.
+ */
 check('the UI never writes badge state itself',
   walk(join(root, 'src/components/device-auth'))
-    .filter((file) => /db\.config|db\.transaction|from '@\/db\/database'|configureBadgeDistribution\(/
+    .filter((file) => /db\.config\.(put|update|add|delete)|db\.transaction|configureBadgeDistribution\(|db\.(registrations|outbox)\./
       .test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')), [])
 check('  and the claim is one deliberate action, not two',
@@ -1222,11 +1227,12 @@ check('  sign-out and clear still keep badge state',
   /clearCentralBadgeRange|centralBadgeRangeBinding:\s*undefined|badgeStart:/.test(panelSource), false)
 
 console.log('  -- 49, 50. the event app is untouched --')
-check('49. Operator Access still gates the event shell',
-  [/OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')),
-   /Device(Access|Session|Auth)Gate/.test(
-     stripComments(read('src/components/event-app-gate.tsx')) +
-     stripComments(read('src/components/app-router.tsx')))], [true, false])
+// 9C-C3B moved Operator Access from the shell to the routes; it remains the
+// fallback everywhere, and the sole authority for /device-registration.
+check('49. Operator Access still gates event routes',
+  [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
+   /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
+     .test(stripComments(read('src/components/app-router.tsx')))], [true, false])
 check('  the operator realm is still its own three Functions',
   ['operator-login', 'operator-logout', 'operator-session']
     .every((name) => budget.actual.includes(name)), true)
@@ -1285,9 +1291,15 @@ check('  stores unchanged',
 check('Google Sheet ranges unchanged',
   [/A1:N/.test(read('server/sync/sheet-contract.ts')),
    /A1:M/.test(read('server/sync/sheet-contract.ts'))], [true, true])
-check('sync still uses the operator realm',
+/**
+ * 9C-C3B adds a live device session as a second sync realm. The self-claim
+ * endpoint is still nothing to do with sync, and the offline lease is still
+ * accepted by nothing.
+ */
+check('sync keeps the operator realm and never takes the lease or the claim',
   [/operator/i.test(read('api/sync-registration.ts')),
-   /device-badge-claim|device-auth/.test(read('api/sync-registration.ts'))], [true, false])
+   /device-badge-claim|verifyOfflineAuthorization|offline-lease/
+     .test(stripComments(read('api/sync-registration.ts')))], [true, false])
 
 console.log(fails === 0 ? '\nALL CHECKS PASS' : `\n${fails} FAILURE(S)`)
 process.exit(fails === 0 ? 0 : 1)

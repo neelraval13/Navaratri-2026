@@ -213,9 +213,23 @@ console.log('\n=== 6. APP HIERARCHY ===')
 const shellSource = read('src/components/event-app-gate.tsx')
 const routerSourceForShell = read('src/components/app-router.tsx')
 check('exactly one DatabaseGate', (shellSource.match(/<DatabaseGate>/g) ?? []).length, 1)
-check('exactly one SyncManager', (shellSource.match(/<SyncManager \/>/g) ?? []).length, 1)
-check('  SyncManager is inside DatabaseGate', shellSource.indexOf('<DatabaseGate>') < shellSource.indexOf('<SyncManager />'), true)
-check('  and OUTSIDE the page routes', shellSource.indexOf('<SyncManager />') < shellSource.indexOf('{children}'), true)
+/**
+ * Phase 9C-C3B mounts the processor through `EventSyncManager`, which exists
+ * only to withhold it from a browser with no event access at all — exactly
+ * what wrapping the shell in Operator Access used to do. It is still ONE
+ * instance, still inside DatabaseGate, still outside the page routes.
+ */
+const syncManagerSource = stripComments(read('src/components/event-access/event-sync-manager.tsx'))
+check('exactly one SyncManager mount point',
+  (shellSource.match(/<EventSyncManager \/>/g) ?? []).length, 1)
+check('  which renders exactly one SyncManager',
+  (syncManagerSource.match(/<SyncManager \/>/g) ?? []).length, 1)
+check('  SyncManager is inside DatabaseGate',
+  shellSource.indexOf('<DatabaseGate>') < shellSource.indexOf('<EventSyncManager />'), true)
+check('  and OUTSIDE the page routes',
+  shellSource.indexOf('<EventSyncManager />') < shellSource.indexOf('{children}'), true)
+check('  it is withheld only from a browser with no access at all',
+  /access\.phase === 'unlocked'[\s\S]{0,160}device\.grant !== null/.test(syncManagerSource), true)
 check('  the shell mounts once for all event routes',
   (routerSourceForShell.match(/<EventAppGate>/g) ?? []).length, 1)
 check('  App.tsx renders only the router', (appSource.match(/<AppRouter \/>/g) ?? []).length, 1)

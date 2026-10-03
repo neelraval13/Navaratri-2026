@@ -13,10 +13,12 @@ import { buttonVariants } from '@/components/ui/button'
  * replaces the shared operator code as the per-device entry point, so it is
  * built where it will live rather than moved later.
  *
- * Signing in here unlocks NOTHING in the event application. `/`,
- * `/badge-registration` and `/device-registration` still answer to Operator
- * Access exactly as before, and "Continue to Event Operations" simply
- * navigates there — the existing gate still decides whether it opens.
+ * Since Phase 9C-C3B, signing in here DOES matter to the event application:
+ * `/` and `/badge-registration` accept a device grant. It is not a blanket
+ * unlock — each module authorizes itself from the device's attributes and,
+ * for registration, from badge-safety checks — and `/device-registration`
+ * still answers to Operator Access alone. "Continue to Event Operations"
+ * simply navigates; the gates there still decide whether it opens.
  *
  * DatabaseGate wraps only the panel, because the enrollment snapshot is
  * persisted in the existing IndexedDB config row. It does not bring the event
@@ -35,9 +37,9 @@ const DeviceLoginPage: React.FC = () => {
         </h1>
 
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Identifies this browser as a registered event device. Event
-          operations still use Operator Access; signing in here does not unlock
-          them yet.
+          Identifies this browser as a registered event device. Eligible event
+          operations can use Device access; Operator Access remains available
+          as a transitional fallback.
         </p>
       </div>
 

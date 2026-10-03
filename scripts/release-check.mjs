@@ -108,6 +108,12 @@ const REQUIRED_FILES = [
   'src/device-auth/offline-authorization.ts',
   'src/device-auth/offline-lease.ts',
   'src/db/central-offline-authorization.ts',
+  'src/device-auth/event-authorization.ts',
+  'src/device-auth/device-event-authorization-context.ts',
+  'src/components/device-auth/device-event-authorization-provider.tsx',
+  'src/components/event-access/event-access-gate.tsx',
+  'src/components/event-access/badge-ownership-block.tsx',
+  'server/sync/device-authorization.ts',
   'server/badge-assignments/conflicts.ts',
   'server/db/constraints.ts',
   'src/device-auth/device-session-contract.ts',
@@ -775,21 +781,33 @@ const gateSource = readText(join(ROOT, 'src/components/event-app-gate.tsx'))
 if (routerSource === null || gateSource === null) {
   deviceRealmProblems.push('the router or event gate could not be read')
 } else {
-  if (!gateSource.includes('OperatorAccessGate')) {
-    deviceRealmProblems.push('the event shell no longer uses OperatorAccessGate')
-  }
-
   /**
-   * A device GATE, not a device route. `/device-login` legitimately appears in
-   * the router; what must not exist is a device gate, and nothing
-   * device-related may sit INSIDE the event shell.
+   * Phase 9C-C3B made device authority an event authorization SOURCE, so the
+   * shell legitimately mounts the authorization provider and the event
+   * routes legitimately accept a device grant. Three things still hold, and
+   * they are what this now checks:
+   *
+   * 1. Operator Access still exists and still gates routes
+   * 2. `/device-registration` is OPERATOR ONLY — a device lease must never
+   *    unlock the page that rewrites the local identity its own badge checks
+   *    are measured against
+   * 3. `/device-login` is still outside the event shell
    */
-  if (/Device(Access|Session|Login)Gate/.test(stripComments(gateSource) + stripComments(routerSource))) {
-    deviceRealmProblems.push('a device gate component exists')
+  if (!stripComments(routerSource).includes('OperatorAccessGate')) {
+    deviceRealmProblems.push('the event routes no longer use OperatorAccessGate')
   }
 
-  if (/Device|device/.test(stripComments(gateSource))) {
-    deviceRealmProblems.push('the event shell references device auth')
+  const deviceRegistrationRoute = /ROUTES\.deviceRegistration\}>([\s\S]*?)<\/Route>/
+    .exec(stripComments(routerSource))?.[1] ?? ''
+
+  if (!/<OperatorAccessGate>/.test(deviceRegistrationRoute)) {
+    deviceRealmProblems.push('/device-registration is not Operator-only')
+  }
+
+  // `<DeviceRegistrationPage />` is the page itself; what must not appear is
+  // the module gate that accepts a device grant.
+  if (/EventAccessGate/.test(deviceRegistrationRoute)) {
+    deviceRealmProblems.push('/device-registration accepts device authorization')
   }
 
   const routerBody = stripComments(routerSource).slice(
@@ -803,7 +821,7 @@ if (routerSource === null || gateSource === null) {
 
 addCheck(
   'device-realm',
-  'Device auth is a separate realm and is not yet wired into the event app',
+  'Device auth is a separate realm; /device-registration stays Operator-only',
   deviceRealmProblems,
 )
 
@@ -927,7 +945,14 @@ for (const path of walk(join(ROOT, 'src/components/device-auth'))) {
     enrollmentProblems.push(`${rel(path)} calls a device configuration writer`)
   }
 
-  if (/from '@\/db\/database'|db\.config\.(put|update)|db\.transaction\(/.test(code)) {
+  /**
+   * Phase 9C-C3B's authorization provider must READ the config row to
+   * evaluate badge ownership, so importing the database is no longer the
+   * thing to forbid. WRITING is: no device UI may alter local state, and the
+   * registrations and outbox tables are none of its business at all.
+   */
+  if (/db\.config\.(put|update|add|delete)|db\.transaction\(|db\.(registrations|outbox)\./
+    .test(code)) {
     enrollmentProblems.push(`${rel(path)} writes to the database directly`)
   }
 }
@@ -1779,6 +1804,331 @@ addCheck(
   'device-offline-authorization',
   'The offline authorization lease is signed, expiring, and never a server credential',
   offlineProblems,
+)
+
+// --- I4. device-authorized event operations -------------------------------
+/**
+ * A centrally enrolled device may now open event modules on its own
+ * authority — live online, or from a verified signed lease offline. Operator
+ * Access remains a transitional fallback, EXCEPT where badge uniqueness is at
+ * risk: a credential authorizes a person, not two desks sharing numbers.
+ */
+const eventAuthProblems = []
+const authDomain = readText(join(ROOT, 'src/device-auth/event-authorization.ts'))
+const authProvider = readText(
+  join(ROOT, 'src/components/device-auth/device-event-authorization-provider.tsx'),
+)
+const authRuntime = readText(join(ROOT, 'src/device-auth/event-authorization-runtime.ts'))
+const authGate = readText(join(ROOT, 'src/components/event-access/event-access-gate.tsx'))
+const blockUi = readText(join(ROOT, 'src/components/event-access/badge-ownership-block.tsx'))
+const syncDeviceAuth = readText(join(ROOT, 'server/sync/device-authorization.ts'))
+const syncEndpoint = readText(join(ROOT, 'api/sync-registration.ts'))
+
+if (authDomain === null || authProvider === null || authRuntime === null ||
+    authGate === null || blockUi === null || syncDeviceAuth === null ||
+    syncEndpoint === null) {
+  eventAuthProblems.push('the event authorization domain, provider, gate or sync path is missing')
+} else {
+  const domain = stripComments(authDomain)
+  const provider = stripComments(authProvider)
+  const runtime = stripComments(authRuntime)
+  const gate = stripComments(authGate)
+  const sync = stripComments(syncEndpoint)
+
+  // Authority comes from a live session or a VERIFIED lease. Nothing else.
+  if (/localStorage|sessionStorage|isRegistered|isTrusted/.test(domain)) {
+    eventAuthProblems.push('event authorization reads an unsigned local flag')
+  }
+
+  if (!/grantFromDeviceSession/.test(domain) || !/grantFromOfflineClaims/.test(domain)) {
+    eventAuthProblems.push('event authorization does not normalise both authority sources')
+  }
+
+  if (!/readVerifiedLease/.test(runtime) || !/cached\.status === 'valid'/.test(runtime)) {
+    eventAuthProblems.push('a cached lease is used without verifying it')
+  }
+
+  /**
+   * THE LEASE EXPIRY PATH IS LOCAL ONLY.
+   *
+   * A timer that fires because a local clock passed a number must not talk
+   * to a server: offline it would fail pointlessly, and online it would
+   * quietly become the heartbeat this design does not have. The two triggers
+   * once shared a counter, and expiry silently issued a session check.
+   */
+  const localPath = runtime.slice(runtime.indexOf('export const resolveFromCachedLease'))
+
+  if (localPath === '') {
+    eventAuthProblems.push('there is no local-only authorization path')
+  } else if (/checkSession|getDeviceSession|fetch\(/.test(localPath)) {
+    eventAuthProblems.push('the local authorization path performs a session check')
+  }
+
+  const expiryEffect = provider.slice(
+    provider.indexOf('const expiresAt'), provider.indexOf('const refresh'))
+
+  if (!/resolveFromCachedLease/.test(expiryEffect)) {
+    eventAuthProblems.push('the lease expiry timer does not resolve locally')
+  }
+
+  if (/resolveFromServer|setSessionAttempt|fetch\(/.test(expiryEffect)) {
+    eventAuthProblems.push('the lease expiry timer triggers an online session check')
+  }
+
+  // Authority ends AT the signed expiry, never after a grace period.
+  const clockRule = stripComments(
+    readText(join(ROOT, 'src/shared/device-offline-authorization.ts')) ?? '',
+  )
+
+  if (/exp <= nowSeconds - DEVICE_OFFLINE_CLOCK_SKEW_SECONDS/.test(clockRule)) {
+    eventAuthProblems.push('an expired lease is treated as valid for a grace period')
+  }
+
+  // The enrollment may restrict authority; it may never create it.
+  if (/enrollment !== undefined[\s\S]{0,200}outcome: 'authorized'/.test(domain)) {
+    eventAuthProblems.push('a central enrollment alone authorizes a module')
+  }
+
+  /**
+   * Sliced to the BLOCKED branch, not matched across it: the operator
+   * fallback is the function's last statement, so a window-based regex would
+   * read it as part of the blocked path and report the opposite of the truth.
+   */
+  const blockedStart = gate.indexOf("authorization.outcome === 'blocked'")
+  const blockElement = gate.indexOf('<BadgeOwnershipBlock')
+  const operatorUses = [...gate.matchAll(/<OperatorAccessGate>/g)].map((match) => match.index)
+
+  if (blockedStart === -1 || blockElement === -1) {
+    eventAuthProblems.push('the gate has no blocked branch')
+  } else {
+    // The blocked branch returns the block element and NOTHING around it: a
+    // wrapper between the branch and the element would be a fallback.
+    if (gate.slice(blockedStart, blockElement).includes('<')) {
+      eventAuthProblems.push('the blocked branch wraps its screen in another component')
+    }
+
+    /**
+     * Exactly ONE operator fallback in the whole gate, and it comes after the
+     * blocked branch — so a conflict cannot reach it, as a sibling or
+     * otherwise.
+     */
+    if (operatorUses.length !== 1 || operatorUses[0] < blockedStart) {
+      eventAuthProblems.push('a blocked badge conflict falls through to Operator Access')
+    }
+  }
+
+  for (const offer of ['Continue anyway', 'Use Operator Access', 'Override', 'Force']) {
+    if (stripComments(blockUi).includes(offer)) {
+      eventAuthProblems.push(`the hard-block screen offers "${offer}"`)
+    }
+  }
+
+  if (/OperatorAccessGate|OperatorAccessForm/.test(stripComments(blockUi))) {
+    eventAuthProblems.push('the hard-block screen offers an operator credential')
+  }
+
+  // Authorization never repairs badge state.
+  if (/adoptCentralBadgeRange|configureBadgeDistribution|db\.config\.put/
+    .test(domain + provider + runtime + gate)) {
+    eventAuthProblems.push('event authorization writes or adopts badge state')
+  }
+
+  // ONE owner of the session check, and no polling anywhere near it.
+  const sessionCallers = walk(join(ROOT, 'src'))
+    .filter((path) => isTextFile(basename(path)))
+    .filter((path) => /getDeviceSession\(\)/.test(stripComments(readText(path) ?? '')))
+    .map((path) => rel(path))
+
+  // The device-login panel, plus the runtime's single injected default.
+  if (sessionCallers.length !== 1 ||
+      sessionCallers[0] !== 'src/components/device-auth/device-enrollment-panel.tsx') {
+    eventAuthProblems.push(
+      `the device session is checked from: ${sessionCallers.join(', ') || 'nowhere'}`,
+    )
+  }
+
+  if ((runtime.match(/checkSession\(\)/g) ?? []).length !== 1) {
+    eventAuthProblems.push('the authorization runtime checks the session more than once')
+  }
+
+  if (/setInterval/.test(provider + runtime)) {
+    eventAuthProblems.push('the authorization provider polls')
+  }
+
+  // SYNC: operator first and independent; device only as an alternative.
+  /**
+   * Compared inside the HANDLER, not the module: `authorizeSyncByDevice` is
+   * named in the import list long before either is called, so comparing
+   * whole-file positions would compare an import with a call.
+   */
+  const syncBody = sync.slice(sync.indexOf('export async function POST'))
+
+  if (syncBody.indexOf('operatorAuthorized') > syncBody.indexOf('authorizeSyncByDevice')) {
+    eventAuthProblems.push('sync attempts device authorization before operator')
+  }
+
+  if (!/if \(!operatorAuthorized\)/.test(sync)) {
+    eventAuthProblems.push('sync does not keep the operator path independent of the device realm')
+  }
+
+  if (!/registration|BADGE_RANGE_REQUIRED_ATTRIBUTE/.test(stripComments(syncDeviceAuth))) {
+    eventAuthProblems.push('device-authorized sync does not require Registration')
+  }
+
+  if (!/activeBadgeRange === null/.test(stripComments(syncDeviceAuth))) {
+    eventAuthProblems.push('device-authorized sync does not require a central badge range')
+  }
+
+  if (!/isBadgeWithinDeviceRange/.test(sync)) {
+    eventAuthProblems.push('device-authorized sync does not validate the badge number')
+  }
+
+  if (!/device-badge-range-mismatch/.test(sync)) {
+    eventAuthProblems.push('sync has no typed outcome for an out-of-range badge')
+  }
+
+  // The lease is still never a credential, anywhere.
+  if (/offline-lease|verifyOfflineAuthorization|centralDeviceOfflineAuthorization/
+    .test(sync + stripComments(syncDeviceAuth))) {
+    eventAuthProblems.push('sync accepts the offline lease as authentication')
+  }
+
+  // Issuance stays local and offline-first.
+  const issuance = stripComments(readText(join(ROOT, 'src/db/registrations.ts')) ?? '')
+
+  if (/getDeviceSession|event-authorization|fetch\(|\/api\//.test(issuance)) {
+    eventAuthProblems.push('badge issuance consults device authorization')
+  }
+}
+
+// --- I5. the local event config row is durable -----------------------------
+/**
+ * A Development browser lost its device identity, badge range and central
+ * badge binding, leaving a row identical to the bootstrap defaults. That is
+ * DATA LOSS: `nextBadge` is the offline badge allocator and nothing can
+ * safely reconstruct it.
+ *
+ * The rule is simple and absolute: no write may REPLACE the config row.
+ */
+const configProblems = []
+const bootstrapSource = readText(join(ROOT, 'src/db/bootstrap.ts'))
+const upiMerge = readText(join(ROOT, 'src/db/event-config.ts'))
+
+if (bootstrapSource === null || upiMerge === null) {
+  configProblems.push('the bootstrap or the UPI merge could not be read')
+} else {
+  const boot = stripComments(bootstrapSource)
+
+  // CREATE-IF-MISSING, decided by a read inside the same transaction.
+  if (!/db\.transaction\([\s\S]{0,240}db\.config\.get\(EVENT_CONFIG_ID\)/.test(boot)) {
+    configProblems.push('bootstrap does not read the existing row inside its transaction')
+  }
+
+  if (!/existingConfig === undefined[\s\S]{0,240}db\.config\.add\(/.test(boot)) {
+    configProblems.push('bootstrap does not create the row only when it is absent')
+  }
+
+  /**
+   * Only `add` — the create-if-missing path — may build defaults, and Dexie
+   * refuses `add` over an existing key. A `put` of freshly built defaults
+   * REPLACES whatever is there, which is exactly the data loss this guards
+   * against, so it is never exempt however it is spelled.
+   */
+  // Bounded to the SAME LINE: a multi-line window bleeds into the next
+  // statement, and `if (existingConfig === undefined)` sitting below a
+  // destructive put would make the put look like it read the row first.
+  for (const match of boot.matchAll(/db\.config\.put\(([^\n]*)/g)) {
+    if (!/existingConfig|patchedConfig/.test(match[1])) {
+      configProblems.push('bootstrap puts a config row it did not read first')
+    }
+  }
+
+  for (const match of boot.matchAll(/db\.config\.add\(([\s\S]{0,120})/g)) {
+    if (!/createDefaultEventConfig/.test(match[1])) {
+      configProblems.push('bootstrap adds a row that is not the documented default')
+    }
+  }
+
+  if (!/patchedConfig === existingConfig/.test(boot)) {
+    configProblems.push('bootstrap rewrites the config row even when nothing changed')
+  }
+
+  if (!/return \{\s*\.\.\.config,/.test(stripComments(upiMerge))) {
+    configProblems.push('the UPI merge rebuilds the config row instead of spreading it')
+  }
+}
+
+/**
+ * Every config write, everywhere, must carry the existing row forward. A
+ * literal that does not is how a configured desk becomes a default one.
+ */
+for (const path of walk(join(ROOT, 'src'))) {
+  if (extname(path) !== '.ts' && extname(path) !== '.tsx') {
+    continue
+  }
+
+  const code = stripComments(readText(path) ?? '')
+
+  for (const match of code.matchAll(/db\.config\.(?:put|add)\(\s*\{([\s\S]{0,120})/g)) {
+    if (!match[1].includes('...')) {
+      configProblems.push(`${rel(path)} writes a config row without spreading the existing one`)
+    }
+  }
+
+  for (const match of code.matchAll(/:\s*(?:Event|Registered|BadgeDistribution)\w*Config\s*=\s*\{\s*([\s\S]{0,40})/g)) {
+    if (!match[1].includes('...')) {
+      configProblems.push(`${rel(path)} builds a config row without the existing one`)
+    }
+  }
+
+  if (/\.clear\(\)|db\.delete\(\)|deleteDatabase|db\.config\.delete\(/.test(code)) {
+    configProblems.push(`${rel(path)} clears or deletes local data`)
+  }
+
+  // Recovery magic is forbidden: a reconstructed counter can reissue a badge
+  // already taken out of the physical stack.
+  if (/nextBadge\s*[:=][^\n]*(Math\.max|\.length|count)/i.test(code)) {
+    configProblems.push(`${rel(path)} reconstructs nextBadge from other data`)
+  }
+}
+
+// The operator realm is auth only; it must not reach local data at all.
+const operatorAccess = readText(join(ROOT, 'src/auth/operator-access.ts'))
+
+if (operatorAccess === null) {
+  configProblems.push('the operator access module could not be read')
+} else if (/db\.config|db\.registrations|db\.outbox|@\/db\/database/
+  .test(stripComments(operatorAccess))) {
+  configProblems.push('the operator realm writes local event data')
+}
+
+/**
+ * The stand-in database must behave like Dexie on the one call that makes
+ * this class of bug visible: `add` refuses an existing key. A fake that
+ * overwrites would let a destructive bootstrap pass every test.
+ */
+const standIn = readText(join(ROOT, 'scripts/verification/fake-db.mjs'))
+
+if (standIn === null) {
+  configProblems.push('the stand-in database could not be read')
+} else if (!/ConstraintError/.test(standIn)) {
+  configProblems.push('the stand-in database lets `add` overwrite an existing row')
+}
+
+if (!exists(join(ROOT, 'scripts/verification/config-durability.mjs'))) {
+  configProblems.push('the config durability suite is missing')
+}
+
+addCheck(
+  'config-durability',
+  'The local event config row survives startup, remount and realm transitions',
+  configProblems,
+)
+
+addCheck(
+  'device-event-authorization',
+  'Event modules may be authorized by a device, and badge conflicts never fall back',
+  eventAuthProblems,
 )
 
 if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 1) {

@@ -508,9 +508,15 @@ check('43. the claim endpoint still requires the device session',
 check('44. Admin endpoints are untouched by the lease',
   readdirSync(join(root, 'api')).filter((file) => file.startsWith('admin-'))
     .filter((file) => /offline/i.test(stripComments(read(`api/${file}`)))), [])
-check('45. sync-registration remains Operator-authenticated',
+/**
+ * 9C-C3B gave sync a second realm: a LIVE device session. What C3A
+ * established and still holds is that the signed offline lease is accepted
+ * by nothing — the server reads current central state instead.
+ */
+check('45. sync-registration keeps Operator auth and never takes the lease',
   [/operator/i.test(read('api/sync-registration.ts')),
-   /offline|device-auth/.test(read('api/sync-registration.ts'))], [true, false])
+   /offline|verifyOfflineAuthorization/
+     .test(stripComments(read('api/sync-registration.ts')))], [true, false])
 /**
  * `device-api.ts` is the ONLY module that makes a request. If it cannot see
  * the stored lease, no request can carry it.
@@ -540,8 +546,12 @@ check('  the browser key is import-only for verification',
    /'sign'/.test(read('src/device-auth/offline-authorization.ts'))], [true, false])
 
 console.log('\n=== 35-38, 48-55. NOTHING ELSE MOVED ===')
-check('35. the event shell still uses OperatorAccessGate',
-  /OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')), true)
+/**
+ * 9C-C3B moved Operator Access from the shell to the routes. It is still
+ * there; the lease simply became a second, parallel authority.
+ */
+check('35. Operator Access still gates event routes',
+  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
 check('  and no route consults the lease',
   walk(join(root, 'src/components')).concat(walk(join(root, 'src/pages')))
     .filter((file) => !/device-auth|device-readiness/.test(file))
@@ -609,8 +619,15 @@ check('33. it shows the signed facts',
 check('  from VERIFIED claims only',
   [/claims: DeviceOfflineClaims/.test(summary),
    /decodeOfflineAuthorizationPayload/.test(summary)], [true, false])
-check('  and states that routes are unaffected',
-  /Event operations still use Operator Access/.test(summary), true)
+/**
+ * C3A said a lease unlocked nothing. C3B made that false, so the section now
+ * states the real scope: a valid lease carries the modules this device is
+ * ELIGIBLE for, and never Device Registration.
+ */
+check('  and states the real scope of a valid lease',
+  [/eligible event operations can continue[\s\S]{0,20}offline/.test(summary),
+   /Device Registration still requires[\s\S]{0,20}Operator Access/.test(summary)],
+  [true, true])
 check('34. Device Readiness reports the lease read-only',
   [/Central offline authorization/.test(read('src/components/device/device-readiness.tsx')),
    /readVerifiedOfflineAuthorization/.test(read('src/components/device/device-readiness.tsx'))],

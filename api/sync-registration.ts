@@ -5,6 +5,11 @@ import {
 } from '../server/auth/environment.js'
 import { verifyOperatorSessionToken } from '../server/auth/operator-session.js'
 import {
+  authorizeSyncByDevice,
+  isBadgeWithinDeviceRange,
+  type SyncDeviceAuthorization,
+} from '../server/sync/device-authorization.js'
+import {
   readSyncEnvironment,
   SYNC_DISABLED_LOG_MESSAGES,
 } from '../server/sync/environment.js'
@@ -68,13 +73,23 @@ const success = (
 export async function POST(request: Request): Promise<Response> {
   /**
    * AUTHENTICATION FIRST, before the release interlock and before any
-   * configuration is read.
-   *
-   * The operator session is the production API auth boundary. Ordering it first
-   * means an unauthenticated caller learns nothing about how this deployment is
-   * configured — not whether writes are enabled, not which origin is allowed,
-   * not whether Google credentials exist — and never reaches Google client
+   * configuration is read, so an unauthenticated caller learns nothing about
+   * how this deployment is configured and never reaches Google client
    * creation.
+   *
+   * TWO REALMS, tried in this order:
+   *
+   * 1. OPERATOR — the legacy boundary, unchanged. If it is valid the request
+   *    proceeds exactly as it always has: no Neon call, no device check, no
+   *    new range enforcement. A legacy desk must not start failing because
+   *    the central database is unreachable.
+   * 2. DEVICE — a LIVE central device session, for a desk that opened
+   *    `/badge-registration` on its own authority and must be able to drain
+   *    its outbox without the shared operator code.
+   *
+   * The signed offline lease is neither of these. It is never sent, and
+   * nothing here would accept it: it is local authorization, and the server
+   * can read current central state instead of trusting yesterday's statement.
    */
   const operatorAuth = readOperatorAuthEnvironment()
 
@@ -82,20 +97,28 @@ export async function POST(request: Request): Promise<Response> {
     console.error(
       `Navaratri sync: refused. ${OPERATOR_AUTH_LOG_MESSAGES[operatorAuth.reason]}`,
     )
-
-    // Same answer as a bad session: a caller cannot probe configuration state.
-    return failure('unauthorized', 'Operator session required.', 401)
   }
 
-  const sessionToken = readOperatorSessionCookie(request.headers.get('cookie'))
-
-  if (
-    !verifyOperatorSessionToken(
-      sessionToken,
+  const operatorAuthorized =
+    operatorAuth.ok === true &&
+    verifyOperatorSessionToken(
+      readOperatorSessionCookie(request.headers.get('cookie')),
       operatorAuth.environment.sessionSecret,
     )
-  ) {
-    return failure('unauthorized', 'Operator session required.', 401)
+
+  /** Set only on the device path; the operator path keeps its old behaviour. */
+  let deviceAuthorization: SyncDeviceAuthorization | null = null
+
+  if (!operatorAuthorized) {
+    const device = await authorizeSyncByDevice(request)
+
+    if (device.ok === false) {
+      // One generic answer for both realms. A caller cannot learn which one
+      // it failed, nor whether a device realm exists on this deployment.
+      return failure('unauthorized', 'Operator session required.', 401)
+    }
+
+    deviceAuthorization = device.authorization
   }
 
   /**
@@ -171,6 +194,35 @@ export async function POST(request: Request): Promise<Response> {
 
   const { request: syncRequest } = parsed
   const { registrationId, payload } = syncRequest
+
+  /**
+   * DEVICE-AUTHORIZED SYNC ONLY. A badge this device does not currently own
+   * is refused before anything remote is read or written.
+   *
+   * This is the server-side half of the reconnect race: a desk may issue
+   * #501 offline, be reassigned or revoked centrally while it is away, and
+   * flush the moment it returns — possibly before its own browser has
+   * processed the revocation. The ledger refuses that row on its own
+   * authority rather than on the client having noticed in time.
+   *
+   * A held registration carries no badge and is not range-checked; the
+   * device still had to prove Registration and an active assignment above.
+   *
+   * The operator path is deliberately exempt: C3B is a transition, and a
+   * legacy desk must behave exactly as it did yesterday.
+   */
+  if (
+    deviceAuthorization !== null &&
+    payload.status === 'completed' &&
+    !isBadgeWithinDeviceRange(deviceAuthorization, payload.badgeNumber)
+  ) {
+    return failure(
+      'device-badge-range-mismatch',
+      'That badge is outside this device\u2019s central badge assignment.',
+      403,
+      { registrationId, payloadUpdatedAt: payload.updatedAt },
+    )
+  }
 
   try {
     const result = await syncRegistration(syncRequest, environment)

@@ -17,6 +17,9 @@ const jiti = createJiti(import.meta.url, {
     '@/components/registration/registration-form': `${HERE}/fake-registration-form.mjs`,
     '@/db/database': `${HERE}/fake-db.mjs`,
     '@/components/database-gate': `${HERE}/fake-database-gate.mjs`,
+    '@/device-auth/device-event-authorization-context': `${HERE}/fake-device-authorization.mjs`,
+    '@/components/device-auth/device-event-authorization-provider':
+      `${HERE}/fake-device-authorization-provider.mjs`,
     '@': `${root}/src`,
   },
   interopDefault: true,
@@ -34,6 +37,23 @@ const operatorStore = await jiti.import(`${root}/src/auth/operator-access-store.
 export const setOperatorAccess = (phase, lockReason = null) => {
   operatorStore.setOperatorAccess({ phase, lockReason })
 }
+const deviceAuthorization = await jiti.import(`${HERE}/fake-device-authorization.mjs`)
+
+/**
+ * Drives DEVICE event authority independently of the operator realm, so the
+ * two can be proven apart: a device grant must open a module with Operator
+ * locked, and a badge conflict must stay blocked with Operator unlocked.
+ */
+export const setDeviceGrant = (grant, extra = {}) => {
+  deviceAuthorization.reset()
+  deviceAuthorization.state.grant = grant
+  Object.assign(deviceAuthorization.state, extra)
+}
+
+export const clearDeviceGrant = () => {
+  deviceAuthorization.reset()
+}
+
 const AppRouterMod = await jiti.import(`${root}/src/components/app-router.tsx`)
 
 /** Drives the admin realm for route tests, from the same module instance. */

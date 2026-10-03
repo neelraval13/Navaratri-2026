@@ -149,9 +149,39 @@ is a Vercel Function and the Hobby plan allows twelve; this deployment uses
 
 See `docs/DEVICE_AUTH.md`.
 
-**Still deliberately absent:** any device gate on an event route, offline
-device authorization, a heartbeat, and any way to release, edit or transfer a
-central badge range. `/device-registration` remains the transitional *local*
+A centrally enrolled device now **opens event modules on its own authority**,
+from one of two sources: `device-online`, the live session context, or
+`device-offline`, the claims of a cryptographically verified lease. Online
+wins whenever the server answers.
+
+```
+/                      device grant OR Operator Access
+/badge-registration    device Registration authority OR Operator Access
+/device-registration   Operator Access ONLY
+```
+
+Registration needs more than a permission: the central assignment, the local
+binding — device, event, range and `assignedAt` — and the local allocator must
+all agree. Where they do not, registration **hard-blocks with no operator
+override**, because a credential authorizes a person, not two desks holding
+the same physical badge numbers. Everything else still falls back to Operator
+Access, which remains until Phase D.
+
+One provider owns the session check: on mount, on reconnect, and on an
+explicit refresh. No polling. One timer, armed from the signed expiry, that
+makes no request — so a page left open offline stops trusting a lease that ran
+out. A definitive rejection clears the lease; a network failure never does.
+
+`/api/sync-registration` now accepts **either** a valid operator session
+(unchanged, tried first, independent of the central database) **or** a live
+device session. A device-authorized completed row must carry a badge inside
+that device's current central range, or the server refuses it and the outbox
+row stays pending — which is what stops a desk disabled while offline from
+writing to the ledger the moment it reconnects.
+
+**Still deliberately absent:** a heartbeat, any way to release, edit or
+transfer a central badge range, and Phase D's removal of Operator Access and
+the separate local device identity. `/device-registration` remains the transitional *local*
 badge-device setup, distinct from `/device-login`, which is the *central*
 identity. Those converge in Phase 9C-C3 and beyond.
 

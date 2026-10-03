@@ -42,6 +42,33 @@ const registrationsTable = {
   },
 }
 
+/**
+ * Dexie's `add` REFUSES an existing primary key; it does not overwrite.
+ *
+ * The stand-in used to overwrite, which made a destructive bootstrap
+ * indistinguishable from a safe one: `add(defaults)` over a configured row
+ * would silently succeed here and wipe the row in production. Faithfulness
+ * on this one call is the difference between a test that can see data loss
+ * and one that cannot.
+ */
+const constraintError = () => {
+  const error = new Error(
+    "Key already exists in the object store. ConstraintError: the config row is already present.",
+  )
+
+  error.name = 'ConstraintError'
+
+  return error
+}
+
+/**
+ * Dexie serialises read-write transactions over the same table, so two
+ * concurrent bootstraps cannot interleave their read and their write. The
+ * queue reproduces that: without it, a racy create-if-missing would look
+ * safe here and double-write in a browser.
+ */
+let transactionQueue = Promise.resolve()
+
 export const db = {
   outbox: outboxTable,
   registrations: registrationsTable,
@@ -49,8 +76,21 @@ export const db = {
     __name: 'config',
     async get() { return state.config === null ? undefined : clone(state.config) },
     async put(c) { state.config = clone(c) },
-    async add(c) { state.config = clone(c) },
+    async add(c) {
+      if (state.config !== null && state.config !== undefined) {
+        throw constraintError()
+      }
+
+      state.config = clone(c)
+    },
   },
   async open() {},
-  async transaction(mode, ...rest) { const cb = rest.pop(); return await cb() },
+  async transaction(mode, ...rest) {
+    const cb = rest.pop()
+    const run = transactionQueue.then(() => cb(), () => cb())
+
+    transactionQueue = run.then(() => undefined, () => undefined)
+
+    return await run
+  },
 }

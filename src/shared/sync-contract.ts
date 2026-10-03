@@ -95,6 +95,13 @@ export type SyncFailureOutcome =
   | 'forbidden-origin'
   | 'badge-conflict'
   | 'sheet-shape-conflict'
+  /**
+   * Authorized by a central DEVICE session, but the badge in the snapshot is
+   * outside that device's CURRENT central assignment. Nothing is written and
+   * the local row is retained: a human must reconcile which desk owns that
+   * physical number.
+   */
+  | 'device-badge-range-mismatch'
   | 'sync-failed'
 
 export interface SyncSuccessResponse {
@@ -377,6 +384,7 @@ const FAILURE_OUTCOMES: readonly SyncFailureOutcome[] = [
   'forbidden-origin',
   'badge-conflict',
   'sheet-shape-conflict',
+  'device-badge-range-mismatch',
   'sync-failed',
 ]
 

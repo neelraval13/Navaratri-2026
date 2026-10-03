@@ -373,10 +373,13 @@ check('  the event route pattern excludes /admin',
   [/^\/(?:badge-registration|device-registration)?$/.test('/admin'),
    /^\/(?:badge-registration|device-registration)?$/.test('/'),
    /^\/(?:badge-registration|device-registration)?$/.test('/badge-registration')], [false, true, true])
+// 9C-C3B mounts the processor through EventSyncManager, still exactly once.
 check('  exactly one EventAppGate, one DatabaseGate, one SyncManager',
   [(routerSource.match(/<EventAppGate>/g) ?? []).length,
    (read('src/components/event-app-gate.tsx').match(/<DatabaseGate>/g) ?? []).length,
-   (read('src/components/event-app-gate.tsx').match(/<SyncManager \/>/g) ?? []).length], [1, 1, 1])
+   (read('src/components/event-app-gate.tsx').match(/<EventSyncManager \/>/g) ?? []).length,
+   (read('src/components/event-access/event-sync-manager.tsx')
+     .match(/<SyncManager \/>/g) ?? []).length], [1, 1, 1, 1])
 
 // A fresh browser: no operator session, no admin session.
 setOperatorAccess('locked', 'new-device')

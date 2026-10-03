@@ -87,10 +87,11 @@ type PanelState =
 /**
  * Central device login and enrollment for this browser.
  *
- * PARALLEL to the event application, not in front of it. Signing in here does
- * not unlock `/`, `/badge-registration` or `/device-registration` — those
- * still answer to Operator Access exactly as before — and signing out here
- * does not lock them.
+ * Since Phase 9C-C3B this binding matters to the event application: `/` and
+ * `/badge-registration` accept a device grant, each module authorizing itself
+ * from the device's attributes and, for registration, from badge-safety
+ * checks. `/device-registration` still answers to Operator Access alone, and
+ * Operator Access remains the fallback everywhere else.
  *
  * There is NO polling. The session is checked on mount, after a login, and
  * when the operator explicitly refreshes. A background timer would be a
@@ -409,8 +410,9 @@ const DeviceEnrollmentPanel: React.FC = () => {
           </p>
 
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Device authentication is not configured right now. Event operations
-            are unaffected and continue to use Operator Access.
+            Device authentication is not configured right now, so this browser
+            cannot sign in or refresh its device access. Operator Access
+            remains available for eligible event operations.
           </p>
 
           <Button
@@ -502,9 +504,10 @@ const DeviceEnrollmentPanel: React.FC = () => {
           </p>
 
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Internet is required to verify or change the central device in this
-            phase. Event operations are unaffected and continue to use Operator
-            Access.
+            Internet is required to verify or change the central device.
+            Eligible event operations can continue on the signed offline
+            authorization below; Operator Access remains available as a
+            fallback.
           </p>
 
           <OfflineAuthorizationSummary state={state.offline} isOffline />

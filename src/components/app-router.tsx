@@ -2,7 +2,9 @@ import type * as React from 'react'
 import { Route, Switch } from 'wouter'
 
 import { EVENT_ROUTE_PATTERN, ROUTES } from '@/app/routes'
+import EventAccessGate from '@/components/event-access/event-access-gate'
 import EventAppGate from '@/components/event-app-gate'
+import OperatorAccessGate from '@/components/operator/operator-access-gate'
 import AdminPage from '@/pages/admin-page'
 import BadgeRegistrationPage from '@/pages/badge-registration-page'
 import DeviceLoginPage from '@/pages/device-login-page'
@@ -18,13 +20,20 @@ import NotFoundPage from '@/pages/not-found-page'
  * sign-in has its own session, and neither may require Operator Access or
  * mount the offline registration workflow.
  *
- * `/device-login` unlocks no event route. Holding a device session does not
- * open `/badge-registration`, and event routes keep answering to Operator
- * Access until the offline device bridge exists.
+ * Event routes are authorized PER MODULE, because the answer differs:
  *
- * Every event route shares one EventAppGate, so Operator Access, the database
- * gate and SyncManager mount once and survive navigation between pages rather
- * than restarting per route.
+ *   /                      a device grant OR Operator Access
+ *   /badge-registration    device Registration authority OR Operator Access
+ *   /device-registration   OPERATOR ONLY
+ *
+ * The last one is deliberate. A signed device lease must not unlock the page
+ * that rewrites this browser's own transitional Phase 7 identity — the very
+ * identity the lease's badge checks are measured against. Phase D converges
+ * them; until then it keeps its own gate.
+ *
+ * Every event route shares one EventAppGate, so the database gate, the
+ * authorization provider and SyncManager mount once and survive navigation
+ * between pages rather than restarting per route.
  *
  * Not Found sits outside both, so a mistyped path never demands a credential
  * and never quietly falls through to a workflow.
@@ -44,15 +53,23 @@ const AppRouter: React.FC = () => {
         <EventAppGate>
           <Switch>
             <Route path={ROUTES.home}>
-              <HomePage />
+              <EventAccessGate module="home">
+                <HomePage />
+              </EventAccessGate>
             </Route>
 
             <Route path={ROUTES.badgeRegistration}>
-              <BadgeRegistrationPage />
+              <EventAccessGate module="registration">
+                <BadgeRegistrationPage />
+              </EventAccessGate>
             </Route>
 
+            {/* Operator ONLY: a device lease never unlocks the page that
+                rewrites this browser's own local device identity. */}
             <Route path={ROUTES.deviceRegistration}>
-              <DeviceRegistrationPage />
+              <OperatorAccessGate>
+                <DeviceRegistrationPage />
+              </OperatorAccessGate>
             </Route>
           </Switch>
         </EventAppGate>

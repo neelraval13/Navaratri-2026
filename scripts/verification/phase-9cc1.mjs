@@ -83,8 +83,16 @@ check('  and is not nested inside it',
 check('  and no device gate wraps the event routes',
   /Device(Access|Session|Login)Gate/.test(
     routerSource + stripComments(read('src/components/event-app-gate.tsx'))), false)
-check('  the event shell still uses OperatorAccessGate',
-  /OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')), true)
+/**
+ * Phase 9C-C3B moved Operator Access from the shell to the ROUTES, because
+ * the answer now differs per module. It is still there, and
+ * `/device-registration` still answers to it alone.
+ */
+check('Operator Access still gates event routes',
+  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
+check('  and /device-registration answers to it alone',
+  /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
+    .test(stripComments(read('src/components/app-router.tsx'))), false)
 check('  and the event route pattern is unchanged',
   /\^\\\/\(\?:badge-registration\|device-registration\)\?\$/.test(read('src/app/routes.ts')), true)
 
@@ -527,10 +535,16 @@ check('  and no adoption action',
  * not do is WRITE it: no component opens the database or calls a badge writer.
  * The single adoption write lives in the domain helper, audited by verify:9cc2a.
  */
+/**
+ * 9C-C3B's authorization provider READS the config row to evaluate badge
+ * ownership, so importing the database is no longer the thing to forbid.
+ * WRITING is — and the registrations and outbox tables are none of its
+ * business at all.
+ */
 check('nothing in the device UI writes a badge range',
   walkSource(join(root, 'src/components/device-auth'))
     .concat(walkSource(join(root, 'src/device-auth')))
-    .filter((file) => /configureBadgeDistribution\(|registerDevice\(|db\.config\.(put|update)|db\.transaction\(|from '@\/db\/database'/
+    .filter((file) => /configureBadgeDistribution\(|registerDevice\(|db\.config\.(put|update|add|delete)|db\.transaction\(|db\.(registrations|outbox)\./
       .test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')), [])
 /**
@@ -591,9 +605,15 @@ check('no credential reaches the built bundle',
 check('Sheets unchanged',
   [/A1:N/.test(read('server/sync/sheet-contract.ts')), /A1:M/.test(read('server/sync/sheet-contract.ts'))],
   [true, true])
-check('sync still uses the operator realm',
+/**
+ * 9C-C3B adds a SECOND sync realm: a live device session. The operator path
+ * is unchanged and tried first; the signed offline lease is accepted by
+ * nothing.
+ */
+check('sync keeps the operator realm and never takes the offline lease',
   [/operator/i.test(read('api/sync-registration.ts')),
-   /device-auth|device-session/.test(read('api/sync-registration.ts'))], [true, false])
+   /verifyOfflineAuthorization|offline-lease|centralDeviceOfflineAuthorization/
+     .test(stripComments(read('api/sync-registration.ts')))], [true, false])
 check('Operator Access is unchanged',
   /createHmac\('sha256', secret\)\.update\(encodedPayload, 'utf8'\)\.digest\(\)/
     .test(read('server/auth/operator-session.ts')), true)

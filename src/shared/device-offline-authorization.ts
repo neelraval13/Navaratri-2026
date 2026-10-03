@@ -36,8 +36,14 @@ export const DEVICE_OFFLINE_SIGNING_CONTEXT = 'navaratri-device-offline-v1:'
 export const MAX_DEVICE_OFFLINE_LEASE_SECONDS = 24 * 60 * 60
 
 /**
- * Tolerated clock difference between the signing server and a desk tablet.
- * Small on purpose: a generous skew is extra offline authority.
+ * Tolerated clock difference between the signing server and a desk tablet,
+ * applied to `iat` ONLY.
+ *
+ * It forgives a lease that looks issued slightly in the future, which a
+ * server clock a little ahead genuinely produces. It is deliberately NOT
+ * applied to `exp`: adding it there would extend real authority by five
+ * minutes past the moment the server said it ends, and a desk whose own
+ * clock already lags is getting slack enough.
  */
 export const DEVICE_OFFLINE_CLOCK_SKEW_SECONDS = 5 * 60
 
@@ -337,7 +343,12 @@ export const checkOfflineClaimsClock = (
     return 'not-yet-valid'
   }
 
-  if (claims.exp <= nowSeconds - DEVICE_OFFLINE_CLOCK_SKEW_SECONDS) {
+  /**
+   * STRICT. Authority ends at `exp`, not at `exp` plus a grace period — an
+   * expired lease is never treated as valid, and the local expiry timer is
+   * armed for this exact instant so the two cannot disagree.
+   */
+  if (claims.exp <= nowSeconds) {
     return 'expired'
   }
 

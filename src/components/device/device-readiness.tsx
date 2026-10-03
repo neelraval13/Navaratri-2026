@@ -13,6 +13,12 @@ import {
 } from '@/components/ui/dialog'
 import { formatBadgeRange } from '@/db/device'
 import { readLocalReadiness } from '@/db/readiness'
+import { useDeviceEventAuthorization } from '@/device-auth/device-event-authorization-context'
+import {
+  authorizeEventModule,
+  type DeviceOperationalGrant,
+  type ModuleAuthorization,
+} from '@/device-auth/event-authorization'
 import {
   readVerifiedOfflineAuthorization,
   type CachedOfflineLease,
@@ -49,6 +55,50 @@ const OFFLINE_LEASE_LABELS: Record<
   expired: { value: 'Expired', tone: 'attention', hint: 'Sign in online to receive a new lease.' },
   invalid: { value: 'Signature invalid', tone: 'attention' },
   unverifiable: { value: 'Unable to verify', tone: 'attention' },
+}
+
+/**
+ * How this desk is currently authorized, and whether registration is open to
+ * it. Both are DERIVED at render time from the same pure evaluator the gate
+ * uses, so the diagnostic and the actual decision cannot disagree.
+ */
+const EVENT_ACCESS_LABEL = (
+  grant: DeviceOperationalGrant | null,
+  operatorPhase: string,
+): { value: string; tone: ReadinessTone; hint?: string } => {
+  if (grant?.source === 'device-online') {
+    return { value: 'Device online', tone: 'good' }
+  }
+
+  if (grant?.source === 'device-offline') {
+    return {
+      value: 'Device offline',
+      tone: 'warning',
+      hint: 'Signed authorization lease, verified on this device.',
+    }
+  }
+
+  return operatorPhase === 'unlocked' || operatorPhase === 'expired'
+    ? { value: 'Operator fallback', tone: 'neutral' }
+    : { value: 'None', tone: 'attention' }
+}
+
+const REGISTRATION_LABEL = (
+  authorization: ModuleAuthorization,
+): { value: string; tone: ReadinessTone; hint?: string } => {
+  if (authorization.outcome === 'authorized') {
+    return { value: 'Ready', tone: 'good' }
+  }
+
+  if (authorization.outcome === 'blocked') {
+    return {
+      value: 'Badge setup conflict',
+      tone: 'attention',
+      hint: 'Central and local badge ownership disagree. Resolve at Device Sign-In.',
+    }
+  }
+
+  return { value: 'Not permitted', tone: 'neutral' }
 }
 
 const TONE_CLASS: Record<ReadinessTone, string> = {
@@ -131,6 +181,11 @@ interface DeviceReadinessProps {
 const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) => {
   const access = useOperatorAccess()
   const network = useNetworkStatus()
+  /**
+   * READ-ONLY. Diagnostics report how this desk is authorized; they never
+   * refresh, revoke, issue or repair anything.
+   */
+  const device = useDeviceEventAuthorization()
 
   const [isOpen, setIsOpen] = useState(false)
   const [attempt, setAttempt] = useState(0)
@@ -401,6 +456,22 @@ const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) =
                 label="Operator access"
                 value={access.phase === 'expired' ? 'Session expired' : 'Unlocked'}
                 tone={access.phase === 'expired' ? 'warning' : 'good'}
+              />
+
+              <ReadinessRow
+                label="Event access"
+                {...EVENT_ACCESS_LABEL(device.grant, access.phase)}
+              />
+
+              <ReadinessRow
+                label="Registration authorization"
+                {...REGISTRATION_LABEL(
+                  authorizeEventModule('registration', {
+                    grant: device.grant,
+                    config: device.config,
+                    enrollment: device.enrollment,
+                  }),
+                )}
               />
 
               {offlineLease === null ? null : (

@@ -774,8 +774,15 @@ exp = min(now + 24h, event.endsAt)
 At most **24** hours, and never past the event's `endsAt`. An event that has
 already ended produces **no lease at all**. There is no indefinite offline
 authority and no local extension — only the server issues one. The browser
-tolerates five minutes of clock skew, rejects an `iat` beyond it, and treats
-an expired lease as expired however intact its bytes are.
+tolerates five minutes of clock skew on `iat` — a server clock slightly
+ahead genuinely produces one — and treats an expired lease as expired however
+intact its bytes are.
+
+**The skew is not applied to `exp`.** Authority ends at the instant the server
+signed, not five minutes later: adding grace there would extend real
+authorization past the moment it was meant to stop, and a desk whose own clock
+lags already has slack. The local expiry timer is armed for that same instant,
+so the timer and the verifier cannot disagree.
 
 ### It is never a central API credential
 
@@ -839,3 +846,136 @@ unverified ones.
 Offline, a valid lease is called *"Offline authorization lease valid"*, never
 **Authenticated**: nobody asked the server, and the only thing proven is the
 signature.
+
+
+## Phase 9C-C3B — device-authorized event operations
+
+A centrally enrolled device can now **open event modules on its own
+authority**, online or offline, without the shared operator code.
+
+Operator Access remains, as a transitional fallback. **Phase D** is what
+removes it and converges the local identity; until then both exist, and a
+browser may legitimately be `claim-test-2` centrally and `claim-test-local-2`
+locally.
+
+### Two authorities, one grant
+
+| Source | Comes from | Lives until |
+|---|---|---|
+| `device-online` | the live `GET /api/device-auth` context | the next check |
+| `device-offline` | the claims of a **cryptographically verified** C3A lease | the signed `exp` |
+
+They are normalised into one in-memory `DeviceOperationalGrant` before any
+rule runs, and the grant is **never persisted**: authorization that survives a
+reload without being re-established is authorization nobody checked. The
+signed lease persists; the conclusion drawn from it does not.
+
+Online wins whenever the server answers. Yesterday's lease must not outrank
+today's truth, so an authenticated response both authorizes and **replaces**
+the cached lease.
+
+### Route policy
+
+| Route | Authority |
+|---|---|
+| `/` | device grant **or** Operator Access |
+| `/badge-registration` | device Registration authority **or** Operator Access |
+| `/device-registration` | **Operator Access only** |
+
+The last is deliberate: that page rewrites this browser's transitional Phase 7
+identity — the very identity the lease's badge checks are measured against. A
+device lease must not unlock the thing it is measured by.
+
+### Registration needs more than permission
+
+`attributes includes registration` is not enough. Central badge ownership must
+agree with the local allocator *and* its provenance: the event must match, the
+enrollment must be consistent, the local Phase 7 identity must exist, and the
+binding's device, event, range and **`assignedAt`** must all equal the live
+central assignment, which must in turn equal `badgeStart`/`badgeEnd` with a
+coherent `nextBadge`.
+
+`nextBadge === badgeEnd + 1` is **coherent** — that is the exhausted state, and
+it reaches the existing badge-range-exhausted workflow rather than looking like
+an authorization failure.
+
+### Some failures fall back. Some never fall back.
+
+**Fallback allowed** — no grant, wrong event, no enrollment, no local identity,
+no Registration attribute, no central range, no valid lease, no public key.
+These describe *who is asking*.
+
+**Hard block, and Operator Access is not offered** — any disagreement between
+central and local badge ownership, or an enrollment naming a different device
+or event. The hard-block screen offers no Continue, no Override and no
+operator code, because the operator credential authorizes a *person at a
+browser*; it cannot make two desks holding the same physical badge numbers
+safe. Those **never fall back**.
+
+Authorization also **never repairs** badge state: no adoption, no `nextBadge`
+reset, no binding write. C2A stays the only adoption path, because physical
+stack presence still needs a human.
+
+### The provider
+
+One `DeviceEventAuthorizationProvider`, mounted once around the event routes.
+It checks on **mount**, on an **offline → online transition**, and on an
+explicit **Refresh Device Access**. There is still no polling and no
+heartbeat.
+
+It sets exactly **one timer**, armed from the verified signed `exp`. That
+timer resolves through a **local-only path** that cannot reach the network —
+`resolveFromCachedLease` in `event-authorization-runtime.ts`, which never
+touches the session source. It exists so a page left open offline stops
+trusting a lease that has run out. If Operator Access happens to be unlocked
+the route continues on that authority; otherwise the gate appears.
+
+The two triggers are deliberately **separate**. They once shared one counter,
+which meant the expiry timer re-ran the online path and issued a
+`GET /api/device-auth` nobody had asked for — pointless on an offline desk,
+and a heartbeat by accident on an online one. The decision logic therefore
+lives outside React as two plain async functions, so "does this path reach
+the network?" is answered by counting calls on a fake rather than by reading
+an effect graph.
+
+Overlapping checks are resolved by **sequence, not timing** — a manual refresh
+that revokes access cannot be undone by an older in-flight response arriving
+late.
+
+| Reconnect outcome | Effect |
+|---|---|
+| authenticated | fresh context, fresh lease stored, authorization re-evaluated |
+| definitively unauthenticated | **cached lease cleared**, device authority gone |
+| network error, timeout, 503 | lease **retained** until its signed expiry |
+
+A network failure is not a revocation.
+
+### Sync: Operator or a live device
+
+`/api/sync-registration` now accepts **either** realm, tried in this order:
+
+1. **Operator** — unchanged. A valid operator session proceeds exactly as
+   before: no Neon call, no device check, no range enforcement. A legacy desk
+   must not start failing because the central database is unreachable.
+2. **Device** — a *live* session: `session_version`, `enabled`, event active,
+   credentials provisioned, current `registration`, current active range.
+
+Both failures answer with the same generic 401.
+
+For a **device-authorized completed** snapshot the badge must fall inside that
+device's **current** central range, or the endpoint returns
+`device-badge-range-mismatch` (403), writes nothing and leaves the outbox row
+pending. That is the server-side half of the reconnect race: a desk may issue
+#501 offline, be disabled centrally while away, and flush the instant it
+returns — possibly before its own browser has processed the revocation. **The
+ledger refuses it on its own authority**, not on the client having noticed in
+time. Held rows carry no badge and are not range-checked.
+
+The signed offline lease is **never** sent and accepted by nothing — not here,
+not anywhere. It is local authorization; the server reads Postgres instead.
+
+### Still true
+
+Registration stays offline-first: IndexedDB transaction, local `nextBadge`,
+durable outbox. Issuance performs **no** device-auth request — authorization
+happens at the route boundary, not on every button.

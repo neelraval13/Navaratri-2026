@@ -459,18 +459,47 @@ check('  so a reload shows the adopted state without re-adopting',
   [...panelSource.matchAll(/readCentralBadgeRangePlan\(/g)].length >= 2, true)
 
 console.log('\n=== 34, 73-78. NOTHING ELSE MOVED ===')
-check('the event shell still uses OperatorAccessGate',
-  /OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')), true)
+/**
+ * Phase 9C-C3B moved Operator Access from the shell to the ROUTES, because
+ * the answer now differs per module. It is still there, and
+ * `/device-registration` still answers to it alone.
+ */
+check('Operator Access still gates event routes',
+  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
+check('  and /device-registration answers to it alone',
+  /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
+    .test(stripComments(read('src/components/app-router.tsx'))), false)
 check('  and no device gate was added',
   /Device(Access|Session|Auth)Gate/.test(
     stripComments(read('src/components/event-app-gate.tsx')) +
     stripComments(read('src/components/app-router.tsx'))), false)
-check('  the binding is never used as authorization',
+/**
+ * Phase 9C-C3B reads the binding when authorizing badge registration — but
+ * only ever to BLOCK. It is provenance, so it can prove that local badge
+ * ownership DISAGREES with central and must never, on its own, prove that
+ * anything is allowed.
+ */
+check('  the binding is read in exactly the expected places',
   walk(join(root, 'src'))
     .filter((file) => !/central-badge-range|local-badge-setup|device-enrollment-panel|db\/types/
       .test(file))
     .filter((file) => /centralBadgeRangeBinding/.test(stripComments(readFileSync(file, 'utf8'))))
-    .map((file) => file.replace(`${root}/`, '')), [])
+    .map((file) => file.replace(`${root}/`, '')), ['src/device-auth/event-authorization.ts'])
+check('  and there it can only ever refuse',
+  (() => {
+    const domain = stripComments(read('src/device-auth/event-authorization.ts'))
+    const checker = domain.slice(
+      domain.indexOf('const checkBadgeOwnership'),
+      domain.indexOf('const localRangeOf'))
+    return [
+      checker.includes('centralBadgeRangeBinding'),
+      // Everything it can return is a conflict or `null`; it cannot authorize.
+      /BadgeSafetyConflict \| null/.test(checker),
+      /authorized/.test(checker),
+      // And no other part of the domain reads it.
+      domain.split('centralBadgeRangeBinding').length - 1,
+    ]
+  })(), [true, true, false, 1])
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
@@ -512,9 +541,15 @@ check('  and no server file knows about the binding',
 check('Google Sheet ranges unchanged',
   [/A1:N/.test(read('server/sync/sheet-contract.ts')),
    /A1:M/.test(read('server/sync/sheet-contract.ts'))], [true, true])
-check('sync still uses the operator realm',
+/**
+ * 9C-C3B adds a SECOND sync realm: a live device session. The operator path
+ * is unchanged and tried first; the signed offline lease is accepted by
+ * nothing.
+ */
+check('sync keeps the operator realm and never takes the offline lease',
   [/operator/i.test(read('api/sync-registration.ts')),
-   /device-auth/.test(read('api/sync-registration.ts'))], [true, false])
+   /verifyOfflineAuthorization|offline-lease|centralDeviceOfflineAuthorization/
+     .test(stripComments(read('api/sync-registration.ts')))], [true, false])
 
 const manifest = JSON.parse(read('package.json'))
 check('verify:9cc2a is registered',

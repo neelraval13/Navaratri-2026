@@ -191,6 +191,33 @@ the page reports offline authorization unavailable, and nothing fails open.
 **Phase 9C-C3B is required before a device lease can unlock event
 operations,** and it must not be switched on until these are configured.
 
+### Device-authorized event operations (Phase 9C-C3B)
+
+A centrally enrolled device can now open `/` and `/badge-registration` without
+the operator code, online or from a verified offline lease.
+`/device-registration` still requires Operator Access, and Operator Access
+remains the fallback everywhere else until Phase D.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.35 | With Operator Access **locked**, each desk opens `/badge-registration` and the banner reads *Device access · Verified online* | ☐ |
+| 3.36 | With the network disabled, the same desk still opens it and the banner reads *Offline device access* with a sensible *valid until* — never "Authenticated" | ☐ |
+| 3.37 | A badge issued offline advances `nextBadge` locally and queues in the outbox with no device-auth request | ☐ |
+| 3.38 | On reconnect, one device revalidation happens and the outbox drains **without** anyone entering the operator code | ☐ |
+| 3.39 | Removing `registration` centrally, then reconnecting, removes device registration access and offers the operator fallback | ☐ |
+| 3.40 | Disabling a device centrally, then reconnecting, clears its lease and its authority | ☐ |
+| 3.41 | A desk whose local range disagrees with its central assignment **hard-blocks** with no override — verified with Operator Access unlocked | ☐ |
+| 3.42 | A legacy browser with no central enrollment still works exactly as before on Operator Access | ☐ |
+
+**Operator Access is not removed in this phase.** Keep
+`EVENT_OPERATOR_ACCESS_CODE` and `EVENT_SESSION_SECRET` configured: they are
+still the fallback for every desk that is not centrally enrolled, and the only
+authority for `/device-registration`.
+
+Step 3.41 is the one to take seriously. It is the only case a credential
+cannot resolve, and it is the case that protects two attendees from receiving
+the same badge.
+
 **There is no undo.** Nothing in the application releases, edits, transfers or
 extends a central badge range, so a range claimed against the wrong desk has to
 be reconciled by hand in the database before the event. Reserve a range only

@@ -745,14 +745,23 @@ check('  and no device route GATE exists',
    'src/components/device/device-access-gate.tsx',
    'src/components/device-session-gate.tsx']
     .filter((file) => existsSync(join(root, file))), [])
-check('the event shell still uses OperatorAccessGate',
-  /OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')), true)
-check('  and no device gate was added',
-  /Device(Access|Session|Auth)Gate/.test(
-    stripComments(read('src/components/event-app-gate.tsx')) +
-    stripComments(read('src/components/app-router.tsx'))), false)
-check('  the event shell itself names no device auth',
-  /[Dd]evice/.test(stripComments(read('src/components/event-app-gate.tsx'))), false)
+/**
+ * Phase 9C-C3B made device authority an event authorization source, so the
+ * shell legitimately mounts the provider and the routes legitimately accept
+ * a grant. What 9C-B established and still holds is that Operator Access
+ * remains, and that `/device-registration` answers to it ALONE — a device
+ * lease must never unlock the page that rewrites the local identity the
+ * lease's own badge checks are measured against.
+ */
+check('Operator Access still gates event routes',
+  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
+check('  /device-registration is Operator-only',
+  /ROUTES\.deviceRegistration\}>\s*<OperatorAccessGate>/
+    .test(stripComments(read('src/components/app-router.tsx')).replace(/\s+/g, ' ')
+      .replace(/\{\/\* [\s\S]*?\*\/\}/g, '')), true)
+check('  and never accepts a device grant',
+  /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
+    .test(stripComments(read('src/components/app-router.tsx'))), false)
 check('the routes are unchanged',
   ['/', '/badge-registration', '/device-registration', '/admin']
     .every((route) => read('src/app/routes.ts').includes(`'${route}'`)), true)
@@ -781,9 +790,20 @@ check('  and no device endpoint reaches into the Admin realm',
     .filter((file) =>
       /server\/admin-auth|ADMIN_SESSION_COOKIE|navaratri_admin_session|server\/auth\//
         .test(stripComments(read(`api/${file}`)))), [])
-check('  and sync-registration still uses the operator realm',
+/**
+ * 9C-C3B gives sync a SECOND realm: a live device session, so a desk that
+ * opened registration on its own authority can drain its outbox without the
+ * shared operator code. The operator path is unchanged and tried first, and
+ * the signed offline lease is still accepted by nothing.
+ */
+check('  sync-registration keeps the operator realm, and tries it FIRST',
   [/operator/i.test(read('api/sync-registration.ts')),
-   /device-auth/.test(read('api/sync-registration.ts'))], [true, false])
+   stripComments(read('api/sync-registration.ts')).indexOf('operatorAuthorized') <
+     stripComments(read('api/sync-registration.ts')).indexOf('authorizeSyncByDevice(')],
+  [true, true])
+check('  and never accepts the offline lease',
+  /verifyOfflineAuthorization|offline-lease|centralDeviceOfflineAuthorization/
+    .test(stripComments(read('api/sync-registration.ts'))), false)
 
 console.log('\n=== 42. NO SCHEMA CHANGE ===')
 check('NO new migration',

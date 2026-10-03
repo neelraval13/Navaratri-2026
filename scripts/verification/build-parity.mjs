@@ -373,8 +373,9 @@ check('  and still carries no badge range or credential',
   false)
 check('no device gate was added to the event routes',
   /Device(Access|Session|Auth)Gate/.test(read('src/components/event-app-gate.tsx')), false)
-check('  and the event shell still uses Operator Access',
-  /OperatorAccessGate/.test(read('src/components/event-app-gate.tsx')), true)
+// 9C-C3B moved Operator Access from the shell to the routes; it remains.
+check('  and the event routes still use Operator Access',
+  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
 
 console.log(fails === 0 ? '\nALL CHECKS PASS' : `\n${fails} FAILURE(S)`)
 process.exit(fails === 0 ? 0 : 1)
