@@ -209,7 +209,7 @@ for (const [label, pattern] of [
   ['nextBadge reset', /resetNextBadge|setNextBadge/],
   ['device ID reset', /regenerateDevice|changeDeviceId|resetDeviceId/],
   ['clear storage', /clearRegistrations|clearOutbox|clearStorage|deleteDatabase|\.clear\(\)/],
-  ['logout side effect', /lockOperatorDevice|clearTrustedDevice/],
+  ['logout side effect', /logoutDevice|clearCentralDeviceEnrollment|revokeOfflineAuthorization/],
 ]) check(`  no ${label} control in the panel`, pattern.test(stripComments(panelSource)), false)
 
 const summarySnapshot = {
@@ -226,7 +226,7 @@ const text = summary.buildDeviceSummary(summarySnapshot)
 check('summary names device and range', [text.includes('Registration Desk A'), text.includes('#001–#250')], [true, true])
 check('  includes the Device ID', text.includes(DEVICE_ID), true)
 check('  excludes attendee data', /Aarav|Sharma|9876543210/.test(text), false)
-check('  excludes UPI + secrets', /organizer@upi|EVENT_SESSION_SECRET|accessCode|cookie|__Host-/i.test(text), false)
+check('  excludes UPI + secrets', /organizer@upi|SESSION_SECRET|accessCode|password|cookie|__Host-/i.test(text), false)
 check('  reports capabilities', [text.includes('PWA: Installed / standalone'), text.includes('Service Worker: Active')], [true, true])
 check('unregistered summary says so, without inventing a range',
   summary.buildDeviceSummary({ ...summarySnapshot, local: { ok: false, readAt: 'x', reason: 'not-registered', counts: { completed: 0, held: 0, pendingSync: 0 } } })
@@ -238,31 +238,43 @@ check('registered-without-badges summary is honest',
    /Badge Range|Next Badge|Remaining/.test(noBadgeSummary)], [true, false])
 
 console.log('\n=== 41. LOGIN 429 HANDLING ===')
-const loginStatus = (status) => {
-  const r = spawnSync('node', [`${HERE}/login-status.mjs`, String(status)], { cwd: root, encoding: 'utf8' })
-  if (r.status !== 0) { console.log(r.stderr.split('\n').slice(0, 3).join('\n')) }
-  return JSON.parse(r.stdout.trim().split('\n').pop())
-}
-let l = loginStatus(429)
-check('429 -> generic wait message', l.message, 'Too many unlock attempts. Wait a moment and try again.')
-check('  does not claim the code was wrong', /incorrect/i.test(l.message), false)
-check('  no crash', l.ok, false)
-check('  device NOT marked trusted', l.trusted, null)
-check('401 still says incorrect', loginStatus(401).message, 'Access code is incorrect.')
-check('503 still says not configured', loginStatus(503).message, 'Operator access is not configured.')
-check('500 -> generic unavailable', loginStatus(500).message, 'Unable to unlock. Try again.')
-const authSource = readFileSync(join(root, 'src/auth/operator-access.ts'), 'utf8')
-check('  no server response text ever rendered', /response\.text\(\)|body\.message|await response\.json\(\).*message/.test(authSource), false)
-check('  no IP or counter exposed', /remaining|retryAfter|Retry-After|ipAddress/i.test(authSource), false)
+/**
+ * Phase D2 deleted the operator unlock form, and with it the client this
+ * section drove. The rule it protected — a rate-limited response is its own
+ * generic case, and server text is never rendered — now belongs to the
+ * device sign-in form, which is where it is asserted.
+ */
+const deviceLoginForm = stripComments(
+  readFileSync(join(root, 'src/components/device-auth/device-login-form.tsx'), 'utf8'))
+const deviceApiSource = stripComments(
+  readFileSync(join(root, 'src/device-auth/device-api.ts'), 'utf8'))
+check('the retired unlock client is gone',
+  existsSync(join(root, 'src/auth/operator-access.ts')), false)
+check('  and so is its status harness',
+  existsSync(join(HERE, 'login-status.mjs')), false)
+check('device sign-in never renders server response text',
+  /response\.text\(\)|body\.message|data\.message/.test(deviceLoginForm + deviceApiSource), false)
+check('  and exposes no address, counter or retry hint',
+  /remaining|retryAfter|Retry-After|ipAddress/i.test(deviceLoginForm + deviceApiSource), false)
 
 console.log('\n=== FIREWALL DOC + NO IN-PROCESS LIMITER ===')
 const firewallDoc = readFileSync(join(root, 'docs/VERCEL_FIREWALL.md'), 'utf8')
-check('documents the login path + method', [/\/api\/operator-login/.test(firewallDoc), /POST/.test(firewallDoc)], [true, true])
-check('  10 requests / 60 seconds / IP / fixed window',
-  [/\b10\b/.test(firewallDoc), /60 seconds/.test(firewallDoc), /\bIP\b/.test(firewallDoc), /Fixed Window/i.test(firewallDoc)], [true, true, true, true])
+/**
+ * The rate-limited paths are the two that survive. The doc must still name
+ * them, still condition on POST, and still say the rule is a human's job.
+ */
+check('documents the login paths + method',
+  [/\/api\/device-auth/.test(firewallDoc), /\/api\/admin-auth/.test(firewallDoc),
+   /\*\*Condition — Method\*\* \| `POST`/.test(firewallDoc)], [true, true, true])
+check('  60-second fixed window keyed on IP',
+  [/60 seconds/.test(firewallDoc), /\bIP\b/.test(firewallDoc), /Fixed Window/i.test(firewallDoc)], [true, true, true])
 check('  states it is NOT created by application code', /NOT created by application code/i.test(firewallDoc), true)
-check('  excludes the other endpoints',
-  [/Do not rate-limit/i.test(firewallDoc), /operator-session/.test(firewallDoc), /sync-registration/.test(firewallDoc)], [true, true, true])
+check('  excludes the session check, the sign-out and sync',
+  [/Do not rate-limit/i.test(firewallDoc), /GET `?\/api\/device-auth/.test(firewallDoc),
+   /DELETE `?\/api\/device-auth/.test(firewallDoc), /sync-registration/.test(firewallDoc)],
+  [true, true, true, true])
+check('  and records that the operator paths are gone',
+  /no longer exist/.test(firewallDoc), true)
 const serverSources = spawnSync('grep', ['-rlE', 'rateLimit|rate_limit|@vercel/firewall|ratelimit', join(root, 'api'), join(root, 'server')], { encoding: 'utf8' })
 check('no in-process rate limiter in api/ or server/', serverSources.stdout.trim(), '')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -273,41 +285,36 @@ console.log('\n=== MOUNT ORDER: NO DEXIE BEFORE DatabaseGate ===')
 const appSource = readFileSync(join(root, 'src/App.tsx'), 'utf8')
 const headerSource = appSource.slice(appSource.indexOf('<header'), appSource.indexOf('</header>'))
 const badgePageSource = readFileSync(join(root, 'src/pages/badge-registration-page.tsx'), 'utf8')
-const devicePageSource = readFileSync(join(root, 'src/pages/device-registration-page.tsx'), 'utf8')
+const homePageSource = readFileSync(join(root, 'src/pages/home-page.tsx'), 'utf8')
+const routerSource = readFileSync(join(root, 'src/components/app-router.tsx'), 'utf8')
 check('readiness trigger is NOT in the global header', /<DeviceReadiness/.test(headerSource), false)
 /**
  * Phase 8A moved the router under DatabaseGate, so every page — and therefore
  * every readiness trigger — mounts only after bootstrap has succeeded.
  */
 check('  the router mounts inside DatabaseGate', appSource.indexOf('<DatabaseGate>') < appSource.indexOf('<AppRouter />'), true)
-check('  badge page gates readiness behind DeviceRequiredGate',
-  badgePageSource.indexOf('<DeviceRequiredGate>') < badgePageSource.indexOf('<DeviceReadiness'), true)
 /**
- * Phase D1 added a CONVERGED branch above the registered one, so a single
- * "the guard appears before the render" position test no longer describes the
- * page. The invariant it was protecting is unchanged and is now stated
- * directly: every readiness render sits inside a branch that has already
- * established a device identity, and the unregistered fall-through renders
- * none at all.
+ * Phase D2 deleted the in-page setup gates AND the device registration page,
+ * so the position test that used to express this has no subject left. The
+ * rule is unchanged and is now stated where it actually lives: every page
+ * that renders readiness sits behind the route-level device access gate, and
+ * that gate is what refuses an unprovisioned browser.
  */
-const devicePageBody = devicePageSource.slice(devicePageSource.indexOf('const DeviceRegistrationPage'))
-const convergedGuardAt = devicePageBody.indexOf('if (isConverged) {')
-const registeredGuardAt = devicePageBody.indexOf('if (isDeviceRegistered(config)) {')
-const readinessAt = [...devicePageBody.matchAll(/<DeviceReadiness/g)].map((match) => match.index)
-const unregisteredReturn = devicePageBody.slice(devicePageBody.lastIndexOf('\n  return ('))
-check('  device page shows it only for a device that has an identity', [
-  convergedGuardAt > -1,
-  registeredGuardAt > convergedGuardAt,
-  readinessAt.length === 2,
-  readinessAt.every((at) => at > convergedGuardAt),
-  readinessAt[1] > registeredGuardAt,
-  unregisteredReturn.includes('<DeviceRegistrationForm'),
-  unregisteredReturn.includes('<DeviceReadiness'),
-], [true, true, true, true, true, true, false])
-const convergedDefinition = devicePageBody.slice(
-  devicePageBody.indexOf('const isConverged ='), convergedGuardAt)
-check('    converged is an identity match, never a stored flag',
-  /config\.deviceId === config\.centralDeviceEnrollment\.deviceId/.test(convergedDefinition), true)
+const readinessPages = ['src/pages/badge-registration-page.tsx', 'src/pages/home-page.tsx']
+  .filter((file) => /<DeviceReadiness/.test(readFileSync(join(root, file), 'utf8')))
+check('  readiness renders only on gated event pages', readinessPages, [
+  'src/pages/badge-registration-page.tsx', 'src/pages/home-page.tsx',
+])
+const router = stripComments(routerSource)
+const shell = /<EventAppGate>([\s\S]*?)<\/EventAppGate>/.exec(router)?.[1] ?? ''
+check('    and both of those pages are inside the device access gate',
+  [/<EventAccessGate module="home">[\s\S]{0,120}<HomePage \/>/.test(shell),
+   /<EventAccessGate module="registration">[\s\S]{0,160}<BadgeRegistrationPage \/>/.test(shell)],
+  [true, true])
+check('    the badge page no longer carries its own setup gates',
+  /DeviceRegisteredGate|BadgeDistributionGate/.test(badgePageSource), false)
+check('    and Home offers no local device registration',
+  /deviceRegistration|Register this device/.test(homePageSource), false)
 check('readiness reads no config hook to decide visibility',
   /useEventConfig/.test(panelSource), false)
 
@@ -319,7 +326,6 @@ const HEADER_COMPONENTS = [
   'src/components/connectivity-status.tsx',
   'src/components/sync-status.tsx',
   'src/components/theme-toggle.tsx',
-  'src/components/operator/lock-device-button.tsx',
 ]
 const dbTouching = HEADER_COMPONENTS.filter((file) =>
   /useEventConfig|@\/db\/(database|event-config|readiness|device|registrations|outbox)/.test(
@@ -328,9 +334,8 @@ check('no header component reads the database', dbTouching, [])
 check('  every useEventConfig consumer is inside DatabaseGate',
   spawnSync('grep', ['-rl', 'useEventConfig', join(root, 'src/components'), join(root, 'src/pages')], { encoding: 'utf8' })
     .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort(),
-  ['components/device/badge-distribution-gate.tsx', 'components/device/device-label.tsx',
-   'components/device/device-registered-gate.tsx', 'components/registration/registration-form.tsx',
-   'pages/device-registration-page.tsx', 'pages/home-page.tsx'].sort())
+  ['components/device/device-label.tsx', 'components/registration/registration-form.tsx',
+   'pages/home-page.tsx'].sort())
 
 console.log('\n=== DIALOG PRIMITIVE AUDIT ===')
 const dialogSource = readFileSync(join(root, 'src/components/ui/dialog.tsx'), 'utf8')
@@ -354,13 +359,13 @@ check('no new dependency for the dialog',
 console.log('\n=== DURABLE VERIFICATION ===')
 for (const f of ['scripts/verification/phase-7b.mjs', 'scripts/verification/prior-phases.mjs',
                  'scripts/verification/fake-db.mjs', 'scripts/verification/component-render.mjs',
-                 'scripts/verification/login-status.mjs', 'scripts/verification/fake-event-config.mjs'])
+                 'scripts/verification/fake-network-status.mjs', 'scripts/verification/fake-event-config.mjs'])
   check(`${f.replace('scripts/verification/', '')} is in the repository`, existsSync(join(root, f)), true)
 check('package scripts expose them',
   [pkgJson.scripts['verify:7b'], pkgJson.scripts['verify:prior']],
   ['node scripts/verification/phase-7b.mjs', 'node scripts/verification/prior-phases.mjs'])
 check('jiti is a DECLARED devDependency', typeof pkgJson.devDependencies.jiti, 'string')
-const runners = ['phase-7b.mjs', 'prior-phases.mjs', 'component-render.mjs', 'login-status.mjs']
+const runners = ['phase-7b.mjs', 'prior-phases.mjs', 'component-render.mjs', 'route-render.mjs']
   .map((f) => readFileSync(join(root, 'scripts/verification', f), 'utf8')).join('\n')
 check('  no hashed pnpm store path is baked in', /node_modules\/\.pnpm/.test(runners), false)
 // Needle built from parts so this assertion does not match its own source.

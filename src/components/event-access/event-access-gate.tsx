@@ -1,7 +1,7 @@
 import type * as React from 'react'
 
 import BadgeOwnershipBlock from '@/components/event-access/badge-ownership-block'
-import OperatorAccessGate from '@/components/operator/operator-access-gate'
+import DeviceAccessRequired from '@/components/event-access/device-access-required'
 import { Card, CardContent } from '@/components/ui/card'
 import { useDeviceEventAuthorization } from '@/device-auth/device-event-authorization-context'
 import { authorizeEventModule, type EventModule } from '@/device-auth/event-authorization'
@@ -14,17 +14,18 @@ interface EventAccessGateProps {
 /**
  * Who may open one event module.
  *
- * THREE outcomes, and the difference between the last two is the whole point:
+ * THE CENTRAL DEVICE IS THE ONLY AUTHORITY. Phase D2 removed the operator
+ * code, so there is no second credential and no fallback branch here — three
+ * outcomes, and every one of them is decided by the same pure evaluator:
  *
  *   authorized   a live device session or a verified offline lease says yes
- *   unavailable  device authority is absent or insufficient — Operator Access
- *                remains the transitional fallback
- *   blocked      central and local badge ownership DISAGREE. Hard stop, and
- *                Operator Access is not offered: a credential authorizes a
- *                person, not two desks sharing physical badge numbers
+ *   unavailable  this browser has not finished becoming an event device;
+ *                the answer is Device Sign-In, not another credential
+ *   blocked      central and local badge ownership DISAGREE, or this browser
+ *                is enrolled as a different device. Hard stop
  *
  * The device check settles before anything renders, so a page never flashes
- * an operator prompt at a device that was about to be authorized.
+ * a setup prompt at a device that was about to be authorized.
  */
 const EventAccessGate: React.FC<EventAccessGateProps> = ({ module, children }) => {
   const device = useDeviceEventAuthorization()
@@ -61,12 +62,7 @@ const EventAccessGate: React.FC<EventAccessGateProps> = ({ module, children }) =
     )
   }
 
-  /**
-   * The EXISTING Operator Access flow, reused rather than reimplemented: its
-   * credential comparison, session, trusted-device marker and offline
-   * behaviour are unchanged, and there is no second code form anywhere.
-   */
-  return <OperatorAccessGate>{children}</OperatorAccessGate>
+  return <DeviceAccessRequired gap={authorization.gap} />
 }
 
 export default EventAccessGate

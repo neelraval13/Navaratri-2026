@@ -36,8 +36,8 @@ const UNAVAILABLE: DeviceEventAuthorizationState = {
 }
 
 /**
- * Defaults to NO authority, so a component rendered outside the provider can
- * only ever fall back to Operator Access — never accidentally open.
+ * Defaults to NO authority, so a component rendered outside the provider is
+ * refused rather than accidentally opened.
  */
 export const DeviceEventAuthorizationContext =
   createContext<DeviceEventAuthorizationState>(UNAVAILABLE)

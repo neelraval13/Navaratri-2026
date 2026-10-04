@@ -117,7 +117,7 @@ export const saveCentralDeviceEnrollment = async (
  * This is still not Reset Device, not Clear Event Data, not Clear Badge Range
  * and not an operator logout: the local device identity, the badge range,
  * `nextBadge`, `centralBadgeRangeBinding`, every registration, every outbox
- * row and the trusted-operator marker are all untouched.
+ * row and every queued outbox snapshot are all untouched.
  */
 export const clearCentralDeviceEnrollment = async (): Promise<{
   outcome: 'cleared' | 'missing-config'

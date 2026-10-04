@@ -37,7 +37,7 @@ import { isDatabaseConfigured } from '../server/db/client.js'
  * enabled and event-active checks, the 14-day `__Host-` cookie and the safe
  * context. Only the path and, for sign-out, the method have moved.
  *
- * This is the Device realm ONLY. It never reads an Admin or operator cookie,
+ * This is the Device realm ONLY. It never reads an Admin cookie,
  * and neither authorizes anything here. Admin authentication is a separate
  * Function with its own secret, cookie and signing context.
  */
@@ -63,14 +63,14 @@ const BLOCKED_MESSAGES = {
  * Exchanges `eventSlug` + `loginName` + `password` for a 14-day device
  * session cookie.
  *
- * A THIRD realm, independent of Operator Access and Admin. A device session
- * authorizes neither of them, and neither of them authorizes a device. The
- * submitted password is never logged, echoed or stored, and the response
- * carries no token — the session arrives as an HttpOnly cookie.
+ * A realm independent of Admin. A device session authorizes no Admin API,
+ * and an Admin cookie authenticates no device. The submitted password is
+ * never logged, echoed or stored, and the response carries no token — the
+ * session arrives as an HttpOnly cookie.
  *
- * Phase 9C-B: this realm exists but the event application does not use it.
- * `/`, `/badge-registration` and `/device-registration` still run on Operator
- * Access, and holding this cookie unlocks none of them.
+ * SINCE PHASE D2 this is the event application's only authority: `/` and
+ * `/badge-registration` open on the strength of this cookie, or of the
+ * signed offline lease issued beside it, and on nothing else.
  */
 export async function POST(request: Request): Promise<Response> {
   if (!isSameOriginDeviceRequest(request)) {
@@ -184,7 +184,7 @@ const UNAUTHENTICATED = { authenticated: false, configured: true } as const
  * claims, so an Admin change is reflected on the next check without a new
  * cookie and without a password reset.
  *
- * It reads ONLY the device cookie. An operator or Admin cookie is not
+ * It reads ONLY the device cookie. An Admin cookie is not
  * consulted and cannot authenticate anything here.
  *
  * `last_seen_at` is deliberately NOT touched: a UI checking its own session

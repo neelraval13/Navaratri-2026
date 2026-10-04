@@ -11,9 +11,9 @@ database.
 
 ## A separate security realm
 
-Admin and Operator Access are **two different realms**, deliberately:
+Admin and device access are **two different realms**, deliberately:
 
-| | Operator Access | Admin Access |
+| | Device access | Admin Access |
 |---|---|---|
 | Unlocks | An event desk — registration, holds, badge issuance | `/admin` — the central registry |
 | Cookie | `__Host-navaratri_operator_session` | `__Host-navaratri_admin_session` |
@@ -181,8 +181,10 @@ in with: its **login name** plus a **device password**.
 >
 > Since Phase 9C-B these credentials do work: a device can sign in at
 > `POST /api/device-auth` and hold its own session. But the **event
-> application still runs on Operator Access** — a device session unlocks none
-> of `/`, `/badge-registration` or `/device-registration`, and there is no
+> application still ran on Operator Access at that phase** — a device session
+> unlocked none of `/`, `/badge-registration` or `/device-registration`.
+> Phase D2 reversed that: the device session is now the only authority, and
+> `/device-registration` is retired. At the time there was no
 > device login screen yet. Setting a password on a *disabled* device is
 > normal, and preparing a desk before opening it; a disabled device cannot
 > sign in.
@@ -357,7 +359,7 @@ authentication, password hashing, session revocation and the range-claim API
 above are all Phase 9C.
 
 **`Enabled = false` is central state only.** It does **not** currently revoke
-an existing device's Operator Access, because devices do not authenticate
+an existing device's event access at that phase, because devices did not authenticate
 centrally yet. The UI says so. That enforcement arrives with Phase 9C.
 
 **There is no heartbeat.** `last_seen_at` is displayed factually and will read
@@ -398,3 +400,24 @@ replaces the transitional self-registration flow.
 [VERCEL_FIREWALL.md](VERCEL_FIREWALL.md). A 429 shows a generic *"Too many
 admin login attempts"* message that reveals no address, no counter and nothing
 about the submitted code.
+
+---
+
+## Phase D2 — Operator Access retired
+
+The sections above that describe Operator Access as the event application's
+authority are **historical**. Phase D2 deleted that realm: the central device
+is the sole event-operations authority, `/device-registration` is a redirect
+to `/device-login`, and `EVENT_OPERATOR_ACCESS_CODE` and
+`EVENT_SESSION_SECRET` are obsolete.
+
+What that means for Admin:
+
+- Disabling a device now **does** close its event access — at its next
+  session check if it is online, and when its signed offline lease expires if
+  it is away. It is still not instant for an offline desk.
+- Resetting a device password still increments `session_version`, which now
+  signs that device out of the event application as well as out of
+  `/device-login`.
+- Admin remains a completely separate realm. An Admin cookie authorizes no
+  event route, and a device cookie reaches no Admin API.

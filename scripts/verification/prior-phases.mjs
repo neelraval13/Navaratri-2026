@@ -54,9 +54,6 @@ const sheet = await jiti.import(`${root}/server/sync/sheet-contract.ts`)
 const requests = await jiti.import(`${root}/server/sync/requests.ts`)
 const decisions = await jiti.import(`${root}/server/sync/decisions.ts`)
 const syncEnv = await jiti.import(`${root}/server/sync/environment.ts`)
-const authEnv = await jiti.import(`${root}/server/auth/environment.ts`)
-const session = await jiti.import(`${root}/server/auth/operator-session.ts`)
-const cookies = await jiti.import(`${root}/server/auth/cookies.ts`)
 
 const DEVICE_ID = '11111111-2222-4333-8444-555555555555'
 const CONFIGURED = { id: 'event', eventName: 'Navaratri 2026', currency: 'INR', amount: 20,
@@ -117,18 +114,31 @@ const BOOTSTRAP = { ...CONFIGURED, deviceId: undefined, deviceName: undefined, b
 check('bootstrap defaults are NOT badge-configured', device.isBadgeDistributionConfigured(BOOTSTRAP), false)
 check('exhausted range is still badge-configured', device.isBadgeDistributionConfigured({ ...CONFIGURED, nextBadge: 1001 }), true)
 check('nextBadge past badgeEnd+1 is NOT', device.isBadgeDistributionConfigured({ ...CONFIGURED, nextBadge: 1002 }), false)
-reset(BOOTSTRAP)
-r = await device.registerDevice({ deviceName: '  Registration Desk A  ' })
-check('device registration succeeds', [r.outcome, r.config.deviceName], ['registered', 'Registration Desk A'])
-check('  preserves unrelated config', [r.config.eventName, r.config.amount, r.config.timezone], ['Navaratri 2026', 20, 'Asia/Kolkata'])
+/**
+ * Phase D2 DELETED `registerDevice`, the local random-UUID identity writer.
+ * There is no local device registration any more — a browser takes the
+ * central device's UUID through Phase D1 convergence — so what was asserted
+ * about that writer became an assertion that it cannot come back.
+ */
+check('there is no local device-identity writer', typeof device.registerDevice, 'undefined')
+check('  and no local module mints a device id',
+  /deviceId:\s*crypto\.randomUUID\(\)/.test(readFileSync(join(root, 'src/db/device.ts'), 'utf8')), false)
+
+/**
+ * `configureBadgeDistribution` SURVIVES as the canonical range invariant and
+ * is still exercised directly, but it has no product caller: a hand-entered
+ * range records no central binding, and the access gate refuses that desk.
+ * `release:check` fails if a component or page calls it again.
+ */
+reset({ ...BOOTSTRAP, deviceId: DEVICE_ID, deviceName: 'Registration Desk A' })
 r = await device.configureBadgeDistribution({ badgeStart: 1, badgeEnd: 250, physicalStackConfirmed: true })
 check('badge distribution configures', [r.outcome, r.config.nextBadge, r.config.badgeEnd], ['configured', 1, 250])
+check('  preserves unrelated config', [r.config.eventName, r.config.amount, r.config.timezone], ['Navaratri 2026', 20, 'Asia/Kolkata'])
 reset(BOOTSTRAP)
-state.registrations.set('old', { id: 'old', status: 'completed', badgeNumber: 5, name: 'X' })
-check('registration refuses around existing data', (await device.registerDevice({ deviceName: 'D' })).outcome, 'existing-data')
-check('  nothing stamped', state.config.deviceId, undefined)
+check('a range needs an identity first',
+  (await device.configureBadgeDistribution({ badgeStart: 1, badgeEnd: 9, physicalStackConfirmed: true })).outcome,
+  'device-not-registered')
 reset()
-check('already registered refuses again', (await device.registerDevice({ deviceName: 'D' })).outcome, 'already-registered')
 check('already badge-configured refuses again',
   (await device.configureBadgeDistribution({ badgeStart: 5, badgeEnd: 9, physicalStackConfirmed: true })).outcome, 'already-configured')
 
@@ -254,80 +264,80 @@ check('  absent VERCEL_ENV fails closed', verdict({ SYNC_WRITE_ENABLED: 'true', 
 check('  interlock precedes credentials', syncEnv.readSyncEnvironment({ SYNC_WRITE_ENABLED: 'false' }).reason, 'writes-disabled')
 check('  padded config never matches', verdict({ SYNC_WRITE_ENABLED: 'true', SYNC_ALLOWED_VERCEL_ENV: ' production', VERCEL_ENV: 'production' }), 'runtime-environment-mismatch')
 
-console.log('\n=== 6C. OPERATOR AUTH ===')
-const CODE = 'a-strong-event-passphrase', SECRET = 'x'.repeat(48)
-const authReason = (over) => { const a = authEnv.readOperatorAuthEnvironment({ EVENT_OPERATOR_ACCESS_CODE: CODE, EVENT_SESSION_SECRET: SECRET, ...over }); return a.ok ? 'OK' : a.reason }
-check('valid auth config', authReason({}), 'OK')
-check('  short code fails closed', authReason({ EVENT_OPERATOR_ACCESS_CODE: '123456' }), 'access-code-too-short')
-check('  short secret fails closed', authReason({ EVENT_SESSION_SECRET: 'y'.repeat(31) }), 'session-secret-too-short')
-check('access code exact, not trimmed', [session.isOperatorAccessCodeValid(CODE, CODE), session.isOperatorAccessCodeValid(` ${CODE}`, CODE)], [true, false])
-const NOW = 1_800_000_000
-const token = session.createOperatorSessionToken(SECRET, NOW)
-check('session verifies', session.verifyOperatorSessionToken(token, SECRET, NOW + 10), true)
-check('  14-day TTL', session.SESSION_TTL_SECONDS, 14 * 24 * 60 * 60)
-check('  expired rejected', session.verifyOperatorSessionToken(token, SECRET, NOW + session.SESSION_TTL_SECONDS), false)
-check('  wrong secret rejected', session.verifyOperatorSessionToken(token, 'z'.repeat(48), NOW + 10), false)
-const [p0, s0] = token.split('.')
-const tampered = `${Buffer.from(JSON.stringify({ v: 1, iat: NOW, exp: NOW + 9e8 }), 'utf8').toString('base64url')}.${s0}`
-check('  tampered payload rejected', session.verifyOperatorSessionToken(tampered, SECRET, NOW + 10), false)
-check('  tampered signature rejected', session.verifyOperatorSessionToken(`${p0}.${s0.slice(0, -1)}${s0.endsWith('A') ? 'B' : 'A'}`, SECRET, NOW + 10), false)
-const v2 = Buffer.from(JSON.stringify({ v: 2, iat: NOW, exp: NOW + 1000 }), 'utf8').toString('base64url')
-check('  version mismatch rejected (properly signed)',
-  session.verifyOperatorSessionToken(`${v2}.${createHmac('sha256', SECRET).update(v2, 'utf8').digest('base64url')}`, SECRET, NOW + 10), false)
-for (const [l, bad] of [['undefined', undefined], ['empty', ''], ['no dot', 'abc'], ['three parts', `${p0}.${s0}.x`], ['non-base64url', `no*pe.${s0}`]])
-  check(`  malformed rejected: ${l}`, session.verifyOperatorSessionToken(bad, SECRET, NOW + 10), false)
-const cookie = cookies.serializeOperatorSessionCookie(token)
-check('cookie is __Host- prefixed', cookie.startsWith('__Host-navaratri_operator_session='), true)
-check('  Secure + HttpOnly + SameSite=Strict + Path=/',
-  [/;\s*Secure/.test(cookie), /;\s*HttpOnly/.test(cookie), /;\s*SameSite=Strict/.test(cookie), /;\s*Path=\//.test(cookie)], [true, true, true, true])
-check('  no Domain', /;\s*Domain=/i.test(cookie), false)
-check('  14-day Max-Age', /;\s*Max-Age=1209600/.test(cookie), true)
-check('cookie parsed back out', cookies.readOperatorSessionCookie(`theme=dark; ${cookie.split(';')[0]}; x=1`), token)
+console.log('\n=== 6C. THE OPERATOR AUTH REALM IS GONE ===')
+/**
+ * Phase D2 DELETED Operator Access. What used to be exercised here — the
+ * access-code policy, the HMAC session, the `__Host-` cookie — no longer
+ * exists in any form, so the assertions became "it is gone and stays gone".
+ * The live boundary is the central device session, proven below and in the
+ * device suites.
+ */
+for (const gone of ['server/auth', 'src/auth', 'src/components/operator',
+  'api/operator-login.ts', 'api/operator-session.ts', 'api/operator-logout.ts',
+  'src/hooks/use-operator-access.ts', 'src/pages/device-registration-page.tsx']) {
+  check(`retired: ${gone}`, existsSync(join(root, gone)), false)
+}
 
-console.log('\n=== 6C. SYNC ENDPOINT AUTH ORDERING ===')
+console.log('\n=== 6C. SYNC ENDPOINT IS DEVICE-AUTHORIZED ONLY ===')
 const ORIGIN = 'https://navaratri.test'
 const route = await jiti.import(`${root}/api/sync-registration.ts`)
 const setEnv = (over) => {
-  for (const k of ['EVENT_OPERATOR_ACCESS_CODE', 'EVENT_SESSION_SECRET', 'SYNC_WRITE_ENABLED',
+  for (const k of ['EVENT_DEVICE_SESSION_SECRET', 'DATABASE_URL', 'SYNC_WRITE_ENABLED',
     'SYNC_ALLOWED_VERCEL_ENV', 'VERCEL_ENV', 'SYNC_ALLOWED_ORIGIN', 'GOOGLE_SHEETS_SPREADSHEET_ID',
     'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY']) delete process.env[k]
   Object.assign(process.env, over)
 }
 const post = (cookieHeader) => new Request(`${ORIGIN}/api/sync-registration`, {
   method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN, ...(cookieHeader ? { cookie: cookieHeader } : {}) }, body: '{}' })
-const FULL = { EVENT_OPERATOR_ACCESS_CODE: CODE, EVENT_SESSION_SECRET: SECRET, SYNC_WRITE_ENABLED: 'true',
+const SECRET = 'x'.repeat(48)
+const FULL = { EVENT_DEVICE_SESSION_SECRET: SECRET, SYNC_WRITE_ENABLED: 'true',
   SYNC_ALLOWED_VERCEL_ENV: 'production', VERCEL_ENV: 'production', SYNC_ALLOWED_ORIGIN: ORIGIN,
   GOOGLE_SHEETS_SPREADSHEET_ID: 'sheet', GOOGLE_SERVICE_ACCOUNT_EMAIL: 'svc@x.iam.gserviceaccount.com', GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: 'k' }
-const live = session.createOperatorSessionToken(SECRET)
-const liveCookie = `__Host-navaratri_operator_session=${live}`
 setEnv(FULL)
 let res = await route.POST(post())
-check('no session -> 401 unauthorized', [res.status, (await res.json()).outcome], [401, 'unauthorized'])
+check('no device session -> 401 unauthorized', [res.status, (await res.json()).outcome], [401, 'unauthorized'])
+/**
+ * The retired operator cookie is not merely rejected as a bad credential —
+ * nothing on the server knows the name any more. A browser still carrying
+ * one gets the same generic 401 as a browser carrying nothing.
+ */
+res = await route.POST(post('__Host-navaratri_operator_session=anything-at-all'))
+check('  a lingering operator cookie authorizes nothing',
+  [res.status, (await res.json()).outcome], [401, 'unauthorized'])
+res = await route.POST(post('__Host-navaratri_device_session=not-a-real-token'))
+check('  an unverifiable device cookie is the same generic 401',
+  [res.status, (await res.json()).outcome], [401, 'unauthorized'])
 setEnv({ ...FULL, SYNC_WRITE_ENABLED: 'false' })
-res = await route.POST(post(liveCookie))
-check('session + writes disabled -> 503 sync-not-configured', [res.status, (await res.json()).outcome], [503, 'sync-not-configured'])
-setEnv(FULL)
-res = await route.POST(post(liveCookie))
-check('session + enabled + {} -> 400 invalid-request', [res.status, (await res.json()).outcome], [400, 'invalid-request'])
+check('auth precedes the release interlock', (await route.POST(post())).status, 401)
 setEnv({ ...FULL, SYNC_ALLOWED_ORIGIN: 'https://other.test' })
 check('auth precedes the origin guard', (await route.POST(post())).status, 401)
 
-console.log('\n=== 7A/8A. DEVICE GATE FAILS CLOSED + LABEL IS STATIC ===')
+console.log('\n=== 7A/8A/D2. ACCESS REFUSAL FAILS CLOSED + LABEL IS STATIC ===')
+/**
+ * Phase D2 deleted the in-page `DeviceRegisteredGate`. The same question is
+ * now asked once at the route, and its refusal screen is what the desk sees
+ * — so that screen is what is rendered here, for every reason it can give.
+ */
 const rendered = JSON.parse(spawnSync('node', [`${HERE}/component-render.mjs`], { cwd: root, encoding: 'utf8' }).stdout.trim())
 const showsForm = (v) => v.text.includes('__REGISTRATION_FORM__')
 const textOf = (v) => v.text.join(' ')
-check('loading does NOT render RegistrationForm', showsForm(rendered.gate.loading), false)
-check('  delegates to the loading gate', rendered.gate.loading.delegated, [{ name: 'EventConfigGate', status: 'loading', hasRetry: true }])
-check('failed does NOT render RegistrationForm', showsForm(rendered.gate.failed), false)
-check('  delegates to the failed gate with Retry', rendered.gate.failed.delegated, [{ name: 'EventConfigGate', status: 'failed', hasRetry: true }])
-check('loaded-but-null also fails closed', rendered.gate.loadedNull.delegated, [{ name: 'EventConfigGate', status: 'failed', hasRetry: true }])
-// Phase 8A moved provisioning to its own route, so the gate now sends the
-// operator there instead of embedding the setup form mid-workflow.
-check('unregistered sends the operator to device registration, not the form',
-  [textOf(rendered.gate.unconfigured).includes('This device is not registered'),
-   textOf(rendered.gate.unconfigured).includes('Register This Device'),
-   showsForm(rendered.gate.unconfigured)], [true, true, false])
-check('configured renders RegistrationForm', showsForm(rendered.gate.configured), true)
+for (const [gap, view] of Object.entries(rendered.refusal)) {
+  check(`refusal ${gap} renders no workflow`, showsForm(view), false)
+  check('  and offers Device Sign-In', textOf(view).includes('Open Device Sign-In'), true)
+}
+check('an unset-up browser is told to set the Device up',
+  textOf(rendered.refusal['missing-local-identity']).includes('Device setup required'), true)
+check('  a legacy local identity is told to converge it',
+  textOf(rendered.refusal['identity-convergence-required'])
+    .includes('still uses an older local identity'), true)
+check('  an unadopted central range is badge setup, not a conflict',
+  [textOf(rendered.refusal['no-central-range']).includes('Badge setup required'),
+   /conflict|blocked/i.test(textOf(rendered.refusal['no-central-range']))], [true, false])
+check('  no refusal offers an access code',
+  Object.values(rendered.refusal).some((v) => /operator|access code|unlock/i.test(textOf(v))), false)
+check('offline with no grant asks for verification, not a sign-in it cannot do',
+  [textOf(rendered.refusalOffline).includes('Device verification required'),
+   textOf(rendered.refusalOffline).includes('Connect to the internet')], [true, true])
 check('device label shows name + range', textOf(rendered.label.configured), 'Registration Desk A · Badges  #001\u2013#250')
 check('  renders NO remaining count', /remaining/i.test(textOf(rendered.label.configured)), false)
 check('  identical after nextBadge advances', textOf(rendered.label.afterIssue), textOf(rendered.label.configured))

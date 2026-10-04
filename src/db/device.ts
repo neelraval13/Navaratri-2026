@@ -1,11 +1,7 @@
 import { db } from '@/db/database'
 import { EVENT_CONFIG_ID, type EventConfig } from '@/db/types'
 import { formatBadgeNumber } from '@/lib/badge'
-import {
-  isValidDeviceId,
-  isValidDeviceName,
-  normalizeDeviceName,
-} from '@/shared/device'
+import { isValidDeviceId, isValidDeviceName } from '@/shared/device'
 
 /**
  * Device identity and badge ownership are two DIFFERENT things.
@@ -88,75 +84,17 @@ export const countRemainingBadges = (config: BadgeDistributionConfig): number =>
     : config.badgeEnd - config.nextBadge + 1
 }
 
-export type RegisterDeviceResult =
-  | { outcome: 'registered'; config: RegisteredEventConfig }
-  | { outcome: 'missing-config' }
-  | { outcome: 'already-registered'; config: RegisteredEventConfig }
-  | { outcome: 'invalid-name' }
-  | { outcome: 'existing-data'; registrationCount: number; outboxCount: number }
-
 /**
- * One-time generic device registration. THE ONLY device-identity writer.
+ * PHASE D2 — there is no local device-identity writer any more.
  *
- * It assigns a name and a stable id, and nothing else. It never asks for or
- * writes `badgeStart`, `badgeEnd` or `nextBadge`, because a registered device
- * does not necessarily distribute badges.
+ * `registerDevice` used to mint `crypto.randomUUID()` into `deviceId` from a
+ * hand-typed name. That workflow is retired: a browser now takes the CENTRAL
+ * device's UUID through Phase D1 convergence, which is the only identity
+ * writer left, and no product path generates a device id locally.
  *
- * Fails closed around existing data: if this browser already holds
- * registrations or queued outbox rows, a NEW identity is not stamped onto that
- * history. Nothing is deleted or modified — the operator is told
- * reconciliation is required.
- *
- * Every unrelated configuration field is carried through untouched.
+ * The predicates above stay — they are how every module asks whether this
+ * browser has an identity and whether it owns badges.
  */
-export const registerDevice = async (input: {
-  deviceName: string
-}): Promise<RegisterDeviceResult> => {
-  const deviceName = normalizeDeviceName(input.deviceName)
-
-  if (!isValidDeviceName(deviceName)) {
-    return { outcome: 'invalid-name' }
-  }
-
-  return await db.transaction(
-    'rw',
-    db.registrations,
-    db.config,
-    db.outbox,
-    async (): Promise<RegisterDeviceResult> => {
-      const config = await db.config.get(EVENT_CONFIG_ID)
-
-      if (config === undefined) {
-        return { outcome: 'missing-config' }
-      }
-
-      if (isDeviceRegistered(config)) {
-        return { outcome: 'already-registered', config }
-      }
-
-      const registrationCount = await db.registrations.count()
-      const outboxCount = await db.outbox.count()
-
-      if (registrationCount > 0 || outboxCount > 0) {
-        return { outcome: 'existing-data', registrationCount, outboxCount }
-      }
-
-      const now = new Date().toISOString()
-
-      const registered: RegisteredEventConfig = {
-        ...config,
-        deviceId: crypto.randomUUID(),
-        deviceName,
-        deviceConfiguredAt: now,
-        updatedAt: now,
-      }
-
-      await db.config.put(registered)
-
-      return { outcome: 'registered', config: registered }
-    },
-  )
-}
 
 export interface BadgeDistributionInput {
   badgeStart: number
@@ -174,7 +112,17 @@ export type ConfigureBadgeDistributionResult =
   | { outcome: 'stack-not-confirmed' }
 
 /**
- * One-time badge-range assignment. THE ONLY badge-range writer.
+ * One-time badge-range assignment for a HAND-ENTERED range.
+ *
+ * NO PRODUCT CALLER SINCE PHASE D2. A range typed in locally records no
+ * central binding, and `/badge-registration` now requires the binding to
+ * match a live central assignment — so this could only ever produce a desk
+ * that is immediately refused. `adoptCentralBadgeRange` is the path that
+ * yields a usable range, and `release:check` fails if a component or page
+ * calls this again.
+ *
+ * It remains the canonical statement of the range invariant that adoption
+ * mirrors, and the suites exercise it directly.
  *
  * Requires an already-registered device: badge ownership attaches to an
  * existing identity rather than creating one, so re-running it can never mint

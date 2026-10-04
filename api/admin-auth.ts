@@ -33,7 +33,7 @@ import { isDatabaseConfigured } from '../server/db/client.js'
  * cookie attributes and the wrong-code delay. Only the path and, for sign-out,
  * the method have moved.
  *
- * This is the Admin realm ONLY. It never reads a device or operator cookie,
+ * This is the Admin realm ONLY. It never reads a device cookie,
  * and neither of those realms authorizes anything here. Device authentication
  * is a separate Function (`api/device-auth.ts`) with its own secret, cookie
  * and signing context — merging the two would put two different threat
@@ -64,7 +64,7 @@ const delay = (ms: number): Promise<void> =>
 /**
  * Exchanges the Admin access code for a 12-hour admin session cookie.
  *
- * A separate realm from Operator Access: unlocking Admin grants no operator
+ * A separate realm from device auth: unlocking Admin grants no device
  * access, and an operator session grants no Admin. The submitted code is
  * never logged, echoed or stored, and the response carries no token.
  */

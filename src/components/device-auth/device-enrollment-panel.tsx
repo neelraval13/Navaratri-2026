@@ -99,11 +99,11 @@ type PanelState =
 /**
  * Central device login and enrollment for this browser.
  *
- * Since Phase 9C-C3B this binding matters to the event application: `/` and
- * `/badge-registration` accept a device grant, each module authorizing itself
- * from the device's attributes and, for registration, from badge-safety
- * checks. `/device-registration` still answers to Operator Access alone, and
- * Operator Access remains the fallback everywhere else.
+ * Since Phase D2 this binding is the ONLY thing that opens the event
+ * application: `/` and `/badge-registration` accept a device grant and
+ * nothing else, each module authorizing itself from the device's attributes,
+ * this browser's converged identity and, for registration, badge-safety
+ * checks. There is no operator code to fall back to.
  *
  * There is NO polling. The session is checked on mount, after a login, and
  * when the operator explicitly refreshes. A background timer would be a
@@ -462,8 +462,8 @@ const DeviceEnrollmentPanel: React.FC = () => {
 
           <p className="text-sm leading-relaxed text-muted-foreground">
             Device authentication is not configured right now, so this browser
-            cannot sign in or refresh its device access. Operator Access
-            remains available for eligible event operations.
+            cannot sign in or refresh its device access, and event operations
+            stay unavailable until it can.
           </p>
 
           <Button
@@ -505,7 +505,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
             To bind this browser to a different central device, clear the
             enrollment first. This removes only the central device identity —
             it does not touch this desk&rsquo;s badge range, its registrations
-            or its operator access.
+            or its queued records.
           </p>
 
           {/*
@@ -557,8 +557,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
           <p className="text-sm leading-relaxed text-muted-foreground">
             Internet is required to verify or change the central device.
             Eligible event operations can continue on the signed offline
-            authorization below; Operator Access remains available as a
-            fallback.
+            authorization below until it expires.
           </p>
 
           <DeviceIdentitySection

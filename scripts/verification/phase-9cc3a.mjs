@@ -547,11 +547,14 @@ check('  the browser key is import-only for verification',
 
 console.log('\n=== 35-38, 48-55. NOTHING ELSE MOVED ===')
 /**
- * 9C-C3B moved Operator Access from the shell to the routes. It is still
- * there; the lease simply became a second, parallel authority.
+ * 9C-C3B made the lease a parallel authority; PHASE D2 made it the only one
+ * alongside a live session, by deleting Operator Access. What C3A still has
+ * to prove is that the LEASE ITSELF reached no route on its own — the gate
+ * consults a normalised grant, never a stored token.
  */
-check('35. Operator Access still gates event routes',
-  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
+check('35. the event routes are gated by the device authorization gate',
+  [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
+   /<EventAccessGate module="/.test(read('src/components/app-router.tsx'))], [false, true])
 check('  and no route consults the lease',
   walk(join(root, 'src/components')).concat(walk(join(root, 'src/pages')))
     .filter((file) => !/device-auth|device-readiness/.test(file))
@@ -562,12 +565,12 @@ check('  no DeviceAccessGate exists',
   ['src/components/device-auth/device-access-gate.tsx',
    'src/components/device-access-gate.tsx']
     .filter((file) => existsSync(join(root, file))), [])
-check('36. Operator Access is untouched',
+check('36. Operator Access is gone, and C3A left nothing of it behind',
   ['operator-login', 'operator-logout', 'operator-session']
-    .every((name) => existsSync(join(root, 'api', `${name}.ts`))), true)
-check('37. the local identity and its page remain',
+    .some((name) => existsSync(join(root, 'api', `${name}.ts`))), false)
+check('37. the local identity model remains, its retired page does not',
   [existsSync(join(root, 'src/pages/device-registration-page.tsx')),
-   /deviceId/.test(read('src/db/device.ts'))], [true, true])
+   /deviceId/.test(read('src/db/device.ts'))], [false, true])
 check('38. no heartbeat or polling was added',
   /setInterval|setTimeout\(/.test(
     stripComments(read('src/device-auth/offline-lease.ts')) +
@@ -595,9 +598,10 @@ check('55. issuance still makes no central request',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-check('44. the Function inventory is unchanged at eleven', budget.actual.length, 11)
-check('  with one slot of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
+// C3A added no Function; Phase D2 removed three.
+check('44. the Function inventory is eight', budget.actual.length, 8)
+check('  with four slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
 check('  and nothing unexpected', budget.problems, [])
 check('  no offline-authorization endpoint was added',
   readdirSync(join(root, 'api')).filter((file) => /offline|lease/i.test(file)), [])
@@ -620,14 +624,16 @@ check('  from VERIFIED claims only',
   [/claims: DeviceOfflineClaims/.test(summary),
    /decodeOfflineAuthorizationPayload/.test(summary)], [true, false])
 /**
- * C3A said a lease unlocked nothing. C3B made that false, so the section now
- * states the real scope: a valid lease carries the modules this device is
- * ELIGIBLE for, and never Device Registration.
+ * C3A said a lease unlocked nothing; C3B made that false. Phase D2 then
+ * retired the one thing a lease still could not do, so the section now
+ * states the scope that remains: eligible operations continue offline, and
+ * CHANGING which device this browser is always needs a connection.
  */
 check('  and states the real scope of a valid lease',
   [/eligible event operations can continue[\s\S]{0,20}offline/.test(summary),
-   /Device Registration still requires[\s\S]{0,20}Operator Access/.test(summary)],
-  [true, true])
+   /always needs a connection/.test(summary),
+   /Operator Access/.test(summary)],
+  [true, true, false])
 check('34. Device Readiness reports the lease read-only',
   [/Central offline authorization/.test(read('src/components/device/device-readiness.tsx')),
    /readVerifiedOfflineAuthorization/.test(read('src/components/device/device-readiness.tsx'))],

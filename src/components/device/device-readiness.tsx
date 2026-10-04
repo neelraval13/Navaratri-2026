@@ -24,7 +24,6 @@ import {
   type CachedOfflineLease,
 } from '@/device-auth/offline-lease'
 import { useNetworkStatus } from '@/hooks/use-network-status'
-import { useOperatorAccess } from '@/hooks/use-operator-access'
 import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDateTime } from '@/lib/datetime'
 import { readDeviceEnvironment } from '@/lib/device-environment'
@@ -64,7 +63,6 @@ const OFFLINE_LEASE_LABELS: Record<
  */
 const EVENT_ACCESS_LABEL = (
   grant: DeviceOperationalGrant | null,
-  operatorPhase: string,
 ): { value: string; tone: ReadinessTone; hint?: string } => {
   if (grant?.source === 'device-online') {
     return { value: 'Device online', tone: 'good' }
@@ -78,9 +76,8 @@ const EVENT_ACCESS_LABEL = (
     }
   }
 
-  return operatorPhase === 'unlocked' || operatorPhase === 'expired'
-    ? { value: 'Operator fallback', tone: 'neutral' }
-    : { value: 'None', tone: 'attention' }
+  // There is no fallback to report since Phase D2. No grant means no access.
+  return { value: 'None', tone: 'attention' }
 }
 
 const REGISTRATION_LABEL = (
@@ -162,24 +159,14 @@ const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) =
  * number, changes a device id, deletes anything, clears storage or logs out.
  * Diagnostics observe; they never mutate.
  *
- * Mounted INSIDE DeviceSetupGate, which is itself inside DatabaseGate. That
- * placement is load-bearing: it means this component cannot render — and so
- * cannot touch Dexie — until bootstrap has succeeded AND the device is
- * configured. It therefore needs no configuration read of its own to decide
- * whether to appear, which is exactly the kind of pre-bootstrap database work
- * a component outside DatabaseGate must never do.
+ * Mounted INSIDE DatabaseGate, always. That placement is load-bearing: it
+ * means this component cannot render — and so cannot touch Dexie — until
+ * bootstrap has succeeded. It therefore needs no configuration read of its
+ * own to decide whether to appear, which is exactly the kind of
+ * pre-bootstrap database work a component outside DatabaseGate must never
+ * do.
  */
-interface DeviceReadinessProps {
-  /**
-   * `icon` is the compact trigger beside the device label on the badge page;
-   * `button` is the labelled action on the device registration page. Only the
-   * trigger differs — the panel and its reads are identical.
-   */
-  trigger?: 'icon' | 'button'
-}
-
-const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) => {
-  const access = useOperatorAccess()
+const DeviceReadiness: React.FC = () => {
   const network = useNetworkStatus()
   /**
    * READ-ONLY. Diagnostics report how this desk is authorized; they never
@@ -257,26 +244,15 @@ const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) =
     >
       <DialogTrigger
         render={
-          trigger === 'button' ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-12 w-full sm:w-auto sm:min-w-52"
-            >
-              <ClipboardCheck data-icon="inline-start" />
-              Open Device Readiness
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="Device readiness"
-              title="Device readiness"
-            >
-              <ClipboardCheck />
-            </Button>
-          )
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Device readiness"
+            title="Device readiness"
+          >
+            <ClipboardCheck />
+          </Button>
         }
       />
 
@@ -453,14 +429,8 @@ const DeviceReadiness: React.FC<DeviceReadinessProps> = ({ trigger = 'icon' }) =
               />
 
               <ReadinessRow
-                label="Operator access"
-                value={access.phase === 'expired' ? 'Session expired' : 'Unlocked'}
-                tone={access.phase === 'expired' ? 'warning' : 'good'}
-              />
-
-              <ReadinessRow
                 label="Event access"
-                {...EVENT_ACCESS_LABEL(device.grant, access.phase)}
+                {...EVENT_ACCESS_LABEL(device.grant)}
               />
 
               <ReadinessRow

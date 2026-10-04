@@ -428,10 +428,15 @@ check('  no adoption control without the registration attribute',
 check('  nor with no central assignment',
   [/no-central-assignment'[\s\S]{0,200}<BadgeRangeClaim/.test(setupSource),
    /Not assigned/.test(claimSource)], [true, true])
-check('  a missing local identity links to device registration',
+/**
+ * Phase D2 retired `/device-registration`, so this refusal no longer sends
+ * anyone there. Device setup now happens in the Identity section of the SAME
+ * page, and the refusal says so rather than linking away.
+ */
+check('  a missing local identity points at Device setup, on this page',
   [/ROUTES\.deviceRegistration/.test(blockSource),
-   /Set Up Local Device/.test(blockSource),
-   /local device setup before a central\s*\n?\s*badge range/.test(blockSource)], [true, true, true])
+   /Device setup required/.test(blockSource),
+   /Device Identity section above/.test(blockSource)], [false, true, true])
 check('the confirmation requires the physical stack',
   [/I have physical badges \{range\} at this device\./.test(setupSource),
    /disabled=\{!confirmed \|\| isBusy\}/.test(setupSource)], [true, true])
@@ -460,13 +465,15 @@ check('  so a reload shows the adopted state without re-adopting',
 
 console.log('\n=== 34, 73-78. NOTHING ELSE MOVED ===')
 /**
- * Phase 9C-C3B moved Operator Access from the shell to the ROUTES, because
- * the answer now differs per module. It is still there, and
- * `/device-registration` still answers to it alone.
+ * Phase D2 removed Operator Access entirely, so what this guarded — that
+ * C2A moved no route policy — is now stated against the policy that
+ * replaced it: every event module answers to the device gate, and the
+ * retired route answers to nothing.
  */
-check('Operator Access still gates event routes',
-  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
-check('  and /device-registration answers to it alone',
+check('every event route is gated by the device, and no operator gate survives',
+  [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
+   /<EventAccessGate module="/.test(read('src/components/app-router.tsx'))], [false, true])
+check('  and /device-registration accepts no grant at all',
   /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
     .test(stripComments(read('src/components/app-router.tsx'))), false)
 check('  and no device gate was added',
@@ -517,9 +524,10 @@ check('  and there it can only ever refuse',
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // C2B added exactly one Function; C2A's own guarantees below are unchanged.
-check('the Function inventory is exactly eleven', budget.actual.length, 11)
-check('  with one slot of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
+// Phase D2 deleted the three Operator Functions; C2A added none.
+check('the Function inventory is exactly eight', budget.actual.length, 8)
+check('  with four slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
 check('  and nothing unexpected', budget.problems, [])
 check('the only device range endpoint is the C2B self-claim',
   ['device-badge-assignment.ts', 'device-claim-range.ts', 'device-range.ts',

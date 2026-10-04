@@ -55,8 +55,6 @@ const SERVER_ONLY_NAMES = [
   'EVENT_ADMIN_ACCESS_CODE',
   'EVENT_ADMIN_SESSION_SECRET',
   'EVENT_DEVICE_SESSION_SECRET',
-  'EVENT_OPERATOR_ACCESS_CODE',
-  'EVENT_SESSION_SECRET',
   'GOOGLE_SHEETS_SPREADSHEET_ID',
   'GOOGLE_SERVICE_ACCOUNT_EMAIL',
   'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY',
@@ -79,13 +77,7 @@ const REQUIRED_FILES = [
   'package.json',
   'vite.config.ts',
   'api/sync-registration.ts',
-  'api/operator-login.ts',
-  'api/operator-session.ts',
-  'api/operator-logout.ts',
   'server/sync/environment.ts',
-  'server/auth/environment.ts',
-  'server/auth/operator-session.ts',
-  'server/auth/cookies.ts',
   'server/db/client.ts',
   'server/db/environment.ts',
   'server/db/schema.ts',
@@ -115,6 +107,7 @@ const REQUIRED_FILES = [
   'src/components/device-auth/device-event-authorization-provider.tsx',
   'src/components/event-access/event-access-gate.tsx',
   'src/components/event-access/badge-ownership-block.tsx',
+  'src/components/event-access/device-access-required.tsx',
   'server/sync/device-authorization.ts',
   'server/badge-assignments/conflicts.ts',
   'server/db/constraints.ts',
@@ -502,27 +495,27 @@ addCheck(
 // --- G4. the admin realm stays distinct and server-side --------------------
 const adminProblems = []
 
-const OPERATOR_COOKIE = '__Host-navaratri_operator_session'
 const ADMIN_COOKIE = '__Host-navaratri_admin_session'
+const DEVICE_COOKIE = '__Host-navaratri_device_session'
 
 const adminCookieSource = readText(join(ROOT, 'server/admin-auth/cookies.ts'))
-const operatorCookieSource = readText(join(ROOT, 'server/auth/cookies.ts'))
+const deviceCookieSource = readText(join(ROOT, 'server/device-auth/cookies.ts'))
 
-if (adminCookieSource === null || operatorCookieSource === null) {
+if (adminCookieSource === null || deviceCookieSource === null) {
   adminProblems.push('a cookie module could not be read')
 } else {
-  // The two realms must never share a cookie: one credential satisfying both
-  // would make an unlocked event device an administrator.
+  // The two surviving realms must never share a cookie: one credential
+  // satisfying both would make an event device an administrator.
   if (!adminCookieSource.includes(ADMIN_COOKIE)) {
     adminProblems.push('the admin cookie name is missing')
   }
 
-  if (adminCookieSource.includes(OPERATOR_COOKIE)) {
-    adminProblems.push('the admin cookie module references the operator cookie')
+  if (adminCookieSource.includes(DEVICE_COOKIE)) {
+    adminProblems.push('the admin cookie module references the device cookie')
   }
 
-  if (operatorCookieSource.includes(ADMIN_COOKIE)) {
-    adminProblems.push('the operator cookie module references the admin cookie')
+  if (deviceCookieSource.includes(ADMIN_COOKIE)) {
+    adminProblems.push('the device cookie module references the admin cookie')
   }
 }
 
@@ -704,7 +697,7 @@ if (deviceCookies === null || deviceSession === null) {
     deviceRealmProblems.push('the device cookie is not __Host-navaratri_device_session')
   }
 
-  for (const foreign of ['navaratri_admin_session', 'navaratri_operator_session']) {
+  for (const foreign of ['navaratri_admin_session']) {
     if (deviceCookies.includes(foreign)) {
       deviceRealmProblems.push(`server/device-auth/cookies.ts references ${foreign}`)
     }
@@ -756,8 +749,8 @@ for (const path of walk(join(ROOT, 'src'))) {
 
   /**
    * Phase 9C-C1 gave the realm a UI. The device endpoints belong to the
-   * device auth client and its components ONLY — no event page, no operator
-   * gate and no sync module may reach them.
+   * device auth client and its components ONLY — no event page and no sync
+   * module may reach them.
    */
   const isDeviceAuthModule = /\/src\/(device-auth|components\/device-auth|pages\/device-login-page)/
     .test(path)
@@ -776,45 +769,51 @@ for (const path of walk(join(ROOT, 'src'))) {
   }
 }
 
-// The event routes must still be the ones Operator Access protects.
+/**
+ * Phase D2 made the central device the SOLE event authority and retired the
+ * local provisioning route, so what this guards changed shape:
+ *
+ * 1. `/device-registration` is a transition-only redirect — no gate, no page,
+ *    no writer, and never inside the event shell
+ * 2. `/device-login` is still outside the event shell
+ * 3. every event module is wrapped in the device authorization gate
+ */
 const routerSource = readText(join(ROOT, 'src/components/app-router.tsx'))
 const gateSource = readText(join(ROOT, 'src/components/event-app-gate.tsx'))
 
 if (routerSource === null || gateSource === null) {
   deviceRealmProblems.push('the router or event gate could not be read')
 } else {
-  /**
-   * Phase 9C-C3B made device authority an event authorization SOURCE, so the
-   * shell legitimately mounts the authorization provider and the event
-   * routes legitimately accept a device grant. Three things still hold, and
-   * they are what this now checks:
-   *
-   * 1. Operator Access still exists and still gates routes
-   * 2. `/device-registration` is OPERATOR ONLY — a device lease must never
-   *    unlock the page that rewrites the local identity its own badge checks
-   *    are measured against
-   * 3. `/device-login` is still outside the event shell
-   */
-  if (!stripComments(routerSource).includes('OperatorAccessGate')) {
-    deviceRealmProblems.push('the event routes no longer use OperatorAccessGate')
-  }
+  const router = stripComments(routerSource)
 
   const deviceRegistrationRoute = /ROUTES\.deviceRegistration\}>([\s\S]*?)<\/Route>/
-    .exec(stripComments(routerSource))?.[1] ?? ''
+    .exec(router)?.[1] ?? ''
 
-  if (!/<OperatorAccessGate>/.test(deviceRegistrationRoute)) {
-    deviceRealmProblems.push('/device-registration is not Operator-only')
+  if (!/<Redirect to=\{ROUTES\.deviceLogin\} \/>/.test(deviceRegistrationRoute)) {
+    deviceRealmProblems.push('/device-registration is not a redirect to Device Sign-In')
   }
 
-  // `<DeviceRegistrationPage />` is the page itself; what must not appear is
-  // the module gate that accepts a device grant.
-  if (/EventAccessGate/.test(deviceRegistrationRoute)) {
-    deviceRealmProblems.push('/device-registration accepts device authorization')
+  if (/EventAccessGate|EventAppGate|DeviceRegistrationPage/.test(deviceRegistrationRoute)) {
+    deviceRealmProblems.push('/device-registration still mounts a page or a gate')
   }
 
-  const routerBody = stripComments(routerSource).slice(
-    stripComments(routerSource).indexOf('<Switch>'),
-  )
+  // Every event module authorizes through the one device gate.
+  const shell = /<EventAppGate>([\s\S]*?)<\/EventAppGate>/.exec(router)?.[1] ?? ''
+
+  if (shell === '') {
+    deviceRealmProblems.push('the event shell could not be located in the router')
+  } else {
+    const modules = [...shell.matchAll(/<Route path=\{([^}]*)\}>/g)].map((match) => match[1])
+    const gated = [...shell.matchAll(/<EventAccessGate module="/g)]
+
+    if (modules.length !== gated.length) {
+      deviceRealmProblems.push(
+        `${String(modules.length)} event routes but ${String(gated.length)} device gates`,
+      )
+    }
+  }
+
+  const routerBody = router.slice(router.indexOf('<Switch>'))
 
   if (/<EventAppGate>[\s\S]*[Dd]eviceLogin/.test(routerBody)) {
     deviceRealmProblems.push('/device-login is nested inside the event shell')
@@ -823,7 +822,7 @@ if (routerSource === null || gateSource === null) {
 
 addCheck(
   'device-realm',
-  'Device auth is a separate realm; /device-registration stays Operator-only',
+  'Device auth is a separate realm; /device-registration is a retired redirect',
   deviceRealmProblems,
 )
 
@@ -895,7 +894,7 @@ if (dexieSource === null) {
   }
 }
 
-// The event routes remain Operator-gated, and no device gate wraps them.
+// Device sign-in stays its own realm, outside the event shell.
 if (routerSource !== null) {
   const body = stripComments(routerSource).slice(stripComments(routerSource).indexOf('<Switch>'))
 
@@ -1232,9 +1231,6 @@ const EXPECTED_FUNCTIONS = [
   'admin-events.ts',
   'device-auth.ts',
   'device-badge-claim.ts',
-  'operator-login.ts',
-  'operator-logout.ts',
-  'operator-session.ts',
   'sync-registration.ts',
 ]
 
@@ -1333,10 +1329,14 @@ if (firewallDoc === null) {
   }
 }
 
-// Operator stays three Functions in this phase; it is the live auth boundary.
+/**
+ * Phase D2 DELETED the operator realm. These three paths must not come back:
+ * re-adding one would both reintroduce a second event authority and spend
+ * deployment Functions this checkpoint has accounted for.
+ */
 for (const file of ['operator-login.ts', 'operator-session.ts', 'operator-logout.ts']) {
-  if (!exists(join(ROOT, 'api', file))) {
-    budgetProblems.push(`api/${file} was consolidated; Operator Access must stay untouched`)
+  if (exists(join(ROOT, 'api', file))) {
+    budgetProblems.push(`api/${file} was retired by Phase D2 and must not return`)
   }
 }
 
@@ -1753,7 +1753,6 @@ if (offlineIssuer === null || offlineShared === null || offlineVerifier === null
   for (const file of [
     'src/components/event-app-gate.tsx',
     'src/components/app-router.tsx',
-    'src/components/operator/operator-access-gate.tsx',
   ]) {
     const code = stripComments(readText(join(ROOT, file)) ?? '')
 
@@ -1810,10 +1809,11 @@ addCheck(
 
 // --- I4. device-authorized event operations -------------------------------
 /**
- * A centrally enrolled device may now open event modules on its own
- * authority — live online, or from a verified signed lease offline. Operator
- * Access remains a transitional fallback, EXCEPT where badge uniqueness is at
- * risk: a credential authorizes a person, not two desks sharing numbers.
+ * The central device is the SOLE event authority — live online, or from a
+ * verified signed lease offline. Phase D2 removed the operator realm, so
+ * there is no fallback left to guard against: what this now proves is that
+ * none has come back, and that identity equality never stands in for a
+ * grant.
  */
 const eventAuthProblems = []
 const authDomain = readText(join(ROOT, 'src/device-auth/event-authorization.ts'))
@@ -1892,31 +1892,23 @@ if (authDomain === null || authProvider === null || authRuntime === null ||
   }
 
   /**
-   * Sliced to the BLOCKED branch, not matched across it: the operator
-   * fallback is the function's last statement, so a window-based regex would
-   * read it as part of the blocked path and report the opposite of the truth.
+   * THE GATE HAS NO SECOND AUTHORITY. Phase D2 left exactly three branches —
+   * checking, blocked, unavailable — and the last one renders a screen that
+   * points at Device Sign-In rather than accepting a credential.
    */
   const blockedStart = gate.indexOf("authorization.outcome === 'blocked'")
   const blockElement = gate.indexOf('<BadgeOwnershipBlock')
-  const operatorUses = [...gate.matchAll(/<OperatorAccessGate>/g)].map((match) => match.index)
 
   if (blockedStart === -1 || blockElement === -1) {
     eventAuthProblems.push('the gate has no blocked branch')
-  } else {
+  } else if (gate.slice(blockedStart, blockElement).includes('<')) {
     // The blocked branch returns the block element and NOTHING around it: a
     // wrapper between the branch and the element would be a fallback.
-    if (gate.slice(blockedStart, blockElement).includes('<')) {
-      eventAuthProblems.push('the blocked branch wraps its screen in another component')
-    }
+    eventAuthProblems.push('the blocked branch wraps its screen in another component')
+  }
 
-    /**
-     * Exactly ONE operator fallback in the whole gate, and it comes after the
-     * blocked branch — so a conflict cannot reach it, as a sibling or
-     * otherwise.
-     */
-    if (operatorUses.length !== 1 || operatorUses[0] < blockedStart) {
-      eventAuthProblems.push('a blocked badge conflict falls through to Operator Access')
-    }
+  if (/OperatorAccess|operator-access|accessCode|unlock/i.test(gate)) {
+    eventAuthProblems.push('the event access gate reaches for an operator credential')
   }
 
   for (const offer of ['Continue anyway', 'Use Operator Access', 'Override', 'Force']) {
@@ -1925,8 +1917,48 @@ if (authDomain === null || authProvider === null || authRuntime === null ||
     }
   }
 
-  if (/OperatorAccessGate|OperatorAccessForm/.test(stripComments(blockUi))) {
+  if (/OperatorAccess|accessCode|unlock/i.test(stripComments(blockUi))) {
     eventAuthProblems.push('the hard-block screen offers an operator credential')
+  }
+
+  /**
+   * IDENTITY EQUALITY IS A REQUIREMENT, NEVER AUTHORITY. The convergence
+   * check takes a grant as its FIRST parameter, so it cannot be reached
+   * without one, and the gate asks the evaluator rather than comparing ids
+   * for itself.
+   */
+  if (!/export const checkConvergedDeviceIdentity = \(\s*grant: DeviceOperationalGrant,/
+    .test(domain)) {
+    eventAuthProblems.push('the identity consistency check does not require a grant')
+  }
+
+  const authorizeBody = domain.slice(domain.indexOf('export const authorizeEventModule'))
+
+  if (!/checkConvergedDeviceIdentity\(grant, config\)/.test(authorizeBody)) {
+    eventAuthProblems.push('module authorization skips the device identity convergence check')
+  }
+
+  /**
+   * CALLING IT IS NOT ENFORCING IT. The refusal is matched literally and
+   * unconditionally — a canary that kept the call but dropped the `if`, and
+   * one that narrowed it to a single module, both passed a looser check.
+   */
+  const CONVERGENCE_REFUSAL =
+    "if (identityGap !== null) { return { outcome: 'unavailable', gap: identityGap } }"
+  const flatAuthorize = authorizeBody.replace(/\s+/g, ' ')
+
+  if (!flatAuthorize.includes(CONVERGENCE_REFUSAL)) {
+    eventAuthProblems.push('an unconverged identity does not unconditionally refuse')
+  }
+
+  // Home is gated by it too: a legacy browser must not reach the launcher.
+  if (flatAuthorize.indexOf(CONVERGENCE_REFUSAL) >
+      flatAuthorize.indexOf("module === 'home'")) {
+    eventAuthProblems.push('the convergence refusal runs after the Home short-circuit')
+  }
+
+  if (/config\.deviceId ===/.test(gate + provider + runtime)) {
+    eventAuthProblems.push('a component compares device ids instead of asking the evaluator')
   }
 
   // Authorization never repairs badge state.
@@ -1966,20 +1998,34 @@ if (authDomain === null || authProvider === null || authRuntime === null ||
     eventAuthProblems.push('the authorization provider polls')
   }
 
-  // SYNC: operator first and independent; device only as an alternative.
   /**
-   * Compared inside the HANDLER, not the module: `authorizeSyncByDevice` is
-   * named in the import list long before either is called, so comparing
-   * whole-file positions would compare an import with a call.
+   * SYNC IS DEVICE-ONLY. Checked inside the HANDLER, not the module, so an
+   * import line cannot be mistaken for a call.
    */
   const syncBody = sync.slice(sync.indexOf('export async function POST'))
 
-  if (syncBody.indexOf('operatorAuthorized') > syncBody.indexOf('authorizeSyncByDevice')) {
-    eventAuthProblems.push('sync attempts device authorization before operator')
+  if (/operator/i.test(syncBody)) {
+    eventAuthProblems.push('the sync handler still mentions operator authorization')
   }
 
-  if (!/if \(!operatorAuthorized\)/.test(sync)) {
-    eventAuthProblems.push('sync does not keep the operator path independent of the device realm')
+  const firstStatement = syncBody.indexOf('authorizeSyncByDevice(request)')
+
+  if (firstStatement === -1) {
+    eventAuthProblems.push('sync does not authorize by device session')
+  } else if (/readSyncEnvironment|request\.text\(\)|parseSyncRegistrationRequest/
+    .test(syncBody.slice(0, firstStatement))) {
+    eventAuthProblems.push('sync reads configuration or the body before authenticating')
+  }
+
+  /**
+   * HISTORICAL PROVENANCE IS NOT A CREDENTIAL. A row queued before this
+   * browser converged carries the old local device id, and requiring it to
+   * equal the authenticated device would strand exactly the rows the Phase
+   * D1 migration creates.
+   */
+  if (/payload\.deviceId|snapshot\.deviceId|\.deviceId === (?:authorization|device|context)/
+    .test(sync + stripComments(syncDeviceAuth))) {
+    eventAuthProblems.push('sync compares a payload device id to the authenticated device')
   }
 
   if (!/registration|BADGE_RANGE_REQUIRED_ATTRIBUTE/.test(stripComments(syncDeviceAuth))) {
@@ -2103,14 +2149,23 @@ for (const path of walk(join(ROOT, 'src'))) {
   }
 }
 
-// The operator realm is auth only; it must not reach local data at all.
-const operatorAccess = readText(join(ROOT, 'src/auth/operator-access.ts'))
+/**
+ * The operator realm was DELETED by Phase D2, and with it the only auth code
+ * outside `src/device-auth`. What replaced it must keep the same property:
+ * signing a device in or out is auth, and auth never touches the local event
+ * store.
+ */
+if (exists(join(ROOT, 'src/auth'))) {
+  configProblems.push('the retired operator auth directory is back')
+}
 
-if (operatorAccess === null) {
-  configProblems.push('the operator access module could not be read')
+const deviceApiClient = readText(join(ROOT, 'src/device-auth/device-api.ts'))
+
+if (deviceApiClient === null) {
+  configProblems.push('the device auth client could not be read')
 } else if (/db\.config|db\.registrations|db\.outbox|@\/db\/database/
-  .test(stripComments(operatorAccess))) {
-  configProblems.push('the operator realm writes local event data')
+  .test(stripComments(deviceApiClient))) {
+  configProblems.push('the device auth client writes local event data')
 }
 
 /**
@@ -2236,8 +2291,13 @@ for (const path of walk(join(ROOT, 'src'))) {
   }
 }
 
-if (identityWriters.sort().join(', ') !==
-    'src/db/device-identity-convergence.ts, src/db/device.ts') {
+/**
+ * EXACTLY ONE identity writer since Phase D2. `registerDevice` used to mint a
+ * local `crypto.randomUUID()` in `src/db/device.ts`; retiring the local
+ * provisioning route removed it, so convergence onto the central device is
+ * now the only way a `deviceId` is ever written.
+ */
+if (identityWriters.sort().join(', ') !== 'src/db/device-identity-convergence.ts') {
   convergenceProblems.push(
     `device identity is written in: ${identityWriters.join(', ') || 'nowhere'}`,
   )
@@ -2255,13 +2315,45 @@ if (/payload\.deviceId|deviceId ===|deviceName ===/.test(syncDevice + syncRoute)
   convergenceProblems.push('sync compares the payload device identity to the central device')
 }
 
-// Identity equality is a consistency fact, never a credential.
+/**
+ * IDENTITY EQUALITY IS A REQUIREMENT, NEVER A CREDENTIAL.
+ *
+ * Phase D2 made the comparison mandatory before any event module opens, so
+ * the domain legitimately contains one. What must stay impossible is the
+ * comparison GRANTING anything: it lives in exactly one function, that
+ * function cannot be called without a grant, and it can only ever return a
+ * gap or `null`.
+ */
 const authorizationDomain = stripComments(
   readText(join(ROOT, 'src/device-auth/event-authorization.ts')) ?? '',
 )
 
-if (/config\.deviceId ===|isConverged/.test(authorizationDomain)) {
-  convergenceProblems.push('event authorization treats identity equality as authority')
+const identityCheck = authorizationDomain.slice(
+  authorizationDomain.indexOf('export const checkConvergedDeviceIdentity'),
+  authorizationDomain.indexOf('const localRangeOf'),
+)
+
+if (identityCheck === '') {
+  convergenceProblems.push('there is no device identity consistency check')
+} else {
+  if (/outcome: 'authorized'|ModuleAuthorization/.test(identityCheck)) {
+    convergenceProblems.push('the identity consistency check can authorize a module')
+  }
+
+  if (!/IdentityConsistencyGap \| null/.test(identityCheck)) {
+    convergenceProblems.push('the identity consistency check returns more than a gap')
+  }
+}
+
+const equalityUses = (authorizationDomain.match(/config\.deviceId ===/g) ?? []).length
+const equalityInsideCheck = (identityCheck.match(/config\.deviceId ===/g) ?? []).length
+
+if (equalityUses !== 1 || equalityInsideCheck !== 1) {
+  convergenceProblems.push('device identity is compared outside the one consistency check')
+}
+
+if (/isConverged/.test(authorizationDomain)) {
+  convergenceProblems.push('event authorization stores convergence as a flag')
 }
 
 addCheck(
@@ -2282,9 +2374,9 @@ addCheck(
   eventAuthProblems,
 )
 
-if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 1) {
+if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 4) {
   budgetProblems.push(
-    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 1`,
+    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 4`,
   )
 }
 
@@ -2325,6 +2417,137 @@ addCheck(
   'no-server-env-in-client',
   'Client modules never read server environment variables',
   clientProblems,
+)
+
+// --- J. the operator authority realm stays retired -------------------------
+/**
+ * PHASE D2 DELETED OPERATOR ACCESS. The central device is the only event
+ * authority, and there is deliberately no second credential to fall back to.
+ *
+ * Removing a realm is easy; keeping it removed is not. Every guard below
+ * describes a way the old one could creep back — an endpoint, a cookie, a
+ * localStorage marker read as authority, or a local workflow that mints an
+ * identity central has never heard of.
+ */
+const retirementProblems = []
+
+const RETIRED_ENDPOINTS = ['/api/operator-login', '/api/operator-session', '/api/operator-logout']
+const OPERATOR_SESSION_COOKIE = '__Host-navaratri_operator_session'
+const TRUSTED_DEVICE_MARKER = 'navaratri-2026.operator-device-unlocked.v1'
+
+for (const directory of ['api', 'server', 'src']) {
+  for (const path of walk(join(ROOT, directory))) {
+    if (!isTextFile(basename(path))) {
+      continue
+    }
+
+    const code = stripComments(readText(path) ?? '')
+
+    for (const endpoint of RETIRED_ENDPOINTS) {
+      if (code.includes(endpoint)) {
+        retirementProblems.push(`${rel(path)} calls the retired ${endpoint}`)
+      }
+    }
+
+    if (code.includes(OPERATOR_SESSION_COOKIE)) {
+      retirementProblems.push(`${rel(path)} reads the retired operator session cookie`)
+    }
+
+    /**
+     * The old marker may still sit in a browser's localStorage and that is
+     * fine — nothing may READ it. It never was authentication; after D2 it
+     * is not even a hint.
+     */
+    if (code.includes(TRUSTED_DEVICE_MARKER)) {
+      retirementProblems.push(`${rel(path)} reads the retired trusted-device marker`)
+    }
+
+    if (/OperatorAccessGate|OperatorAccessForm|OperatorAccessBanner|useOperatorAccess|unlockOperatorAccess|lockOperatorDevice|reportOperatorSessionRejected/
+      .test(code)) {
+      retirementProblems.push(`${rel(path)} uses the retired operator access client`)
+    }
+  }
+}
+
+for (const path of ['src/auth', 'server/auth', 'src/components/operator', 'src/hooks/use-operator-access.ts']) {
+  if (exists(join(ROOT, path))) {
+    retirementProblems.push(`${path} was retired by Phase D2 and must not return`)
+  }
+}
+
+/**
+ * NO LOCAL DEVICE PROVISIONING. Registration ids are legitimately UUIDs, so
+ * this is deliberately NOT a blanket ban on `crypto.randomUUID` — it is a
+ * ban on one reaching `EventConfig.deviceId`.
+ */
+for (const path of walk(join(ROOT, 'src'))) {
+  if (!isTextFile(basename(path))) {
+    continue
+  }
+
+  const code = stripComments(readText(path) ?? '')
+
+  if (/deviceId:\s*crypto\.randomUUID\(\)|deviceId:\s*[A-Za-z]*[Uu]uid\(\)/.test(code)) {
+    retirementProblems.push(`${rel(path)} mints a local device id`)
+  }
+}
+
+// The hand-entered Phase 7 range writer may not come back to product UI: a
+// range with no central binding is refused by the access gate immediately.
+for (const directory of ['src/components', 'src/pages']) {
+  for (const path of walk(join(ROOT, directory))) {
+    if (!isTextFile(basename(path))) {
+      continue
+    }
+
+    const code = stripComments(readText(path) ?? '')
+
+    if (/configureBadgeDistribution\(|registerDevice\(/.test(code)) {
+      retirementProblems.push(`${rel(path)} runs a local provisioning writer`)
+    }
+  }
+}
+
+// `/device-registration` is transition only. No page file, no writer.
+if (exists(join(ROOT, 'src/pages/device-registration-page.tsx'))) {
+  retirementProblems.push('src/pages/device-registration-page.tsx was retired by Phase D2')
+}
+
+/**
+ * D2 IS A REMOVAL PHASE. It changes no stored contract, so these are pinned
+ * rather than merely described: the local schema, the central migrations and
+ * the Sheet ranges must all be exactly what Phase 7 left behind.
+ */
+const migrationFiles = readdirSync(join(ROOT, 'drizzle'))
+  .filter((file) => file.endsWith('.sql'))
+  .sort()
+
+const EXPECTED_MIGRATIONS = [
+  '0000_central_foundation.sql',
+  '0001_range_guards_and_touch.sql',
+  '0002_device_credentials.sql',
+]
+
+if (migrationFiles.join(', ') !== EXPECTED_MIGRATIONS.join(', ')) {
+  retirementProblems.push(`the migration set changed: ${migrationFiles.join(', ')}`)
+}
+
+const sheetContract = readText(join(ROOT, 'server/sync/sheet-contract.ts'))
+
+if (sheetContract === null) {
+  retirementProblems.push('the sheet contract could not be read')
+} else {
+  for (const range of ['A1:N', 'A1:M']) {
+    if (!sheetContract.includes(range)) {
+      retirementProblems.push(`the sheet contract no longer declares ${range}`)
+    }
+  }
+}
+
+addCheck(
+  'operator-realm-retired',
+  'Operator Access is gone and the central device is the only event authority',
+  retirementProblems,
 )
 
 // --- report -----------------------------------------------------------------

@@ -237,7 +237,9 @@ const sheet = read('server/sync/sheet-contract.ts')
 check('Google Sheet ranges unchanged', [/A1:N/.test(sheet), /A1:M/.test(sheet)], [true, true])
 check('  no new Sheet column', /Device ID', 'Device Name'/.test(sheet), true)
 check('sync contract unchanged (no db import)', /server\/db|drizzle|neon/.test(read('src/shared/sync-contract.ts')), false)
-check('Operator Access unchanged (no db import)', /server\/db|drizzle|neon/.test(read('src/auth/operator-access.ts')), false)
+// Phase D2 retired Operator Access; the device auth client took its place.
+check('device auth client unchanged (no db import)',
+  /server\/db|drizzle|neon/.test(read('src/device-auth/device-api.ts')), false)
 const routes = read('src/app/routes.ts')
 check('routing unchanged',
   [/home: '\/'/.test(routes), /badgeRegistration: '\/badge-registration'/.test(routes), /deviceRegistration: '\/device-registration'/.test(routes)],

@@ -58,7 +58,7 @@ export interface DeviceOfflineBadgeRange {
  * MINIMAL claims.
  *
  * Deliberately absent, and none may be added: any password or hash, a session
- * token or cookie, `sessionVersion`, an Admin or operator credential, ANY
+ * token or cookie, `sessionVersion`, an Admin credential, ANY
  * attendee data, `nextBadge`, and this browser's local Phase 7 `deviceId` or
  * `deviceName`.
  *

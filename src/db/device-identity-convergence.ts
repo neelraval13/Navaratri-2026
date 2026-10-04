@@ -26,8 +26,8 @@ import {
  *
  * It is NEVER automatic. The identity stamped onto future attendee records is
  * a meaningful migration, so it happens on one explicit operator action
- * against a LIVE device session — never from a cached enrollment, a signed
- * offline lease, or Operator Access.
+ * against a LIVE device session — never from a cached enrollment and never
+ * from a signed offline lease.
  */
 
 /** Why convergence cannot be offered. Not a conflict — just not possible yet. */
@@ -135,11 +135,11 @@ export const planDeviceIdentityConvergence = (
   }
 
   /**
-   * Stricter than C3B on one point, deliberately. C3B tolerates a legacy
-   * hand-configured range with no binding and no central assignment, because
-   * such a desk simply has no device authority and keeps using Operator
-   * Access. Pointing that desk's allocator at a central device that owns NO
-   * range is a different act, and it is the one §19 forbids.
+   * Stricter than the badge-safety check on one point, deliberately. That
+   * check tolerates a legacy hand-configured range with no binding and no
+   * central assignment, because such a desk simply has no device authority
+   * for registration. Pointing its allocator at a central device that owns
+   * NO range is a different act, and it is the one this refuses.
    */
   if (config.badgeEnd !== undefined && grant.activeBadgeRange === null) {
     return { outcome: 'blocked', conflict: 'local-range-without-central-range' }

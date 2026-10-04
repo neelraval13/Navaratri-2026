@@ -9,16 +9,16 @@ import { buttonVariants } from '@/components/ui/button'
 /**
  * Central device sign-in for this browser.
  *
- * Deliberately OUTSIDE Operator Access. In the final architecture this page
- * replaces the shared operator code as the per-device entry point, so it is
- * built where it will live rather than moved later.
+ * Since Phase D2 this is the ONLY entry point: the shared operator code is
+ * gone, and every event module is authorized by the central device. It is
+ * also the only provisioning path — Device setup, badge-range adoption and
+ * sign-out all live here, and there is no local device registration page any
+ * more.
  *
- * Since Phase 9C-C3B, signing in here DOES matter to the event application:
- * `/` and `/badge-registration` accept a device grant. It is not a blanket
- * unlock — each module authorizes itself from the device's attributes and,
- * for registration, from badge-safety checks — and `/device-registration`
- * still answers to Operator Access alone. "Continue to Event Operations"
- * simply navigates; the gates there still decide whether it opens.
+ * Signing in is not a blanket unlock. Each module authorizes itself from the
+ * device's attributes and, for registration, from this browser's converged
+ * identity and badge-safety checks. "Continue to Event Operations" simply
+ * navigates; the gates there still decide whether it opens.
  *
  * DatabaseGate wraps only the panel, because the enrollment snapshot is
  * persisted in the existing IndexedDB config row. It does not bring the event
@@ -37,9 +37,9 @@ const DeviceLoginPage: React.FC = () => {
         </h1>
 
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Identifies this browser as a registered event device. Eligible event
-          operations can use Device access; Operator Access remains available
-          as a transitional fallback.
+          Identifies this browser as a registered event device. Event
+          operations are authorized here and nowhere else — each module still
+          checks this device&rsquo;s own access.
         </p>
       </div>
 

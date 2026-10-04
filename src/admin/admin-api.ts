@@ -229,7 +229,7 @@ export const adminLogin = async (accessCode: string): Promise<AdminResult<true>>
   return { ok: true, value: true }
 }
 
-/** Clears only the admin cookie. Operator Access is a separate realm. */
+/** Clears only the admin cookie. Device auth is a separate realm. */
 export const adminLogout = async (): Promise<void> => {
   try {
     await request(ADMIN_AUTH_ENDPOINT, { method: 'DELETE' })

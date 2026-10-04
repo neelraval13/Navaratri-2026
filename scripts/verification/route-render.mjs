@@ -17,6 +17,7 @@ const jiti = createJiti(import.meta.url, {
     '@/components/registration/registration-form': `${HERE}/fake-registration-form.mjs`,
     '@/db/database': `${HERE}/fake-db.mjs`,
     '@/components/database-gate': `${HERE}/fake-database-gate.mjs`,
+    '@/hooks/use-network-status': `${HERE}/fake-network-status.mjs`,
     '@/device-auth/device-event-authorization-context': `${HERE}/fake-device-authorization.mjs`,
     '@/components/device-auth/device-event-authorization-provider':
       `${HERE}/fake-device-authorization-provider.mjs`,
@@ -31,18 +32,12 @@ const { renderToStaticMarkup } = await jiti.import('react-dom/server')
 const { Router } = await jiti.import('wouter')
 const { state } = await jiti.import(`${HERE}/fake-event-config.mjs`)
 const adminStore = await jiti.import(`${root}/src/admin/admin-access-store.ts`)
-const operatorStore = await jiti.import(`${root}/src/auth/operator-access-store.ts`)
-
-/** Drives the OPERATOR realm independently, so the two can be tested apart. */
-export const setOperatorAccess = (phase, lockReason = null) => {
-  operatorStore.setOperatorAccess({ phase, lockReason })
-}
 const deviceAuthorization = await jiti.import(`${HERE}/fake-device-authorization.mjs`)
 
 /**
- * Drives DEVICE event authority independently of the operator realm, so the
- * two can be proven apart: a device grant must open a module with Operator
- * locked, and a badge conflict must stay blocked with Operator unlocked.
+ * Drives DEVICE event authority, which since Phase D2 is the ONLY event
+ * authority there is: no operator store to set, and nothing else a route
+ * could accept instead.
  */
 export const setDeviceGrant = (grant, extra = {}) => {
   deviceAuthorization.reset()
@@ -76,6 +71,17 @@ export const renderRoute = (path, config = null, status = 'loaded') => {
   } catch (error) {
     return { html: '', error: error.message.split('\n')[0] }
   }
+}
+
+const networkStatus = await jiti.import(`${HERE}/fake-network-status.mjs`)
+
+/**
+ * Connectivity, driven explicitly. Node's own `navigator` has no `onLine`,
+ * so the real hook would read `undefined` and every route test would render
+ * the OFFLINE copy by accident.
+ */
+export const setNetworkStatus = (status) => {
+  networkStatus.state.status = status
 }
 
 /** Every href the rendered page offers, in order. */

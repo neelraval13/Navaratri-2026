@@ -1,11 +1,7 @@
 import { CircleAlert, MonitorSmartphone } from 'lucide-react'
 import type * as React from 'react'
 
-import { Link } from 'wouter'
-
-import { ROUTES } from '@/app/routes'
 import BadgeStateRow from '@/components/device-auth/badge-state-row'
-import { buttonVariants } from '@/components/ui/button'
 import type { AdoptionPlan } from '@/db/central-badge-range'
 import { formatBadgeRange } from '@/db/device'
 
@@ -28,20 +24,14 @@ const AdoptionBlock: React.FC<AdoptionBlockProps> = ({ plan }) => {
       <div className="space-y-3">
         <p className="flex items-center gap-2 font-semibold">
           <MonitorSmartphone className="size-5" />
-          Local device setup required
+          Device setup required
         </p>
 
         <p className="text-sm leading-relaxed text-muted-foreground">
-          This browser still needs its local device setup before a central
-          badge range can be used here in this transitional phase.
+          Complete the Device setup in the Device Identity section above
+          before adopting a badge range here. Identity and badge ownership
+          stay separate steps on purpose.
         </p>
-
-        <Link
-          href={ROUTES.deviceRegistration}
-          className={buttonVariants({ variant: 'outline' })}
-        >
-          Set Up Local Device
-        </Link>
       </div>
     )
   }

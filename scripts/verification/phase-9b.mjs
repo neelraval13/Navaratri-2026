@@ -16,7 +16,7 @@ import { createHmac } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-import { renderRoute, setAdminAccess, setOperatorAccess } from './route-render.mjs'
+import { clearDeviceGrant, renderRoute, setAdminAccess, setDeviceGrant } from './route-render.mjs'
 
 const HERE = import.meta.dirname
 const root = resolve(HERE, '../..')
@@ -48,8 +48,8 @@ const jiti = createJiti(import.meta.url, { alias: { '@': `${root}/src` }, intero
 const adminEnv = await jiti.import(`${root}/server/admin-auth/environment.ts`)
 const adminSession = await jiti.import(`${root}/server/admin-auth/session.ts`)
 const adminCookies = await jiti.import(`${root}/server/admin-auth/cookies.ts`)
-const operatorCookies = await jiti.import(`${root}/server/auth/cookies.ts`)
-const operatorSession = await jiti.import(`${root}/server/auth/operator-session.ts`)
+const deviceCookies = await jiti.import(`${root}/server/device-auth/cookies.ts`)
+const deviceSession = await jiti.import(`${root}/server/device-auth/session.ts`)
 const validation = await jiti.import(`${root}/server/admin/validation.ts`)
 const adminErrors = await jiti.import(`${root}/server/admin/errors.ts`)
 const attributes = await jiti.import(`${root}/src/shared/device-attributes.ts`)
@@ -92,8 +92,9 @@ check('  the admin login firewall policy is unchanged',
   [/\/api\/admin-auth/.test(read('docs/VERCEL_FIREWALL.md')),
    /\| \*\*Limit\*\* \| 5 \|/.test(read('docs/VERCEL_FIREWALL.md')),
    /\| \*\*Window\*\* \| 60 seconds \|/.test(read('docs/VERCEL_FIREWALL.md'))], [true, true, true])
+// Phase D2 retired the operator rule, leaving the two POSTs that still exist.
 check('  and it rate-limits POST only',
-  (read('docs/VERCEL_FIREWALL.md').match(/\| \*\*Condition — Method\*\* \| `POST` \|/g) ?? []).length, 3)
+  (read('docs/VERCEL_FIREWALL.md').match(/\| \*\*Condition — Method\*\* \| `POST` \|/g) ?? []).length, 2)
 check('  every doc states the same minimum',
   [/`EVENT_ADMIN_ACCESS_CODE` \(8\+\)/.test(read('README.md')),
    /minimum 8 characters/.test(read('docs/ADMIN.md')),
@@ -133,8 +134,8 @@ for (const [l, bad] of [['undefined', undefined], ['empty', ''], ['no dot', 'abc
 
 console.log('  -- the two realms are separate --')
 check('admin cookie is its own name', adminCookies.ADMIN_SESSION_COOKIE, '__Host-navaratri_admin_session')
-check('  it differs from the operator cookie',
-  adminCookies.ADMIN_SESSION_COOKIE === operatorCookies.OPERATOR_SESSION_COOKIE, false)
+check('  it differs from the device cookie',
+  adminCookies.ADMIN_SESSION_COOKIE === deviceCookies.DEVICE_SESSION_COOKIE, false)
 const cookie = adminCookies.serializeAdminSessionCookie(token)
 check('  __Host- prefixed', cookie.startsWith('__Host-navaratri_admin_session='), true)
 check('  Secure + HttpOnly + SameSite=Strict + Path=/',
@@ -142,44 +143,43 @@ check('  Secure + HttpOnly + SameSite=Strict + Path=/',
   [true, true, true, true])
 check('  no Domain', /;\s*Domain=/i.test(cookie), false)
 check('  12-hour Max-Age', /;\s*Max-Age=43200/.test(cookie), true)
-check('  admin reader ignores the operator cookie',
-  adminCookies.readAdminSessionCookie(`${operatorCookies.OPERATOR_SESSION_COOKIE}=${token}`), undefined)
-check('  operator reader ignores the admin cookie',
-  operatorCookies.readOperatorSessionCookie(`${adminCookies.ADMIN_SESSION_COOKIE}=${token}`), undefined)
+check('  admin reader ignores the device cookie',
+  adminCookies.readAdminSessionCookie(`${deviceCookies.DEVICE_SESSION_COOKIE}=${token}`), undefined)
+check('  device reader ignores the admin cookie',
+  deviceCookies.readDeviceSessionCookie(`${adminCookies.ADMIN_SESSION_COOKIE}=${token}`), undefined)
 /**
- * Even if the two secrets were ever misconfigured to match, the type claim
- * stops one realm's token being replayed as the other's.
- */
-const operatorToken = operatorSession.createOperatorSessionToken(SECRET, NOW)
-check('an OPERATOR token is not a valid admin session',
-  adminSession.verifyAdminSessionToken(operatorToken, SECRET, NOW + 10), false)
-/**
- * Realm isolation must hold IN CODE, not by configuration. Every assertion
- * below deliberately uses the SAME secret for both realms.
+ * PHASE D2 RE-SCOPE. This block paired Admin against the OPERATOR realm,
+ * which no longer exists. The rule it proves is unchanged and now pairs
+ * Admin against the realm that survived: two realms, two signing contexts,
+ * and neither verifier accepts the other's token EVEN WITH THE SAME SECRET.
  */
 const SHARED = 'identical-secret-for-both-realms-0000000000'
+const DEVICE_CLAIMS = {
+  deviceId: '11111111-2222-4333-8444-555555555555',
+  eventId: '99999999-2222-4333-8444-555555555555',
+  sessionVersion: 1,
+}
 const sharedAdminToken = adminSession.createAdminSessionToken(SHARED, NOW)
-const sharedOperatorToken = operatorSession.createOperatorSessionToken(SHARED, NOW)
+const sharedDeviceToken = deviceSession.createDeviceSessionToken(SHARED, DEVICE_CLAIMS, NOW)
 check('SAME SECRET: admin token accepted by the admin verifier',
   adminSession.verifyAdminSessionToken(sharedAdminToken, SHARED, NOW + 10), true)
-check('SAME SECRET: operator token accepted by the operator verifier',
-  operatorSession.verifyOperatorSessionToken(sharedOperatorToken, SHARED, NOW + 10), true)
-check('SAME SECRET: operator token REJECTED by the admin verifier',
-  adminSession.verifyAdminSessionToken(sharedOperatorToken, SHARED, NOW + 10), false)
-check('SAME SECRET: admin token REJECTED by the operator verifier',
-  operatorSession.verifyOperatorSessionToken(sharedAdminToken, SHARED, NOW + 10), false)
+check('SAME SECRET: device token accepted by the device verifier',
+  deviceSession.verifyDeviceSessionToken(sharedDeviceToken, SHARED, NOW + 10) !== null, true)
+check('SAME SECRET: device token REJECTED by the admin verifier',
+  adminSession.verifyAdminSessionToken(sharedDeviceToken, SHARED, NOW + 10), false)
+check('SAME SECRET: admin token REJECTED by the device verifier',
+  deviceSession.verifyDeviceSessionToken(sharedAdminToken, SHARED, NOW + 10), null)
 check('  separation is cryptographic: a signing context is prepended',
-  /navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')), true)
+  [/navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')),
+   /navaratri-device-session-v1:/.test(read('server/device-auth/session.ts'))], [true, true])
 check('  the context is part of the signed message',
   /ADMIN_SIGNING_CONTEXT\}\$\{encodedPayload\}/.test(read('server/admin-auth/session.ts')), true)
-check('  the operator signer is untouched (no context)',
-  /SIGNING_CONTEXT|navaratri-admin/.test(read('server/auth/operator-session.ts')), false)
-check('  the operator signer still signs the bare payload',
-  /createHmac\('sha256', secret\)\.update\(encodedPayload, 'utf8'\)/.test(read('server/auth/operator-session.ts')), true)
+check('  the retired operator signer is gone',
+  existsSync(join(root, 'server/auth/operator-session.ts')), false)
 check('  distinct secrets are recommended, not required for isolation',
   [/recommended/i.test(read('docs/ADMIN.md')),
    /no longer depends on it/i.test(read('docs/ADMIN.md'))], [true, true])
-const v2 = reencode({ v: 1, t: 'operator', iat: NOW, exp: NOW + 1000 })
+const v2 = reencode({ v: 1, t: 'device', iat: NOW, exp: NOW + 1000 })
 check('  a forged type claim is rejected',
   adminSession.verifyAdminSessionToken(`${v2}.${createHmac('sha256', SECRET).update(v2, 'utf8').digest('base64url')}`, SECRET, NOW + 10), false)
 
@@ -372,7 +372,7 @@ check('  the event shell is not in App.tsx any more',
 check('  the event route pattern excludes /admin',
   [/^\/(?:badge-registration|device-registration)?$/.test('/admin'),
    /^\/(?:badge-registration|device-registration)?$/.test('/'),
-   /^\/(?:badge-registration|device-registration)?$/.test('/badge-registration')], [false, true, true])
+   /^\/(?:badge-registration)?$/.test('/badge-registration')], [false, true, true])
 // 9C-C3B mounts the processor through EventSyncManager, still exactly once.
 check('  exactly one EventAppGate, one DatabaseGate, one SyncManager',
   [(routerSource.match(/<EventAppGate>/g) ?? []).length,
@@ -381,65 +381,88 @@ check('  exactly one EventAppGate, one DatabaseGate, one SyncManager',
    (read('src/components/event-access/event-sync-manager.tsx')
      .match(/<SyncManager \/>/g) ?? []).length], [1, 1, 1, 1])
 
-// A fresh browser: no operator session, no admin session.
-setOperatorAccess('locked', 'new-device')
+/**
+ * REALM SEPARATION, restated for Phase D2. The operator realm is gone, so
+ * the pairing this section proves is Admin against the CENTRAL DEVICE: one
+ * must never unlock the other, in either direction.
+ */
+const D2_DEVICE_ID = '11111111-2222-4333-8444-555555555555'
+const D2_EVENT_ID = '99999999-2222-4333-8444-555555555555'
+const D2_ASSIGNED_AT = '2026-09-27T05:00:00.000Z'
+const D2_CONFIG = { id: 'event', deviceId: D2_DEVICE_ID, deviceName: 'Desk A',
+  badgeStart: 1, badgeEnd: 250, nextBadge: 5, updatedAt: 'T1',
+  centralBadgeRangeBinding: { deviceId: D2_DEVICE_ID, eventId: D2_EVENT_ID, rangeStart: 1,
+    rangeEnd: 250, assignedAt: D2_ASSIGNED_AT, adoptedAt: 'T1' } }
+const D2_ENROLLMENT = { deviceId: D2_DEVICE_ID, eventId: D2_EVENT_ID, eventSlug: 'navaratri-2026',
+  deviceName: 'Desk A', loginName: 'desk-a', attributes: ['registration'], verifiedAt: 'T' }
+const deviceGrant = () => ({ source: 'device-online', deviceId: D2_DEVICE_ID, eventId: D2_EVENT_ID,
+  eventSlug: 'navaratri-2026', attributes: ['registration'],
+  activeBadgeRange: { rangeStart: 1, rangeEnd: 250, assignedAt: D2_ASSIGNED_AT } })
+const signDeviceIn = () =>
+  setDeviceGrant(deviceGrant(), { config: D2_CONFIG, enrollment: D2_ENROLLMENT, deviceName: 'Desk A' })
+
+// A fresh browser: no device grant, no admin session.
+clearDeviceGrant()
 setAdminAccess('locked')
 const freshAdmin = renderRoute('/admin', null)
-check('fresh browser at /admin does NOT show Operator Access',
-  /Operator Access|Unlock this event device/.test(freshAdmin.html), false)
+check('fresh browser at /admin does NOT ask for event access',
+  /Device access required|Operator Access/.test(freshAdmin.html), false)
 check('  it shows Admin Access directly', freshAdmin.html.includes('Admin Access'), true)
 check('  and never mounts the event database gate',
   /Preparing registration data|Loading event configuration/.test(freshAdmin.html), false)
 
-// An operator session alone must not unlock Admin.
-setOperatorAccess('unlocked')
+// A device session alone must not unlock Admin.
+signDeviceIn()
 setAdminAccess('locked')
-check('a valid operator session alone does NOT unlock Admin',
+check('a valid device session alone does NOT unlock Admin',
   renderRoute('/admin', null).html.includes('Admin Access'), true)
 
-// An admin session alone must unlock Admin, with no operator session.
-setOperatorAccess('locked', 'new-device')
+// An admin session alone must unlock Admin, with no device grant.
+clearDeviceGrant()
 setAdminAccess('authenticated')
 const adminOnly = renderRoute('/admin', null)
-check('a valid admin session unlocks Admin with NO operator session',
+check('a valid admin session unlocks Admin with NO device session',
   [adminOnly.html.includes('Admin Access'), adminOnly.html.includes('Sign out')], [false, true])
 
-// Event routes still require Operator Access.
+// Event routes require the DEVICE, and an admin session is not one.
 setAdminAccess('authenticated')
-setOperatorAccess('locked', 'new-device')
-for (const path of ['/', '/badge-registration', '/device-registration']) {
+clearDeviceGrant()
+for (const path of ['/', '/badge-registration']) {
   const gated = renderRoute(path, null)
-  check(`  ${path} still requires Operator Access`,
-    /Operator Access/.test(gated.html), true)
-  check(`    an admin session does not unlock it`,
+  check(`  ${path} still requires device access`,
+    /Device access required/.test(gated.html), true)
+  check('    an admin session does not unlock it',
     gated.html.includes('__REGISTRATION_FORM__'), false)
+  check('    and no operator credential is offered',
+    /Operator Access|access code/i.test(gated.html), false)
 }
+check('  /device-registration is retired, not admin-gated',
+  renderRoute('/device-registration', null).html, '')
 
 // Not Found needs no credential at all.
-setOperatorAccess('locked', 'new-device')
+clearDeviceGrant()
 setAdminAccess('locked')
 const notFound = renderRoute('/definitely-not-a-route', null)
 check('Not Found requires neither realm',
-  [notFound.html.includes('Page not found'), /Operator Access|Admin Access/.test(notFound.html)], [true, false])
+  [notFound.html.includes('Page not found'),
+   /Device access required|Admin Access/.test(notFound.html)], [true, false])
 
 // Signing out of one realm leaves the other alone.
-setOperatorAccess('unlocked')
+signDeviceIn()
 setAdminAccess('locked')
-check('Admin logout leaves the operator session alone',
-  renderRoute('/', { id: 'event', deviceId: '11111111-2222-4333-8444-555555555555',
-    deviceName: 'Desk A', badgeStart: 1, badgeEnd: 250, nextBadge: 5, updatedAt: 'T1' })
-    .html.includes('Event Operations'), true)
-setOperatorAccess('locked', 'new-device')
+check('Admin logout leaves the device session alone',
+  renderRoute('/', D2_CONFIG).html.includes('Event Operations'), true)
+clearDeviceGrant()
 setAdminAccess('authenticated')
-check('Operator logout leaves the admin session alone',
+check('losing device access leaves the admin session alone',
   renderRoute('/admin', null).html.includes('Sign out'), true)
 const adminAuthSource = read('api/admin-auth.ts')
 const adminLogoutBody = adminAuthSource.slice(adminAuthSource.indexOf('export function DELETE'))
 check('  the admin sign-out clears only the admin cookie',
   [/serializeClearedAdminSessionCookie/.test(adminLogoutBody),
-   /operator/i.test(stripComments(adminLogoutBody).replace(/isSameOriginAdminRequest/g, ''))],
+   /device|operator/i.test(stripComments(adminLogoutBody).replace(/isSameOriginAdminRequest/g, ''))],
   [true, false])
-setOperatorAccess('unlocked')
+signDeviceIn()
 setAdminAccess('checking')
 check('  authenticated renders the control plane',
   /phase === 'authenticated'[\s\S]{0,80}children/.test(gateSource), true)
@@ -861,26 +884,25 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
 for (const [index, name] of budget.actual.entries()) console.log(`    ${String(index + 1).padStart(2)}  ${name}`)
 
-// Phase 9C-C2B adds `device-badge-claim`, the one new Function since the
-// consolidation. The Operator and Admin inventories are unchanged.
-check('the inventory is exactly the expected eleven', budget.actual, [
+// Phase D2 DELETED the three Operator Functions. The Admin inventory is
+// unchanged, and the budget gained three slots rather than spending any.
+check('the inventory is exactly the expected eight', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'operator-login',
-  'operator-logout', 'operator-session', 'sync-registration',
+  'admin-events', 'device-auth', 'device-badge-claim', 'sync-registration',
 ])
 check('  which is within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  with one slot of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
+check('  with four slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
 check('  and nothing unexpected', budget.problems, [])
 check('no api file is a helper rather than a Function',
   functionChecker.functionEntrypoints()
     .filter((file) => !/export (async )?function (GET|POST|DELETE|PUT|PATCH)\(/
       .test(readFileSync(file, 'utf8')))
     .map((file) => file.replace(`${root}/`, '')), [])
-check('the Operator realm was NOT consolidated',
+check('the Operator realm was REMOVED, not consolidated into another Function',
   ['operator-login', 'operator-session', 'operator-logout']
-    .every((name) => budget.actual.includes(name)), true)
+    .some((name) => budget.actual.includes(name)), false)
 
 console.log('\n=== CLIENT SAFETY ===')
 const clientFiles = walkSource(join(root, 'src')).map((f) => ({ file: f.replace(`${root}/src/`, ''), code: read(`src/${f.replace(`${root}/src/`, '')}`) }))
@@ -899,20 +921,18 @@ check('registry data is never cached in IndexedDB',
   /indexedDB|Dexie|db\./.test(apiSource), false)
 
 console.log('\n=== 54-67. NOTHING EXISTING CHANGED ===')
-check('Operator Access untouched by admin',
-  /admin/i.test(stripComments(read('src/auth/operator-access.ts'))), false)
-check('  operator cookie module untouched by admin',
-  /admin/i.test(stripComments(read('server/auth/cookies.ts'))), false)
-setOperatorAccess('unlocked')
+check('device auth untouched by admin',
+  /adminLogin|adminSession|AdminAccess|api\/admin/i
+    .test(stripComments(read('src/device-auth/device-api.ts'))), false)
+check('  device cookie module untouched by admin',
+  /admin/i.test(stripComments(read('server/device-auth/cookies.ts'))), false)
+signDeviceIn()
 setAdminAccess('checking')
 for (const [label, path, marker] of [
   ['/', '/', 'Event Operations'],
   ['/badge-registration', '/badge-registration', '__REGISTRATION_FORM__'],
-  ['/device-registration', '/device-registration', 'Device Registration'],
 ]) {
-  const CONFIGURED = { id: 'event', deviceId: '11111111-2222-4333-8444-555555555555',
-    deviceName: 'Registration Desk A', badgeStart: 1, badgeEnd: 250, nextBadge: 5, updatedAt: 'T1' }
-  check(`${label} still renders`, renderRoute(path, CONFIGURED).html.includes(marker), true)
+  check(`${label} still renders`, renderRoute(path, D2_CONFIG).html.includes(marker), true)
 }
 const dbSource = read('src/db/database.ts')
 check('IndexedDB version unchanged (1)', /DATABASE_VERSION\s*=\s*1\b/.test(dbSource), true)
@@ -943,8 +963,10 @@ const migrationSql = migrations.map((f) => read(join('drizzle', f))).join('\n')
 check('  and the SQL never enumerated the allowed values',
   [/'registration'/.test(migrationSql), /'prizes'/.test(migrationSql),
    /attribute[\s\S]{0,40}IN \(/i.test(migrationSql)], [false, false, false])
-check('/device-registration remains transitional and present',
-  existsSync(join(root, 'src/pages/device-registration-page.tsx')), true)
+// Phase D2 retired the page; the PATH survives as a redirect for bookmarks.
+check('/device-registration is retired, and nothing of Admin depends on it',
+  [existsSync(join(root, 'src/pages/device-registration-page.tsx')),
+   /device-registration/.test(read('src/components/admin/admin-control-plane.tsx'))], [false, false])
 check('  admin never mutates a browser IndexedDB',
   /indexedDB|Dexie/.test(stripComments(read('server/admin/registry.ts'))), false)
 

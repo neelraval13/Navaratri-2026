@@ -384,23 +384,37 @@ check('  and skips the write entirely when nothing changed',
 check('  the UPI merge spreads rather than rebuilds',
   /return \{\s*\.\.\.config,/.test(stripComments(read('src/db/event-config.ts'))), true)
 
-console.log('\n=== 7. OPERATOR LOCK TOUCHES NO LOCAL DATA ===')
-const operatorSource = stripComments(read('src/auth/operator-access.ts'))
-check('the operator realm never opens the database',
+console.log('\n=== 7. SIGNING OUT TOUCHES NO LOCAL DATA ===')
+/**
+ * PHASE D2 RE-SCOPE. This section guarded the operator Lock control, which
+ * no longer exists. The rule it protected is unchanged and now belongs to
+ * device sign-out: ending a session is AUTH, and auth never reaches the
+ * event store.
+ */
+check('the retired operator auth directory is gone',
+  [existsSync(join(root, 'src/auth')), existsSync(join(root, 'server/auth'))], [false, false])
+const deviceApiSource = stripComments(read('src/device-auth/device-api.ts'))
+check('the device auth client never opens the database',
   /db\.config|db\.registrations|db\.outbox|@\/db\/database|bootstrapDatabase/
-    .test(operatorSource), false)
-check('  lock clears only the server cookie and the trusted marker',
-  (() => {
-    const lock = operatorSource.slice(operatorSource.indexOf('export const lockOperatorDevice'))
-    return [/LOGOUT_ENDPOINT/.test(lock), /clearTrustedDevice\(\)/.test(lock),
-            /db\.|config|nextBadge|Enrollment|offline/i.test(lock)]
-  })(), [true, true, false])
-check('  the trusted marker is localStorage only, never IndexedDB',
-  /db\.|indexedDB/.test(stripComments(read('src/auth/trusted-device.ts'))), false)
-check('  and no auth module writes the config row',
-  walk(join(root, 'src/auth'))
-    .filter((file) => /db\.config/.test(stripComments(readFileSync(file, 'utf8'))))
-    .map((file) => file.replace(`${root}/src/`, '')), [])
+    .test(deviceApiSource), false)
+/**
+ * Sign-out legitimately clears the central enrollment and its lease — both
+ * are auth state. What it must never touch is the badge range, `nextBadge`,
+ * a registration or an outbox row.
+ */
+const panelSignOut = (() => {
+  const panel = stripComments(read('src/components/device-auth/device-enrollment-panel.tsx'))
+  return panel.slice(panel.indexOf('const signOut'), panel.indexOf('const clearEnrollment'))
+})()
+check('  sign-out ends the server session before clearing anything local',
+  panelSignOut.indexOf('logoutDevice()') <
+    panelSignOut.indexOf('clearCentralDeviceEnrollment()'), true)
+check('  and never touches badge state or attendee data',
+  /badgeStart|badgeEnd|nextBadge|centralBadgeRangeBinding|db\.registrations|db\.outbox/
+    .test(panelSignOut), false)
+const enrollmentStore = stripComments(read('src/db/central-enrollment.ts'))
+check('  clearing the enrollment preserves the badge range',
+  /badgeStart|badgeEnd|nextBadge|badgeConfiguredAt/.test(enrollmentStore), false)
 
 console.log('\n=== 11. IDENTITY CONVERGENCE PRESERVES EVERYTHING ELSE ===')
 /**

@@ -16,11 +16,11 @@ ranges there **first**, then provision each device against that plan.
 | # | Step | Done |
 |---|---|---|
 | 1 | Open the production app **while online** | ☐ |
-| 2 | Unlock Operator Access | ☐ |
-| 3 | Open **`/device-registration`** and register the device with its name | ☐ |
-| 3a | *Badge-distributing devices only:* open **`/badge-registration`** and assign the range from the central plan | ☐ |
-| 4 | *Badge-distributing devices only:* confirm the matching physical badge stack is at this desk | ☐ |
-| 5 | Go to **`/device-registration`** and open **Device Readiness** | ☐ |
+| 2 | Sign in at **`/device-login`** as this desk's central device | ☐ |
+| 3 | Press **Set Up This Device** (or **Converge Device Identity** on a browser that already had a local one) | ☐ |
+| 3a | *Badge-distributing devices only:* adopt the central badge range at **`/device-login`** | ☐ |
+| 4 | *Badge-distributing devices only:* confirm the matching physical badge stack is at this desk — the adoption button stays unavailable until you do | ☐ |
+| 5 | Go to **`/`** and open **Device Readiness** | ☐ |
 | 6 | Copy the **Device ID** into the Device Range Plan | ☐ |
 | 7 | Verify: readiness range == plan range == physical stack | ☐ |
 | 8 | Verify **Next badge** equals the range start | ☐ |
@@ -47,6 +47,11 @@ warning, not a blocker: the app still works, but keep pending sync low.
 
 The point of this test is to prove the **installed app and its local data
 survive without a network**. It is not a badge test.
+
+Run it against the **deployed application**, which is what the device will
+actually use. If you are reproducing it locally, use `pnpm build` +
+`pnpm preview` — `pnpm dev` and `vercel dev` register no service worker, so
+the app cannot open offline on either of them and the test proves nothing.
 
 1. Load the app online and confirm Device Readiness looks right.
 2. Disconnect the network (airplane mode, or turn off Wi-Fi).

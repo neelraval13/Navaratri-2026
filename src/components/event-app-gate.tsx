@@ -26,9 +26,8 @@ interface EventAppGateProps {
  * before a credential is presented reveals nothing and costs nothing.
  *
  * The per-module gates live further in, at the routes, because the answer
- * differs per module: `/device-registration` changes this browser's own
- * transitional identity and stays Operator-only, while `/` and
- * `/badge-registration` accept a device grant.
+ * differs per module: Home needs only an attribute, while badge registration
+ * also needs its badge state to agree with the central assignment.
  *
  * One route pattern covers every event page, so navigating between them keeps
  * this subtree mounted: the provider must not re-check the session on each

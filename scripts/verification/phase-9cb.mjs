@@ -46,7 +46,6 @@ const deviceCookies = await jiti.import(`${root}/server/device-auth/cookies.ts`)
 const deviceOrigin = await jiti.import(`${root}/server/device-auth/same-origin.ts`)
 const deviceRequests = await jiti.import(`${root}/server/device-auth/requests.ts`)
 const adminSession = await jiti.import(`${root}/server/admin-auth/session.ts`)
-const operatorSession = await jiti.import(`${root}/server/auth/operator-session.ts`)
 
 const DEVICE_ID = '11111111-2222-4333-8444-555555555555'
 const EVENT_ID = '99999999-2222-4333-8444-555555555555'
@@ -182,30 +181,32 @@ check('  and the source never puts them there',
       .slice(0, stripComments(read('server/device-auth/session.ts')).indexOf('verifyDeviceSessionToken'))), false)
 
 console.log('\n=== 20-24. CROSS-REALM ISOLATION (one shared secret) ===')
+/**
+ * Phase D2 left TWO realms, not three. The rule is unchanged and the test
+ * still uses one shared secret for both, because isolation must hold in the
+ * signed message rather than in configuration.
+ */
 const SHARED = 's'.repeat(48)
 const sharedDevice = deviceSession.createDeviceSessionToken(SHARED, claims)
 const sharedAdmin = adminSession.createAdminSessionToken(SHARED)
-const sharedOperator = operatorSession.createOperatorSessionToken(SHARED)
 
 check('a device token verifies in its OWN realm',
   deviceSession.verifyDeviceSessionToken(sharedDevice, SHARED) !== null, true)
 check('  an Admin token does NOT',
   deviceSession.verifyDeviceSessionToken(sharedAdmin, SHARED), null)
-check('  an operator token does NOT',
-  deviceSession.verifyDeviceSessionToken(sharedOperator, SHARED), null)
 check('a device token is rejected by the Admin verifier',
   adminSession.verifyAdminSessionToken(sharedDevice, SHARED), false)
-check('  and by the operator verifier',
-  operatorSession.verifyOperatorSessionToken(sharedDevice, SHARED), false)
+check('  and the retired operator realm cannot clash with either',
+  [existsSync(join(root, 'server/auth')), existsSync(join(root, 'api/operator-login.ts'))],
+  [false, false])
 check('separation is CRYPTOGRAPHIC, in the signed message',
   /navaratri-device-session-v1:/.test(read('server/device-auth/session.ts')), true)
 check('  the device realm imports no other realm',
   walkSource(join(root, 'server/device-auth'))
     .filter((file) => /from\s+['"][^'"]*(admin-auth|\.\.\/auth)\//.test(readFileSync(file, 'utf8')))
     .map((file) => file.replace(`${root}/`, '')), [])
-check('  and the other realms were not touched',
-  [/navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')),
-   /SIGNING_CONTEXT/.test(read('server/auth/operator-session.ts'))], [true, false])
+check('  and the other realm was not touched',
+  /navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')), true)
 
 console.log('\n=== LOGIN INPUT ===')
 const login = (over) => deviceRequests.parseDeviceLoginInput({
@@ -753,25 +754,32 @@ check('  and no device route GATE exists',
  * lease must never unlock the page that rewrites the local identity the
  * lease's own badge checks are measured against.
  */
-check('Operator Access still gates event routes',
-  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
-check('  /device-registration is Operator-only',
-  /ROUTES\.deviceRegistration\}>\s*<OperatorAccessGate>/
-    .test(stripComments(read('src/components/app-router.tsx')).replace(/\s+/g, ' ')
-      .replace(/\{\/\* [\s\S]*?\*\/\}/g, '')), true)
+/**
+ * PHASE D2 RE-SCOPE. Signing in here no longer "unlocks nothing" — the
+ * central device became the only event authority. What still holds, and is
+ * what this guards, is that `/device-login` never gates itself on an event
+ * route and that `/device-registration` cannot write an identity: it is a
+ * redirect with no page behind it.
+ */
+check('the event routes are gated by the DEVICE, and nothing else',
+  [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
+   /<EventAccessGate module="/.test(read('src/components/app-router.tsx'))], [false, true])
+check('  /device-registration is a redirect, not a gated page',
+  /ROUTES\.deviceRegistration\}> <Redirect to=\{ROUTES\.deviceLogin\} \/>/
+    .test(stripComments(read('src/components/app-router.tsx')).replace(/\s+/g, ' ')), true)
 check('  and never accepts a device grant',
   /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
     .test(stripComments(read('src/components/app-router.tsx'))), false)
 check('the routes are unchanged',
   ['/', '/badge-registration', '/device-registration', '/admin']
     .every((route) => read('src/app/routes.ts').includes(`'${route}'`)), true)
-check('  /device-registration still exists',
-  existsSync(join(root, 'src/pages/device-registration-page.tsx')), true)
-check('Operator Access still signs the BARE payload (no context)',
-  [/createHmac\('sha256', secret\)\.update\(encodedPayload, 'utf8'\)\.digest\(\)/
-    .test(read('server/auth/operator-session.ts')),
-   /SIGNING_CONTEXT|navaratri-\w+-session-v1/.test(read('server/auth/operator-session.ts'))],
-  [true, false])
+check('  /device-registration is retired, but its path still resolves',
+  [existsSync(join(root, 'src/pages/device-registration-page.tsx')),
+   JSON.parse(read('vercel.json')).rewrites.some((r) => r.source === '/device-registration')],
+  [false, true])
+// Phase D2 deleted the operator signer; its realm no longer exists to clash.
+check('the Operator signer is gone',
+  existsSync(join(root, 'server/auth/operator-session.ts')), false)
 check('Admin auth is unchanged',
   [/navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')),
    /MIN_ADMIN_ACCESS_CODE_LENGTH = 8/.test(read('server/admin-auth/environment.ts'))], [true, true])
@@ -842,8 +850,9 @@ check('the firewall doc covers device login',
    /30/.test(read('docs/VERCEL_FIREWALL.md'))], [true, true])
 check('  and only its POST method',
   /### The method matters/.test(read('docs/VERCEL_FIREWALL.md')), true)
-check('AGENTS.md records the third realm',
-  /third independent security realm|Device auth is a third/i.test(read('AGENTS.md')), true)
+// Phase D2 retired Operator Access, so the device realm is one of TWO.
+check('AGENTS.md records the device realm as independent',
+  /Device auth is an independent security realm/i.test(read('AGENTS.md')), true)
 check('.env.example documents the secret',
   read('.env.example').includes('EVENT_DEVICE_SESSION_SECRET='), true)
 // The needle is assembled, so this suite is not itself a VITE_ reference.

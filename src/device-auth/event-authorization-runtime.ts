@@ -114,8 +114,7 @@ export const resolveFromServer = async (
  *
  * This is what a lease expiry runs. An expired lease simply stops being
  * authority: it is never refreshed, never extended, and nothing is retried.
- * If Operator Access happens to be unlocked the route continues on that
- * authority; otherwise the access gate appears.
+ * The access gate then asks the desk to verify its device again.
  */
 export const resolveFromCachedLease = async (
   sources: AuthorizationSources = defaultAuthorizationSources,

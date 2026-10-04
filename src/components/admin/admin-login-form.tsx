@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 /**
- * Admin sign-in. A SEPARATE realm from Operator Access — signing in here
+ * Admin sign-in. A SEPARATE realm from device auth — signing in here
  * grants no operator access, and an unlocked event device is not an Admin.
  *
  * The code lives in component state only long enough to send it. It is never

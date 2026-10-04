@@ -45,11 +45,14 @@ Before any of the checks below, provision each physical device by following
 |---|---|
 | `/` | Home — the module launcher |
 | `/badge-registration` | The registration desk workflow |
-| `/device-registration` | This device's provisioning and readiness |
+| `/device-login` | Device sign-in, setup, badge adoption and sign-out |
+
+`/device-registration` is retired and redirects to `/device-login`.
 
 Tap **Navaratri 2026** in the header to get Home from anywhere. Deep links
-work: opening `/badge-registration` directly is fine, and if the device is
-locked you unlock first and land back on that same page.
+work: opening `/badge-registration` directly is fine, and a device that has
+not finished setting itself up is told so and lands back on that same page
+afterwards.
 
 ## A2. Device setup — FOR EVERY DEVICE
 
@@ -58,9 +61,9 @@ event opens.
 
 | # | Check | Done |
 |---|---|---|
-| 1 | Unlock Operator Access on the device | ☐ |
-| 2 | Register the device at `/device-registration` | ☐ |
-| 2a | *Badge desks only:* assign the badge range at `/badge-registration` | ☐ |
+| 1 | Sign in at `/device-login` as this desk's central device | ☐ |
+| 2 | Press **Set Up This Device** so this browser takes the central identity | ☐ |
+| 2a | *Badge desks only:* adopt the central badge range at `/device-login`, with the physical stack confirmed | ☐ |
 | 3 | Verify the **Device Name** is right | ☐ |
 | 4 | Verify the **software range** matches the plan | ☐ |
 | 5 | Verify the **matching physical badge stack** is at that desk | ☐ |

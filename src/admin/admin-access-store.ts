@@ -15,7 +15,7 @@ export interface AdminAccessState {
 }
 
 /**
- * A SEPARATE realm from Operator Access, with its own store.
+ * A SEPARATE realm from device auth, with its own store.
  *
  * An authenticated event device is not an Admin, and an Admin is not an
  * operator. Sharing state between them is exactly the mistake that would make

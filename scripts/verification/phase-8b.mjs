@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-import { renderRoute } from './route-render.mjs'
+import { renderRoute, setDeviceGrant } from './route-render.mjs'
 
 const HERE = import.meta.dirname
 const root = resolve(HERE, '../..')
@@ -55,14 +55,18 @@ const reset = (config) => { state.registrations.clear(); state.outbox.clear(); s
 const attendee = (phone, name) => ({ registrationId: null, phone, name, age: 25, gender: 'male' })
 
 console.log('=== 1-4. THE DOMAIN SPLIT ===')
-reset(BOOTSTRAP)
-let r = await device.registerDevice({ deviceName: 'Prize Desk' })
-check('generic registration succeeds with NO badgeEnd', r.outcome, 'registered')
-check('  it assigns no range at all',
-  [r.config.badgeEnd, r.config.badgeConfiguredAt], [undefined, undefined])
-check('  a UUID identity is minted', /^[0-9a-f-]{36}$/.test(r.config.deviceId), true)
-check('  deviceConfiguredAt stamped', typeof r.config.deviceConfiguredAt, 'string')
+/**
+ * Phase D2 deleted `registerDevice`: a browser takes the CENTRAL device's
+ * UUID through convergence instead of minting one locally. The DOMAIN SPLIT
+ * this section exists for — identity and badge ownership are different
+ * questions — is unchanged, so the identity is now supplied the way
+ * convergence supplies it and the predicates are asked exactly as before.
+ */
+check('there is no local identity writer left', typeof device.registerDevice, 'undefined')
+reset({ ...BOOTSTRAP, deviceId: DEVICE_ID, deviceName: 'Prize Desk', deviceConfiguredAt: 'T1' })
 const generic = { ...state.config }
+check('a converged identity assigns no range at all',
+  [generic.badgeEnd, generic.badgeConfiguredAt], [undefined, undefined])
 check('generic device IS registered', device.isDeviceRegistered(generic), true)
 check('generic device is NOT badge-configured', device.isBadgeDistributionConfigured(generic), false)
 check('  bootstrap badgeStart/nextBadge grant nothing',
@@ -84,41 +88,55 @@ const UNREGISTERED = { ...BOOTSTRAP }
 const GENERIC = { ...BOOTSTRAP, deviceId: DEVICE_ID, deviceName: 'Prize Desk', deviceConfiguredAt: 'T1' }
 const FORM = '__REGISTRATION_FORM__'
 
-const deviceUnreg = renderRoute('/device-registration', UNREGISTERED)
-check('`/device-registration` unregistered asks only for a device name',
-  [deviceUnreg.html.includes('Device name'), deviceUnreg.html.includes('Register Device')], [true, true])
-check('  no badge From / To fields', /device-badge-start|device-badge-end/.test(deviceUnreg.html), false)
-check('  no physical-stack checkbox', /physical badges/i.test(deviceUnreg.html), false)
-const deviceReg = renderRoute('/device-registration', GENERIC)
-check('`/device-registration` registered shows identity + readiness',
-  [deviceReg.html.includes('This device is registered'), deviceReg.html.includes('Prize Desk'),
-   deviceReg.html.includes('Open Device Readiness')], [true, true, true])
-check('  and offers no badge setup', deviceReg.html.includes('Configure Badge Distribution'), false)
+/**
+ * Phase D2 moved these three states from in-page gates to ONE route gate,
+ * and retired `/device-registration` entirely. The states themselves still
+ * exist and are still distinct; what changed is who reports them and what
+ * they offer, which is Device Sign-In rather than a local form.
+ */
+const ASSIGNED_AT = '2026-09-27T05:00:00.000Z'
+const EVENT_ID = '99999999-2222-4333-8444-555555555555'
+const ENROLLMENT = { deviceId: DEVICE_ID, eventId: EVENT_ID, eventSlug: 'navaratri-2026',
+  deviceName: 'Registration Desk A', loginName: 'desk-a', attributes: ['registration'], verifiedAt: 'T' }
+const grant = (over = {}) => ({ source: 'device-online', deviceId: DEVICE_ID, eventId: EVENT_ID,
+  eventSlug: 'navaratri-2026', attributes: ['registration'],
+  activeBadgeRange: { rangeStart: 1, rangeEnd: 250, assignedAt: ASSIGNED_AT }, ...over })
+const CONVERGED = { ...LEGACY, centralBadgeRangeBinding: { deviceId: DEVICE_ID, eventId: EVENT_ID,
+  rangeStart: 1, rangeEnd: 250, assignedAt: ASSIGNED_AT, adoptedAt: 'T1' } }
+const drive = (config, over = {}) =>
+  setDeviceGrant(grant(over.grant ?? {}), { config, enrollment: ENROLLMENT, deviceName: 'Registration Desk A' })
 
+check('`/device-registration` is retired and renders nothing',
+  renderRoute('/device-registration', UNREGISTERED).html, '')
+
+drive(UNREGISTERED)
 const badgeUnreg = renderRoute('/badge-registration', UNREGISTERED)
-check('STATE A — unregistered shows Register This Device',
-  [badgeUnreg.html.includes('This device is not registered'),
-   badgeUnreg.html.includes('Register this physical device before configuring event modules'),
-   badgeUnreg.html.includes('Register This Device')], [true, true, true])
+check('STATE A — no identity asks for Device setup',
+  [badgeUnreg.html.includes('Device setup required'),
+   badgeUnreg.html.includes('Open Device Sign-In')], [true, true])
 check('  and NOT the workflow', badgeUnreg.html.includes(FORM), false)
+check('  and never offers a local registration form',
+  /Register This Device|device-name/.test(badgeUnreg.html), false)
+
+drive(GENERIC)
 const badgeGeneric = renderRoute('/badge-registration', GENERIC)
-check('STATE B — registered without badges shows Badge Distribution Setup',
-  [badgeGeneric.html.includes('Badge Distribution Setup'),
-   badgeGeneric.html.includes('it has not been assigned a badge range')], [true, true])
-check('  it names the device', badgeGeneric.html.includes('Prize Desk'), true)
-check('  it asks for the range and the physical stack',
-  [badgeGeneric.html.includes('device-badge-start'), badgeGeneric.html.includes('device-badge-end'),
-   badgeGeneric.html.includes('physical badges')], [true, true, true])
+check('STATE B — converged without a range asks for badge setup',
+  badgeGeneric.html.includes('Badge setup required'), true)
 check('  and NOT the workflow', badgeGeneric.html.includes(FORM), false)
+check('  it asks for nothing locally',
+  [badgeGeneric.html.includes('device-badge-start'), badgeGeneric.html.includes('device-badge-end')],
+  [false, false])
 check('  and never re-asks for a device name', badgeGeneric.html.includes('Register Device'), false)
-const badgeConfigured = renderRoute('/badge-registration', LEGACY)
+
+drive(CONVERGED)
+const badgeConfigured = renderRoute('/badge-registration', CONVERGED)
 check('STATE C — badge-configured renders the workflow', badgeConfigured.html.includes(FORM), true)
 check('  with the device label and readiness',
   [badgeConfigured.html.includes('Registration Desk A'), badgeConfigured.html.includes('Device readiness')], [true, true])
 
 console.log('\n=== 11-15. BADGE CONFIGURATION TRANSACTION ===')
 reset(GENERIC)
-r = await device.configureBadgeDistribution({ badgeStart: 251, badgeEnd: 500, physicalStackConfirmed: true })
+let r = await device.configureBadgeDistribution({ badgeStart: 251, badgeEnd: 500, physicalStackConfirmed: true })
 check('configures start/end/next atomically',
   [r.outcome, r.config.badgeStart, r.config.badgeEnd, r.config.nextBadge], ['configured', 251, 500, 251])
 check('  stamps badgeConfiguredAt', typeof r.config.badgeConfiguredAt, 'string')
@@ -217,16 +235,29 @@ check('  exactly three stores', (storesBlock.match(/^\s*(\w+):/gm) ?? []).map((m
 check('  no new index for the split', /badgeConfiguredAt|deviceConfiguredAt/.test(storesBlock), false)
 check('badgeConfiguredAt is an optional EventConfig field',
   /badgeConfiguredAt\?: string/.test(readFileSync(join(root, 'src/db/types.ts'), 'utf8')), true)
+/**
+ * A PRIZES-style desk — a real central device that owns no badge range —
+ * still reaches Home. That is the domain split in its most visible form, and
+ * Phase D2 did not change it: Home needs an attribute, never a range.
+ */
+drive(GENERIC, { grant: { attributes: ['prizes'], activeBadgeRange: null } })
 const homeGeneric = renderRoute('/', GENERIC)
 check('Home shows generic identity, not badge status',
-  [homeGeneric.html.includes('Prize Desk'), homeGeneric.html.includes('Registered')], [true, true])
+  [homeGeneric.html.includes('Prize Desk'), homeGeneric.html.includes('Central device')], [true, true])
 check('  it never implies badge distribution',
   /Badges #|badge range|Next badge|Remaining/i.test(homeGeneric.html), false)
-check('Home on unregistered hardware says so',
-  renderRoute('/', UNREGISTERED).html.includes('Device not registered'), true)
+check('  a device with no range still reaches Home',
+  homeGeneric.html.includes('Event Operations'), true)
+check('    but badge registration stays closed to it',
+  renderRoute('/badge-registration', GENERIC).html.includes(FORM), false)
+drive(UNREGISTERED)
+check('Home on an unconverged browser refuses instead',
+  [renderRoute('/', UNREGISTERED).html.includes('Device setup required'),
+   renderRoute('/', UNREGISTERED).html.includes('Event Operations')], [true, false])
 const routerSource = readFileSync(join(root, 'src/app/routes.ts'), 'utf8')
 check('the route table is unchanged',
   [/badgeRegistration: '\/badge-registration'/.test(routerSource),
+   // Retired by Phase D2, but the path survives as a redirect for bookmarks.
    /deviceRegistration: '\/device-registration'/.test(routerSource),
    /badge-setup|device\/badge/.test(routerSource)], [true, true, false])
 

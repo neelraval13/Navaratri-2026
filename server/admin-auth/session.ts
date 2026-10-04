@@ -3,28 +3,23 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 /**
  * Stateless signed ADMIN sessions.
  *
- * Deliberately its own implementation rather than a shared one with Operator
- * Access: they are separate realms, and a shared signer would make a change
+ * Deliberately its own implementation rather than one shared with device
+ * auth: they are separate realms, and a shared signer would make a change
  * for one silently a change for the other.
  *
  * Realm isolation is CRYPTOGRAPHIC, not configuration-dependent.
  *
  * Admin signatures cover a domain-separation context string prepended to the
- * payload, so the two realms sign different messages even when handed the
- * same key:
+ * payload, so each realm signs a different message even when handed the same
+ * key:
  *
- *   operator:  HMAC(secret, encodedPayload)
- *   admin:     HMAC(secret, ADMIN_SIGNING_CONTEXT + encodedPayload)
+ *   admin:   HMAC(secret, ADMIN_SIGNING_CONTEXT + encodedPayload)
+ *   device:  HMAC(secret, DEVICE_SIGNING_CONTEXT + encodedPayload)
  *
- * Therefore, EVEN IF `EVENT_SESSION_SECRET` and `EVENT_ADMIN_SESSION_SECRET`
- * were accidentally identical:
- *
- *   - an operator token is rejected by this verifier
- *   - an admin token is rejected by the operator verifier
- *
- * That closes the replay in code rather than relying on an operational rule.
- * The operator token format and verifier are untouched, so every operator
- * session currently live in production stays valid.
+ * Therefore, EVEN IF `EVENT_ADMIN_SESSION_SECRET` and
+ * `EVENT_DEVICE_SESSION_SECRET` were accidentally identical, each verifier
+ * rejects the other realm's token. That closes the replay in code rather
+ * than relying on an operational rule.
  *
  * Distinct secrets remain recommended as defence in depth, but realm
  * separation no longer depends on them.

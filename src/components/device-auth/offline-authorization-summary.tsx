@@ -49,10 +49,11 @@ const VerifiedClaims: React.FC<{ claims: DeviceOfflineClaims }> = ({ claims }) =
  * This browser's signed offline authorization lease.
  *
  * Since Phase 9C-C3B a valid lease is real offline authority for the event
- * modules this device is eligible for — not a blanket unlock, and never for
- * `/device-registration`, which answers to Operator Access alone. This
- * section exists so an organizer can see, BEFORE the venue's internet fails,
- * whether this desk would still be authorized and until when.
+ * modules this device is eligible for — not a blanket unlock. Since Phase D2
+ * it is the ONLY authority an offline desk has, because the operator code is
+ * gone. This section exists so an organizer can see, BEFORE the venue's
+ * internet fails, whether this desk would still be authorized and until
+ * when.
  *
  * The wording is deliberate. A verified lease offline is never called
  * "Authenticated": nobody asked the server. It says the LEASE is valid,
@@ -77,7 +78,7 @@ const OfflineAuthorizationSummary: React.FC<OfflineAuthorizationSummaryProps> = 
         <p className="text-sm leading-relaxed text-muted-foreground">
           Offline authorization signing is not set up for this deployment. An
           online device can still use Device access; with no lease to verify,
-          eligible event operations fall back to Operator Access whenever this
+          eligible event operations stop being available whenever this
           browser is offline.
         </p>
       </div>
@@ -166,8 +167,8 @@ const OfflineAuthorizationSummary: React.FC<OfflineAuthorizationSummaryProps> = 
     */}
     <p className="text-xs leading-relaxed text-muted-foreground">
       When this signed lease is valid, eligible event operations can continue
-      offline until the time above. Device Registration still requires
-      Operator Access.
+      offline until the time above. Setting this device up, or changing which
+      central device it is, always needs a connection.
     </p>
   </div>
 )

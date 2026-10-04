@@ -973,8 +973,17 @@ every tab has been closed. Any update indication stays passive.
 
 There is no custom install button; browser-native installation is enough.
 
-Production PWA behaviour is verified with `pnpm build` + `pnpm preview`. The
-development server deliberately registers no service worker.
+Production PWA behaviour is verified with `pnpm build` + `pnpm preview`.
+NEITHER development server registers a service worker: `pnpm dev` does not by
+design, and `vercel dev` does not either. On those servers
+`navigator.serviceWorker.controller` is `null`, Cache Storage is empty, and
+going offline and reloading gets the browser's own network error page before
+any application code runs — that is the server, never a regression.
+
+Offline behaviour and a LIVE API therefore cannot be proven on one local
+server: only `pnpm preview` has the worker, and only `vercel dev` has the
+Vercel Functions. `docs/DEVICE_AUTH.md` holds the two-server procedure for
+testing offline device authorization and its reconnect.
 
 ### Connectivity Indicator
 
@@ -1298,7 +1307,7 @@ id. EventConfig bootstrap defaults are the only automatic writes.
 
 ## Admin Control Plane
 
-Admin auth is a SEPARATE realm from Operator/device auth: different cookie
+Admin auth is a SEPARATE realm from device auth: different cookie
 (`__Host-navaratri_admin_session`), different secret, 12-hour lifetime.
 
 Realm isolation is CRYPTOGRAPHIC, never a documentation-only invariant. Admin
@@ -1314,14 +1323,14 @@ admin code leans on the edge rate limit for `POST /api/admin-auth` and the
 fixed wrong-code delay, and neither replaces entropy. `EVENT_ADMIN_SESSION_SECRET`
 stays at a 32-character minimum.
 
-`/admin` is NOT behind Operator Access and must never be. It is matched before
-the event routes and rendered outside the event shell, so it never mounts the
-offline registration workflow. Equally, the event application is never wrapped
-in Admin auth.
+`/admin` is NOT behind event authorization and must never be. It is matched
+before the event routes and rendered outside the event shell, so it never
+mounts the offline registration workflow. Equally, the event application is
+never wrapped in Admin auth.
 
-The event shell — Operator Access, DatabaseGate, StorageManager, SyncManager —
-mounts ONCE against a single event-route pattern, so navigating between event
-pages never restarts the sync processor.
+The event shell — DatabaseGate, StorageManager, the device authorization
+provider and SyncManager — mounts ONCE against a single event-route pattern,
+so navigating between event pages never restarts the sync processor.
 
 Every Admin API verifies the session FIRST, then validates, then touches the
 database. An unauthenticated caller must not be able to learn whether a
@@ -1334,9 +1343,11 @@ The Admin device registry is central Postgres state. It contains NO attendee
 PII, and creating a central record NEVER mutates any browser's IndexedDB —
 there is no authenticated browser-to-device mapping until Phase 9C.
 
-`enabled` is central state only. It does NOT revoke a legacy device's Operator
-Access, because devices do not authenticate centrally yet. Never imply
-otherwise in the UI.
+`enabled` is central state. Since Phase D2 it is enforced on every
+authenticated request and on every login, so disabling a device closes it the
+moment it next reaches the server — but an OFFLINE desk keeps operating on its
+signed lease until that lease expires. Never imply the revocation is instant
+for a device that is away.
 
 `last_seen_at` is FACTUAL. Never infer or display Online/Offline: without
 device authentication there is no trustworthy central heartbeat identity.
@@ -1390,7 +1401,7 @@ must be centrally accepted; after that, issuance stays local and offline.
 
 Phase 9C-A STORES device credentials. It does NOT enable device login. There is
 no device login endpoint, no device session, no cookie and no heartbeat, and none
-may be added before its phase. Devices still use Operator Access. Provisioning
+may be added before its phase. Provisioning
 a password ACTIVATES NOTHING — a disabled device may be provisioned, because
 preparing a desk before opening it is normal and `enabled` is enforced at login.
 
@@ -1440,15 +1451,15 @@ generated to make a request succeed.
 
 ## Device Authentication
 
-Device auth is a THIRD independent security realm, alongside Operator Access
-and Admin. Its cookie is `__Host-navaratri_device_session`, its secret is
+Device auth is an independent security realm. Since Phase D2 retired Operator
+Access there are TWO: Device and Admin. Its cookie is `__Host-navaratri_device_session`, its secret is
 `EVENT_DEVICE_SESSION_SECRET` (server-only, min 32, exact, never `VITE_`), and
 its signing context is `navaratri-device-session-v1:`.
 
-A Device cookie NEVER satisfies Admin or Operator auth, and neither of those
-ever authenticates a device. Separation is CRYPTOGRAPHIC: each realm signs a
-different message, so all three reject each other's tokens even with identical
-secrets. Never import one realm's session code into another.
+A Device cookie NEVER satisfies Admin auth, and Admin never authenticates a
+device. Separation is CRYPTOGRAPHIC: each realm signs a different message, so
+each rejects the other's token even with identical secrets. Never import one
+realm's session code into another.
 
 A device authenticates with `eventSlug` + `loginName` + `password`. Login names
 are unique PER EVENT, so the lookup is always event-scoped — never a bare
@@ -1478,12 +1489,10 @@ never touches it, and there is NO heartbeat.
 
 ### Device Login And Central Enrollment
 
-`/device-login` is the central device sign-in page. It lives OUTSIDE Operator
-Access on purpose — it is where the per-device entry point will eventually
-live — and it unlocks NOTHING. `/`, `/badge-registration` and
-`/device-registration` still answer to Operator Access whether or not a device
-session exists, and signing out of a device locks none of them. There is NO
-device gate on any event route until the offline bridge exists.
+`/device-login` is the central device sign-in page, and since Phase D2 the
+ONLY one. It lives outside every event gate on purpose: gating the only way in
+on event access would lock the door from the inside. Signing in here is what
+opens `/` and `/badge-registration`, each module still authorizing itself.
 
 The event slug is supplied by the application from `src/shared/event.ts`, never
 typed. No screen asks an operator for an event id, an event slug or a device
@@ -1687,7 +1696,7 @@ rejected by `crypto.subtle.verify`.
 
 Claims are MINIMAL: `v`, `t`, `deviceId`, `eventId`, `eventSlug`,
 `attributes`, `activeBadgeRange`, `iat`, `exp`. Never a password or hash, a
-session token or cookie, `sessionVersion`, an Admin or operator credential,
+session token or cookie, `sessionVersion`, an Admin credential,
 ANY attendee data, `nextBadge`, or this browser's local Phase 7 identity.
 `activeBadgeRange` is carried because offline Registration must eventually
 prove WHICH central assignment was authorized; it is not an allocator.
@@ -1733,17 +1742,16 @@ Only VERIFIED claims are ever displayed. Offline, a valid lease is described
 as "Offline authorization lease valid" and NEVER as "Authenticated": nobody
 asked the server, and the signature is the only thing proven.
 
-Phase 9C-C3A is FOUNDATION ONLY. The lease unlocks nothing: `/`,
-`/badge-registration` and `/device-registration` still answer to Operator
-Access, no route consults it and no `DeviceAccessGate` exists. Phase 9C-C3B
-wires it to event routes, and production configuration is required first.
+Phase 9C-C3A was FOUNDATION ONLY: the lease unlocked nothing. Phase 9C-C3B
+wired it to the event routes, and Phase D2 made it — with a live session —
+the only authority there is. Production configuration of the signing key is
+required before an offline desk can work at all.
 
 ## Device-Authorized Event Operations
 
-A centrally enrolled device may open event modules on its OWN authority.
-Operator Access remains a TRANSITIONAL FALLBACK until Phase D removes it; a
-browser may legitimately hold a central identity and a different local one at
-the same time.
+A centrally enrolled device opens event modules on its OWN authority, and
+since Phase D2 on nothing else. A browser must have CONVERGED: holding a
+central identity and a different local one is refused, not tolerated.
 
 Two authorities normalise into ONE in-memory `DeviceOperationalGrant`:
 `device-online` from the live `GET /api/device-auth` context, and
@@ -1757,14 +1765,14 @@ replaces the cached one.
 ROUTE POLICY DIFFERS PER MODULE:
 
 ```
-/                      device grant OR Operator Access
-/badge-registration    device Registration authority OR Operator Access
-/device-registration   OPERATOR ONLY
+/                      a device grant, on a converged browser
+/badge-registration    the same, plus Registration and agreeing badge state
+/device-registration   RETIRED — a redirect to /device-login
 ```
 
-`/device-registration` rewrites this browser's transitional Phase 7 identity —
-the identity the lease's own badge checks are measured against — so a device
-lease must never unlock it.
+`/device-registration` used to rewrite this browser's Phase 7 identity, which
+is why no device lease could be allowed to unlock it. Phase D2 settled that by
+deleting the page: there is nothing left to unlock.
 
 Registration needs MORE THAN PERMISSION. The event must match, the enrollment
 must be consistent, the local identity must exist, and the binding's device,
@@ -1774,15 +1782,15 @@ must equal `badgeStart`/`badgeEnd` with a coherent `nextBadge`.
 must reach the existing badge-range-exhausted workflow, never an authorization
 failure.
 
-SOME FAILURES FALL BACK AND SOME NEVER DO. Absent authority — no grant, wrong
-event, no enrollment, no local identity, no `registration`, no central range,
-no valid lease, no public key — falls back to Operator Access. Any
-DISAGREEMENT between central and local badge ownership, and any enrollment
-naming a different device or event, is a HARD BLOCK with no Continue, no
-Override and no operator code offered. The operator credential authorizes a
-person at a browser; it cannot make two desks holding the same physical badge
-numbers safe. Authorization also never REPAIRS badge state: no adoption, no
-`nextBadge` reset, no binding write. C2A stays the only adoption path.
+SOME FAILURES ARE SETUP AND SOME ARE CONFLICTS, and since D2 neither has a
+fallback. Absent authority — no grant, wrong event, no enrollment, no local
+identity, an unconverged one, no `registration`, no central range, no valid
+lease, no public key — is answered by Device Sign-In. Any DISAGREEMENT between
+central and local badge ownership, and any enrollment naming a different
+device or event, is a HARD BLOCK with no Continue and no Override: no
+credential can make two desks holding the same physical badge numbers safe.
+Authorization also never REPAIRS badge state: no adoption, no `nextBadge`
+reset, no binding write. C2A stays the only adoption path.
 
 ONE provider owns the session check, mounted once around the event routes. It
 checks on mount, on an offline-to-online transition, and on an explicit
@@ -1803,22 +1811,26 @@ a newer one revoked.
 A definitively unauthenticated answer clears the cached lease. A network
 error, a timeout or a 503 RETAINS it: a network failure is not a revocation.
 
-### Sync Accepts Operator Or A Live Device
+### Sync Accepts A Live Device, And Nothing Else
 
-`/api/sync-registration` tries OPERATOR FIRST and, when that is valid,
-behaves exactly as before — no Neon call, no device check, no range
-enforcement, because a legacy desk must not fail when the central database is
-unreachable. Only then does it try a LIVE device session: `session_version`,
-`enabled`, event active, credentials provisioned, current `registration` and a
-current active badge range. Both failures answer with the same generic 401.
+`/api/sync-registration` authorizes with a LIVE device session and no other
+realm: `session_version`, `enabled`, event active, credentials provisioned,
+current `registration` and a current active badge range, all re-read from
+Postgres on every request. Every failure answers with the same generic 401.
+Phase D2 deleted the operator branch.
 
-A DEVICE-AUTHORIZED COMPLETED snapshot must carry a badge inside that device's
-CURRENT central range, or the endpoint returns `device-badge-range-mismatch`
-(403), writes nothing and leaves the outbox row pending. This is the
-server-side half of the reconnect race: a desk may issue offline, be disabled
-centrally while away and flush the moment it returns, before its own browser
-has processed the revocation. The ledger refuses it on its OWN authority. Held
-rows carry no badge and are not range-checked.
+A COMPLETED snapshot must carry a badge inside that device's CURRENT central
+range, or the endpoint returns `device-badge-range-mismatch` (403), writes
+nothing and leaves the outbox row pending. This is the server-side half of the
+reconnect race: a desk may issue offline, be disabled centrally while away and
+flush the moment it returns, before its own browser has processed the
+revocation. The ledger refuses it on its OWN authority. Held rows carry no
+badge and are not range-checked.
+
+`payload.deviceId` is NEVER compared to the authenticated device. It is
+historical provenance — a row queued before this browser converged carries the
+old local id — and requiring a match would strand exactly the rows the D1
+migration creates.
 
 The signed offline lease is still NEVER sent and accepted by nothing.
 
@@ -1842,8 +1854,8 @@ ONLINE ONLY, FROM A FRESH CONTEXT. The destination comes only from the live
 `GET /api/device-auth` context — never from `centralDeviceEnrollment`, which
 is unsigned, and never from the signed offline lease. The action performs ONE
 recheck immediately before writing, using the EXISTING endpoint; an
-unauthenticated, unreachable or DIFFERENT device writes nothing. No operator
-ever types a UUID, a name, an event id or a slug.
+unauthenticated, unreachable or DIFFERENT device writes nothing. Nobody ever
+types a UUID, a name, an event id or a slug.
 
 `src/db/device-identity-convergence.ts` is the ONLY identity migration
 writer. ONE transaction over `db.config` ALONE — registrations and the outbox
@@ -1884,9 +1896,9 @@ cached enrollment.
 
 IDENTITY EQUALITY GRANTS NOTHING. `config.deviceId === central device.id` is
 a consistency fact, not a credential; authority still comes only from a live
-session or a verified signed lease. Operator Access remains the fallback,
-`/device-registration` remains OPERATOR-ONLY, and unconverged legacy browsers
-keep working — C3B authorizes both shapes until D2.
+session or a verified signed lease. Phase D2 then made convergence MANDATORY:
+an unconverged browser is refused and told to converge, `/device-registration`
+is retired, and there is no operator code to fall back to.
 
 ## Central Database
 
@@ -1952,9 +1964,9 @@ fallback denylists `/api/`.
 Initial Device Setup has exactly ONE writer and one transaction. A second
 device-configuration writer must never be added, whatever route calls it.
 
-Routing must preserve deep-link intent through Operator Access: the access gate
-renders IN PLACE and never navigates, so unlocking resumes at the requested
-URL rather than redirecting Home.
+Routing must preserve deep-link intent through the access gate: it renders IN
+PLACE and never navigates, so a browser that finishes setting itself up
+resumes at the requested URL rather than redirecting Home.
 
 Internal navigation uses the router. `window.location` is for genuinely leaving
 the application, never for moving between modules.
@@ -2117,18 +2129,24 @@ instances share no memory, so a per-instance counter resets on every cold start
 and is bypassed by concurrency — it would look like a rate limiter without
 being one.
 
-Rate limiting for `POST /api/operator-login` belongs in the Vercel firewall,
-configured manually outside this repository and documented in
+Rate limiting for `POST /api/device-auth` and `POST /api/admin-auth` — the
+only public, unauthenticated endpoints left after Phase D2 — belongs in the
+Vercel firewall, configured manually outside this repository and documented in
 `docs/VERCEL_FIREWALL.md`. Do not add Redis, a database or a KV store for it.
 
-It is an additional layer. The exact access-code comparison, constant-time
-digest comparison, fixed wrong-code delay, same-origin requirement and cookie
-attributes all remain authoritative and must not be weakened because a firewall
-rule exists.
+The device rule must be LOOSER than it looks like it should be: several desks
+normally leave the venue through one NAT address, so an IP-keyed rule sees
+them as one client, and locking the venue out is an outage rather than a
+defence.
+
+It is an additional layer. The exact credential comparison, the scrypt
+derivation on every device login path, the fixed timing-equalizer, the
+same-origin requirement and the cookie attributes all remain authoritative and
+must not be weakened because a firewall rule exists.
 
 A rate-limited response must produce a generic operator-safe message. The
 client never renders server response text and never reveals an address, an
-attempt count, or whether the submitted code was correct.
+attempt count, or whether the submitted credential was correct.
 
 ### Device Provisioning
 
@@ -2149,60 +2167,104 @@ device, because local IndexedDB owns the workflow state.
 
 ---
 
-### Operator Access
+### Operator Access Is Retired
 
-The production API auth boundary is a first-party OPERATOR SESSION, not the
-platform login.
+Phase D2 REMOVED the operator authority realm. The CENTRAL DEVICE is the
+sole event-operations authority, and there is no second credential
+anywhere.
 
-`EVENT_OPERATOR_ACCESS_CODE` (min 12 characters) and `EVENT_SESSION_SECRET`
-(min 32 characters) are server-only and must NEVER be `VITE_` prefixed. Both are
-read exactly, never trimmed. Missing or too-short values fail closed.
+Gone, and none of it may come back:
 
-The session is a stateless HMAC-SHA256 token in a `__Host-` prefixed cookie:
-`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`, 14 days. There
-is NO session store, and none should be added — rotating `EVENT_SESSION_SECRET`
-is how every session is revoked at once.
+- `api/operator-login.ts`, `api/operator-session.ts`, `api/operator-logout.ts`
+- `server/auth/`, `src/auth/`, `src/components/operator/`,
+  `src/hooks/use-operator-access.ts`
+- `EVENT_OPERATOR_ACCESS_CODE` and `EVENT_SESSION_SECRET` — obsolete, read by
+  nothing. Deleting them from a deployment is housekeeping, not a change.
 
-`/api/sync-registration` checks the session FIRST, before the release interlock,
-before the origin guard and before any configuration is read. An unauthenticated
-caller gets `unauthorized` and learns nothing about the deployment.
+An operator session cookie still sitting in a browser is INERT: no endpoint
+reads the name, and it expires on its own. No compatibility endpoint exists to
+clear it and none may be added. The old `localStorage` marker
+`navaratri-2026.operator-device-unlocked.v1` is equally inert — nothing reads
+it, and nothing may read it to decide anything.
 
-Access-code comparison is constant time over SHA-256 digests, with a fixed
-delay before a rejection. That delay is not a rate limiter — the access code
-must be a strong passphrase, which the length minimum enforces.
+`release:check` fails on any product import, endpoint, cookie or marker from
+the retired realm.
 
-Origin restriction is NOT authentication. Only the signed cookie grants API
-access.
+### Event Authority After D2
 
-The access code is NEVER stored client-side, logged, returned or exposed to
-browser code.
+```
+/device-login          public: the only sign-in and the only provisioning path
+/admin                 Admin realm, unchanged and separate
+/                      a device grant for this event, on a CONVERGED browser
+/badge-registration    the same, plus Registration and agreeing badge state
+/device-registration   RETIRED — a redirect to /device-login, nothing more
+```
 
-### Unauthorized Is Attention And Global
+A device grant comes from a LIVE session or a cryptographically VERIFIED
+offline lease, and from nothing else.
 
-`unauthorized` retains its outbox row, is attention-class (no automatic retry)
-and global (stops the cycle). A 401 never acknowledges or deletes a snapshot.
+CONVERGENCE IS MANDATORY. `config.deviceId` must equal the signed-in central
+device's UUID before any event module opens. A browser still carrying a legacy
+Phase 7 identity is refused and told to converge at Device Sign-In; it is
+never silently converged, never cleared, and keeps every registration, held
+record, outbox row and badge number it holds.
 
-A successful unlock triggers a MANUAL cycle, because the attention hold is what
-manual retry exists to bypass.
+The device NAME is deliberately NOT compared. It is editable Admin metadata,
+and a rename is not a different device.
 
-### Trusted Device Marker
+IDENTITY EQUALITY IS A REQUIREMENT, NEVER AUTHORITY.
+`checkConvergedDeviceIdentity` takes a grant as its first argument, so it
+cannot be reached without one, and it can only ever return a gap or `null`. A
+browser whose `deviceId` happens to equal a central UUID still opens nothing
+without a live session or a verified lease.
 
-`localStorage` records only that this device completed a real unlock. It is NOT
-authentication: no token, no code, no API authority. Its sole purpose is offline
-continuity, because an HttpOnly cookie cannot be inspected offline.
+### Gaps Versus Conflicts
 
-Offline startup makes NO auth request. A trusted device opens; a device that has
-never been unlocked is told to connect once.
+An `unavailable` gap means this browser has not finished becoming an event
+device. It is answered by Device Sign-In, never by a credential:
+`no-grant`, `event-mismatch`, `storage-unavailable`, `no-enrollment`,
+`missing-local-identity`, `identity-convergence-required`, `not-permitted`,
+`no-central-range`.
 
-### Never Yank The Form
+A `blocked` conflict means central and local DISAGREE about badge ownership or
+about which device this browser is. There is no override, no Continue and no
+code — a human reconciles the ledger. `binding-missing` is the one state
+presented as ordinary **Badge setup required** rather than a ledger conflict,
+because nothing is wrong: a range has simply never been adopted here. It still
+refuses, and adoption stays C2A's physically confirmed act.
 
-An expired session on a trusted device shows a banner and keeps the application
-open. It NEVER replaces the registration form with a login screen, never clears
-local data and never blocks local registration. Only a device that has never
-been unlocked sees the hard gate.
+### Sync Is Device-Only
 
-Lock is auth only: it clears the session cookie and the marker, and touches
-nothing in IndexedDB, the outbox, the config, `nextBadge` or the PWA cache.
+`/api/sync-registration` authorizes with a LIVE central device session and
+nothing else. Everything is re-read from Postgres on every request —
+`session_version`, `enabled`, the event's `active`, provisioned credentials,
+the current attributes and the current badge assignment — so a device revoked
+while it was offline fails the moment it reconnects.
+
+The signed offline lease is never sent and would never be accepted.
+
+**`payload.deviceId` MUST NEVER be compared to the authenticated device.** A
+row queued before this browser converged carries the old local id; requiring
+them to match would strand exactly the rows the D1 migration creates. It is
+historical provenance, not a credential. The BADGE NUMBER is what has to be
+owned: a completed snapshot outside the device's current central range is
+refused with `device-badge-range-mismatch`.
+
+### No Local Device Provisioning
+
+`registerDevice` is GONE. Nothing in `src/` writes `deviceId` except
+`src/db/device-identity-convergence.ts`, and no product path mints a
+`crypto.randomUUID()` into it — registration ids legitimately use UUIDs, so
+the guard is specific rather than a blanket ban.
+
+`configureBadgeDistribution` survives as the canonical range invariant and is
+still exercised directly, but it has NO product caller: a hand-entered range
+records no central binding, so the access gate would refuse that desk
+immediately. `release:check` fails if a component or page calls it again.
+
+There is exactly ONE supported provisioning path: `/device-login` — sign in,
+Set Up This Device, then adopt or claim a badge range with the physical stack
+confirmed.
 
 ### Server Runtime
 
@@ -2323,13 +2385,15 @@ the build has already succeeded, at "Deploying outputs…". No build step
 reports it, so the budget is a durable check, not something a green build
 proves.
 
-Current inventory: **11 of 12, one slot of headroom.**
+Current inventory: **8 of 12, four slots of headroom.**
 
 ```
 admin-auth · admin-badge-assignment · admin-device-password · admin-devices
-admin-events · device-auth · device-badge-claim · operator-login
-operator-logout · operator-session · sync-registration
+admin-events · device-auth · device-badge-claim · sync-registration
 ```
+
+Phase D2 freed three slots by DELETING the operator realm, not by
+consolidating it. Those three names must never reappear under `api/`.
 
 A shared helper NEVER belongs under `api/` — it costs a deployment Function
 for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
@@ -2337,7 +2401,7 @@ on an `api/` file that exports no HTTP method, on any file outside the
 expected inventory, and on a headroom other than the one this checkpoint
 expects, so headroom cannot be consumed quietly.
 
-The last spare slot is headroom, not permission to start the next phase.
+The four spare slots are headroom, not permission to start the next phase.
 
 ### Auth Realms Are Consolidated By HTTP Method
 
@@ -2357,11 +2421,11 @@ as the SPA index.
 
 Admin and Device stay SEPARATE Functions and must never merge into one
 `api/auth.ts`: different secrets, different cookies, different signing
-contexts, different rate limits, different threat surfaces. The budget reaches
-10 without merging them, so there is no reason to.
+contexts, different rate limits, different threat surfaces. The budget sits at
+8 of 12 without merging them, so there is no reason to.
 
-Operator Access keeps its three separate Functions. It is the live event-app
-auth boundary and is not consolidated in this phase.
+Operator Access had three separate Functions. Phase D2 DELETED them rather
+than consolidating them, which is why the budget fell to 8 and not to 9.
 
 Because one path now serves three operations, every firewall rule MUST
 condition on `Method = POST`. Rate-limiting the path alone would throttle
@@ -2423,13 +2487,14 @@ Central Enrollment. Both are auth actions; an adopted range is durable
 operational state that must survive a sign-out or a network loss. Clearing the
 identity while a binding exists warns that the range remains.
 
-C2A does NOT make device auth authoritative. Event routes still use Operator
-Access and the binding is never used as authorization — so central revocation
-CANNOT yet stop an operator-gated or offline desk from issuing. That is C3/D.
+C2A did not make device auth authoritative; C3B and D2 did. The binding is
+still never used AS authorization — it is read only to refuse, when local and
+central badge ownership disagree. Central revocation stops an online desk at
+its next session check and an offline one when its lease expires; it cannot
+recall a badge already handed over.
 
-There is NO self-claim. With no central assignment there is nothing to adopt and
-no range entry is offered; creating one from the device is 9C-C2B, and it may
-consume one of the two free Function slots.
+Self-claim arrived in 9C-C2B as `POST /api/device-badge-claim`. With no
+central assignment and no claim, there is nothing to adopt.
 
 ### Google Sheets Client
 

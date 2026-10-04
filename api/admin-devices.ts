@@ -109,7 +109,7 @@ export async function POST(request: Request): Promise<Response> {
  * device so the caller need not reload the registry to see what it just did.
  *
  * `enabled: false` changes CENTRAL state only. It does not revoke an existing
- * device's Operator Access, because devices do not use central authentication
+ * device's event access, because devices did not use central authentication
  * yet — that enforcement arrives with Phase 9C.
  */
 export async function PATCH(request: Request): Promise<Response> {

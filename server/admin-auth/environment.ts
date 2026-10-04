@@ -1,7 +1,7 @@
 /**
  * Server-only ADMIN configuration.
  *
- * A completely separate security realm from Operator Access. Neither name may
+ * A completely separate security realm from device auth. Neither name may
  * ever be `VITE_` prefixed, and neither value is logged, returned or exposed
  * to browser code.
  */

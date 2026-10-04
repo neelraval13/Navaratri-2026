@@ -13,7 +13,7 @@ import { createJiti } from 'jiti'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-import { renderRoute, setAdminAccess, setOperatorAccess } from './route-render.mjs'
+import { clearDeviceGrant, renderRoute, setAdminAccess } from './route-render.mjs'
 
 const HERE = import.meta.dirname
 const root = resolve(HERE, '../..')
@@ -44,31 +44,29 @@ const textOf = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim
 
 console.log('=== 1-10. ROUTING ===')
 setAdminAccess('locked')
-setOperatorAccess('locked')
+clearDeviceGrant()
 
 const deviceLogin = renderRoute('/device-login')
 check('/device-login resolves to the Device Sign-In page',
   [deviceLogin.error ?? null, /Device Sign-In/.test(deviceLogin.html)], [null, true])
-// The GATE, not the word: the page copy legitimately explains that event
-// operations still use Operator Access.
-check('  it is NOT behind Operator Access',
-  [/Unlock this event device/.test(deviceLogin.html),
-   /id="operator-access-code"/.test(deviceLogin.html)], [false, false])
+/**
+ * It never sits behind an event gate. Phase D2 made it the ONLY way in, so
+ * gating it on event access would lock the door from the inside.
+ */
+check('  it is NOT behind the event access gate',
+  [/Device access required|Device setup required/.test(deviceLogin.html),
+   /__REGISTRATION_FORM__/.test(deviceLogin.html)], [false, false])
 check('  nor behind Admin Access',
   [/Admin is a separate sign-in/.test(deviceLogin.html),
    /id="admin-access-code"/.test(deviceLogin.html)], [false, false])
-check('  and it mounts no registration workflow',
-  /__REGISTRATION_FORM__/.test(deviceLogin.html), false)
+check('  and no operator credential survives anywhere on it',
+  /id="operator-access-code"|Unlock this event device/.test(deviceLogin.html), false)
 
-setOperatorAccess('authenticated')
-const unlocked = renderRoute('/device-login')
-check('  an unlocked operator sees the same page',
-  /Device Sign-In/.test(unlocked.html), true)
-setOperatorAccess('locked')
-
-for (const route of ['/', '/badge-registration', '/device-registration'])
-  check(`${route} still demands Operator Access`,
-    /Unlock this event device/.test(renderRoute(route).html), true)
+for (const route of ['/', '/badge-registration'])
+  check(`${route} demands device access`,
+    /Device access required/.test(renderRoute(route).html), true)
+check('/device-registration is retired and renders nothing',
+  renderRoute('/device-registration').html, '')
 check('/admin remains its own realm',
   /Admin Access/.test(renderRoute('/admin').html), true)
 check('an unknown path is still Not Found',
@@ -84,17 +82,19 @@ check('  and no device gate wraps the event routes',
   /Device(Access|Session|Login)Gate/.test(
     routerSource + stripComments(read('src/components/event-app-gate.tsx'))), false)
 /**
- * Phase 9C-C3B moved Operator Access from the shell to the ROUTES, because
- * the answer now differs per module. It is still there, and
- * `/device-registration` still answers to it alone.
+ * Phase D2 removed Operator Access and retired `/device-registration`, so
+ * what C1 asserted about route policy is restated against the policy that
+ * replaced it: one device gate per event module, and the retired path
+ * dropped out of the event pattern entirely.
  */
-check('Operator Access still gates event routes',
-  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
-check('  and /device-registration answers to it alone',
+check('the event routes are gated by the device, with no operator gate left',
+  [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
+   /<EventAccessGate module="/.test(read('src/components/app-router.tsx'))], [false, true])
+check('  and /device-registration accepts no grant at all',
   /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
     .test(stripComments(read('src/components/app-router.tsx'))), false)
-check('  and the event route pattern is unchanged',
-  /\^\\\/\(\?:badge-registration\|device-registration\)\?\$/.test(read('src/app/routes.ts')), true)
+check('  and the event route pattern no longer contains it',
+  /\^\\\/\(\?:badge-registration\)\?\$/.test(read('src/app/routes.ts')), true)
 
 const vercel = JSON.parse(read('vercel.json'))
 const sources = vercel.rewrites.map((rule) => rule.source)
@@ -515,12 +515,11 @@ check('  which follows a successful save of a verified context', [
   authenticatedAt < savedBranchEndsAt,
 ], [true, true, true, true])
 /**
- * Phase D1 added two readers outside `device-auth`, and both are listed by
- * name rather than waved through: the convergence domain module, which reads
- * the enrollment to decide whether the LOCAL identity may be rewritten, and
- * the legacy provisioning page, which reads it to choose copy. Each is held
- * to what it is allowed to do immediately below, so the list cannot grow a
- * route-unlocking reader quietly.
+ * Phase D1 added the convergence domain module, which reads the enrollment
+ * to decide whether the LOCAL identity may be rewritten. Phase D2 deleted
+ * the legacy provisioning page, so that reader is gone again. The remaining
+ * one is listed by name rather than waved through, and held to what it is
+ * allowed to do immediately below.
  */
 check('no cached enrollment unlocks an event route',
   walkSource(join(root, 'src'))
@@ -530,24 +529,31 @@ check('no cached enrollment unlocks an event route',
   [
     'src/db/device-identity-convergence.ts',
     'src/db/types.ts',
-    'src/pages/device-registration-page.tsx',
   ])
 const convergenceReader = stripComments(read('src/db/device-identity-convergence.ts'))
 check('  the convergence reader authorizes nothing',
-  /authorizeEventModule|ModuleAuthorization|EventAccessGate|OperatorAccessGate|useLocation|navigate|ROUTES/
+  /authorizeEventModule|ModuleAuthorization|EventAccessGate|useLocation|navigate|ROUTES/
     .test(convergenceReader), false)
 check('    it reads the enrollment to plan a CONFIG write only',
   [/config\.centralDeviceEnrollment/.test(convergenceReader),
     /db\.transaction\('rw', db\.config/.test(convergenceReader)], [true, true])
-const legacyProvisioningPage = stripComments(read('src/pages/device-registration-page.tsx'))
-check('  the legacy provisioning page only picks copy from it',
-  /config\.deviceId === config\.centralDeviceEnrollment\.deviceId/.test(legacyProvisioningPage), true)
-check('    and grants no access with it',
-  /authorizeEventModule|ModuleAuthorization|EventAccessGate|grantFrom|offlineAuthorization/
-    .test(legacyProvisioningPage), false)
-check('  and the operator gate never reads it',
-  /centralDeviceEnrollment|deviceSession/.test(
-    read('src/components/operator/operator-access-gate.tsx')), false)
+/**
+ * The authorization domain reads it too, through the pure evaluator — and
+ * only ever to REFUSE. `checkEnrollment` returns a conflict or `null`; it
+ * cannot return an authorization.
+ */
+const authorizationDomain = stripComments(read('src/device-auth/event-authorization.ts'))
+const enrollmentCheck = authorizationDomain.slice(
+  authorizationDomain.indexOf('export const checkEnrollment'),
+  authorizationDomain.indexOf('export const checkBadgeOwnership'))
+check('  the authorization domain reads it only to refuse',
+  [/BadgeSafetyConflict \| null/.test(enrollmentCheck),
+   /outcome: 'authorized'/.test(enrollmentCheck)], [true, false])
+// Phase D2 deleted the operator gate; the device gate replaced it, and it
+// reads the enrollment only through the pure evaluator.
+check('  and the event access gate never reads it directly',
+  /centralDeviceEnrollment/.test(
+    read('src/components/event-access/event-access-gate.tsx')), false)
 
 console.log('  -- no heartbeat --')
 for (const [label, pattern] of [
@@ -646,17 +652,19 @@ check('Sheets unchanged',
   [/A1:N/.test(read('server/sync/sheet-contract.ts')), /A1:M/.test(read('server/sync/sheet-contract.ts'))],
   [true, true])
 /**
- * 9C-C3B adds a SECOND sync realm: a live device session. The operator path
- * is unchanged and tried first; the signed offline lease is accepted by
- * nothing.
+ * 9C-C3B added a device sync realm beside the operator one; PHASE D2 removed
+ * the operator one, leaving a live device session as the only authorization.
+ * The signed offline lease is still accepted by nothing.
  */
-check('sync keeps the operator realm and never takes the offline lease',
-  [/operator/i.test(read('api/sync-registration.ts')),
+// Comment-stripped: the handler legitimately EXPLAINS that the operator
+// realm was removed, and saying so is not using it.
+check('sync is device-only and never takes the offline lease',
+  [/operator/i.test(stripComments(read('api/sync-registration.ts'))),
+   /authorizeSyncByDevice/.test(read('api/sync-registration.ts')),
    /verifyOfflineAuthorization|offline-lease|centralDeviceOfflineAuthorization/
-     .test(stripComments(read('api/sync-registration.ts')))], [true, false])
-check('Operator Access is unchanged',
-  /createHmac\('sha256', secret\)\.update\(encodedPayload, 'utf8'\)\.digest\(\)/
-    .test(read('server/auth/operator-session.ts')), true)
+     .test(stripComments(read('api/sync-registration.ts')))], [false, true, false])
+check('the Operator realm is gone',
+  existsSync(join(root, 'server/auth/operator-session.ts')), false)
 check('Admin auth is unchanged',
   /navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')), true)
 check('badge allocation stays local',

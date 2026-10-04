@@ -60,7 +60,12 @@ const CONFIG = {
   id: 'event', eventName: 'Navaratri 2026', currency: 'INR', amount: 20,
   timezone: 'Asia/Kolkata', badgeStart: 501, badgeEnd: 600, nextBadge: 501,
   badgeConfiguredAt: '2026-10-01T01:00:00.000Z',
-  deviceId: LOCAL_DEVICE_ID, deviceName: 'claim-test-local-2',
+  /**
+   * PHASE D2: this browser has CONVERGED. `deviceId` IS the central device's
+   * UUID, which is now a precondition for every event module. The legacy
+   * shape it used to carry is exercised as its own case below.
+   */
+  deviceId: DEVICE_ID, deviceName: 'Claim Test Desk 2',
   deviceConfiguredAt: '2026-09-01T00:00:00.000Z',
   centralBadgeRangeBinding: {
     deviceId: DEVICE_ID, eventId: EVENT_ID, rangeStart: 501, rangeEnd: 600,
@@ -172,7 +177,7 @@ for (const [label, over, gap] of [
   ['no central enrollment', { enrollment: undefined }, 'no-enrollment'],
   ['no local device identity', {
     config: { ...CONFIG, deviceId: undefined, deviceName: undefined },
-  }, 'local-device-not-registered'],
+  }, 'missing-local-identity'],
   ['a device with no central range', { grant: grant({ activeBadgeRange: null }),
     config: { ...CONFIG, centralBadgeRangeBinding: undefined } }, 'no-central-range'],
   ['storage not ready', { config: undefined }, 'storage-unavailable'],
@@ -436,65 +441,88 @@ check('exactly one timer exists', [...providerSource.matchAll(/setTimeout\(/g)].
 check('  and no polling of any kind', /setInterval/.test(providerSource), false)
 
 console.log('\n=== 13-14, 44, 57. ROUTE POLICY ===')
-const { renderRoute, setOperatorAccess, setDeviceGrant, clearDeviceGrant, hrefsIn } =
+/**
+ * PHASE D2 RE-SCOPE. C3B proved a device grant opened a module WITH OPERATOR
+ * LOCKED, which was the interesting half of a two-authority world. Phase D2
+ * removed the other half, so the same renders now prove something stronger:
+ * the device grant is the ONLY thing that opens anything, and its absence
+ * offers no credential at all.
+ */
+const { renderRoute, setDeviceGrant, clearDeviceGrant, hrefsIn } =
   await import('./route-render.mjs')
 const MARKER = '__REGISTRATION_FORM__'
 const DEVICE_STATE = { config: CONFIG, enrollment: ENROLLMENT, deviceName: 'Claim Test Desk 2' }
-/** The badge page's own gates read the config hook, exactly as in production. */
 const renderBadge = () => renderRoute('/badge-registration', CONFIG).html
 
-setOperatorAccess('locked', 'new-device')
 clearDeviceGrant()
-check('44. with no device authority, Operator Access is requested',
-  [renderBadge().includes('Operator Access'), renderBadge().includes(MARKER)], [true, false])
-check('  and there is exactly ONE operator form',
-  (renderBadge().match(/id="operator-gate/g) ?? []).length, 1)
+check('44. with no device authority, nothing opens',
+  [renderBadge().includes('Device access required'), renderBadge().includes(MARKER)], [true, false])
+check('  and no operator credential is offered anywhere',
+  /Operator Access|operator-gate|access code/i.test(renderBadge()), false)
 
 setDeviceGrant(grant(), DEVICE_STATE)
-check('43. an ONLINE device opens registration with Operator locked',
-  [renderBadge().includes(MARKER), renderBadge().includes('id="operator-gate')], [true, false])
+check('43. an ONLINE device opens registration', renderBadge().includes(MARKER), true)
 check('  and the banner says it was verified online',
   renderBadge().includes('Verified online'), true)
-check('42. so does a VERIFIED OFFLINE lease, with Operator still locked',
+check('42. so does a VERIFIED OFFLINE lease',
   (() => {
     setDeviceGrant(grant({ source: 'device-offline', expiresAt: 4102444800 }), DEVICE_STATE)
-    return [renderBadge().includes(MARKER), renderBadge().includes('Offline device access'),
-            renderBadge().includes('id="operator-gate')]
-  })(), [true, true, false])
+    return [renderBadge().includes(MARKER), renderBadge().includes('Offline device access')]
+  })(), [true, true])
 check('  home opens too', renderRoute('/', CONFIG).html.includes('Event Operations'), true)
 
-check('14. /device-registration stays OPERATOR-ONLY even with device authority',
-  [renderRoute('/device-registration', CONFIG).html.includes('id="operator-gate'),
-   renderRoute('/device-registration', CONFIG).html.includes('Device Readiness')], [true, false])
-setOperatorAccess('unlocked')
-check('  and opens once Operator Access is unlocked',
-  [renderRoute('/device-registration', CONFIG).html.includes('id="operator-gate'),
-   renderRoute('/device-registration', CONFIG).html.length > 500], [false, true])
+/**
+ * 14 RE-SCOPED. `/device-registration` was Operator-only precisely because a
+ * device lease must not unlock the page that rewrites the local identity its
+ * own badge checks are measured against. Phase D2 settled that by deleting
+ * the page: there is nothing left to unlock.
+ */
+setDeviceGrant(grant(), DEVICE_STATE)
+check('14. /device-registration cannot be opened by device authority either',
+  [renderRoute('/device-registration', CONFIG).html, read('src/components/app-router.tsx')
+    .includes('<Redirect to={ROUTES.deviceLogin} />')], ['', true])
 
-console.log('  -- 45. a hard conflict blocks even with Operator unlocked --')
-setOperatorAccess('unlocked')
+console.log('  -- 45. a hard conflict blocks, with no way around it --')
 setDeviceGrant(grant(), { ...DEVICE_STATE, config: { ...CONFIG, badgeStart: 401, badgeEnd: 500 } })
 const blocked = renderBadge()
 check('registration is BLOCKED', blocked.includes('Badge registration blocked'), true)
 check('  the form never renders', blocked.includes(MARKER), false)
 check('  both ranges are shown', [blocked.includes('#501'), blocked.includes('#401')], [true, true])
+/**
+ * `Force` would match the Tailwind class `force-...`-style utilities and the
+ * word inside ordinary prose, so the offers are matched as controls: a
+ * button or link label, not any occurrence of the word.
+ */
 check('  and NO override is offered',
-  /Continue anyway|Use Operator Access|Override|Force|operator-gate/i.test(blocked), false)
+  /Continue anyway|Use Operator Access|>\s*Override\s*<|>\s*Force\s*<|operator-gate/i
+    .test(blocked), false)
 check('  home is unaffected by a badge conflict',
   renderRoute('/', CONFIG).html.includes('Event Operations'), true)
 
+console.log('  -- D2. a legacy unconverged browser is refused, not blocked --')
+const LEGACY_CONFIG = { ...CONFIG, deviceId: LOCAL_DEVICE_ID, deviceName: 'claim-test-local-2' }
+setDeviceGrant(grant(), { ...DEVICE_STATE, config: LEGACY_CONFIG })
+const legacy = renderRoute('/badge-registration', LEGACY_CONFIG).html
+check('registration is refused', legacy.includes(MARKER), false)
+check('  it is Device setup, not a badge conflict',
+  [legacy.includes('Device setup required'), legacy.includes('Badge registration blocked')], [true, false])
+check('  and it points at Device Sign-In',
+  [legacy.includes('Open Device Sign-In'), hrefsIn(legacy).includes('/device-login')], [true, true])
+check('  Home refuses it the same way',
+  renderRoute('/', LEGACY_CONFIG).html.includes('Device setup required'), true)
+
 console.log('  -- 57. the router is otherwise unchanged --')
 clearDeviceGrant()
-setOperatorAccess('unlocked')
 check('/admin is its own realm',
-  renderRoute('/admin').html.includes('id="operator-gate'), false)
+  renderRoute('/admin').html.includes('Device access required'), false)
 check('/device-login is its own realm',
-  renderRoute('/device-login').html.includes('id="operator-gate'), false)
+  renderRoute('/device-login').html.includes('Device access required'), false)
 check('  and is not inside the event shell',
   /<EventAppGate>[\s\S]*deviceLogin/.test(stripComments(read('src/components/app-router.tsx'))), false)
+setDeviceGrant(grant(), DEVICE_STATE)
 check('home still links only to real destinations',
   [...new Set(hrefsIn(renderRoute('/', CONFIG).html))].sort(),
-  ['/admin', '/badge-registration', '/device-login', '/device-registration'])
+  ['/admin', '/badge-registration', '/device-login'])
 check('the service worker still denylists /api',
   /navigateFallbackDenylist: \[\/\^\\\/api\\\/\/\]/.test(read('vite.config.ts')), true)
 check('  and no API route is swallowed by the SPA fallback',
@@ -598,8 +626,10 @@ check('  one outside it does not',
 check('34. a held registration has no badge and is not range-checked',
   syncDeviceAuth.isBadgeWithinDeviceRange(AUTH, undefined), true)
 const syncSource = stripComments(read('api/sync-registration.ts'))
-check('  and the endpoint only range-checks a COMPLETED device sync',
-  /deviceAuthorization !== null &&\s*payload\.status === 'completed'/.test(syncSource), true)
+// Phase D2 left one realm, so the range check is no longer conditional on
+// which realm answered — only on the snapshot being a completed one.
+check('  and the endpoint only range-checks a COMPLETED sync',
+  /payload\.status === 'completed' &&\s*!isBadgeWithinDeviceRange/.test(syncSource), true)
 check('  refusing with a typed outcome and writing nothing',
   [/device-badge-range-mismatch/.test(syncSource),
    syncSource.indexOf('device-badge-range-mismatch') < syncSource.indexOf('syncRegistration(')],
@@ -676,19 +706,26 @@ check('  nor one that lost Registration',
 seedCentral()
 check('  nor an anonymous caller', (await postSync(snapshot(501), null)).status, 401)
 
-console.log('  -- 22, 35-36. the operator path is untouched and independent --')
-check('22, 36. operator is tried FIRST',
-  syncSource.indexOf('operatorAuthorized') < syncSource.indexOf('authorizeSyncByDevice('), true)
-check('  and the device realm is consulted only when it fails',
-  /if \(!operatorAuthorized\) \{[\s\S]{0,200}authorizeSyncByDevice/.test(syncSource), true)
-check('35. a valid operator session is never range-checked',
-  /deviceAuthorization !== null/.test(syncSource), true)
-check('  and never reaches the central database',
-  /if \(!operatorAuthorized\)[\s\S]{0,400}getDatabase|loadDeviceSessionContext/.test(
-    syncSource.slice(0, syncSource.indexOf('if (!operatorAuthorized)'))), false)
-check('  and both realms answer with the SAME generic 401',
-  (syncSource.match(/failure\('unauthorized', 'Operator session required\.', 401\)/g) ?? []).length,
-  1)
+console.log('  -- 22, 35-36. D2: the device realm is the ONLY sync realm --')
+/**
+ * C3B tried operator first and fell back to the device. Phase D2 deleted the
+ * first branch, which turns three assertions about ordering into one about
+ * there being nothing to order: the device check is the first thing the
+ * handler does, and it is the only authorization in it.
+ */
+check('22, 36. the device check is the first thing the handler does',
+  [/operator/i.test(syncSource),
+   syncSource.indexOf('authorizeSyncByDevice(request)') <
+     syncSource.indexOf('readSyncEnvironment()')], [false, true])
+// Measured inside the HANDLER: the imports name these long before any call.
+const syncHandler = syncSource.slice(syncSource.indexOf('export async function POST'))
+check('  and nothing is read before it',
+  /request\.text\(\)|parseSyncRegistrationRequest\(|readSyncEnvironment\(/
+    .test(syncHandler.slice(0, syncHandler.indexOf('authorizeSyncByDevice(request)'))), false)
+check('35. every snapshot is range-checked, with no exempt realm',
+  /deviceAuthorization !== null &&/.test(syncSource), false)
+check('  and there is exactly ONE generic 401',
+  (syncSource.match(/failure\('unauthorized', [^)]*401\)/g) ?? []).length, 1)
 
 console.log('\n=== 27, 37. THE OFFLINE LEASE IS NEVER A CREDENTIAL ===')
 for (const file of readdirSync(join(root, 'api')).filter((entry) => entry.endsWith('.ts'))) {
@@ -721,22 +758,34 @@ check('  and the allocator semantics were not touched',
   /badge-range-exhausted/.test(read('src/db/registrations.ts')), true)
 
 console.log('\n=== 29-30, 60-63. NOTHING ELSE MOVED ===')
-check('29, 60. Operator Access is intact',
+/**
+ * PHASE D2 RE-SCOPE. C3B's promise was that it CHANGED nothing about the
+ * operator realm. D2's is that it removed it completely — so the same three
+ * assertions now check the opposite, and check it exhaustively: not one of
+ * the Functions, the components, or the trusted-device marker survives, and
+ * nothing in `src` reads any of them.
+ */
+check('29, 60. Operator Access is gone, entirely',
   ['operator-login', 'operator-logout', 'operator-session']
-    .every((name) => existsSync(join(root, 'api', `${name}.ts`))), true)
-check('  its gate and form are reused, never duplicated',
-  [existsSync(join(root, 'src/components/operator/operator-access-gate.tsx')),
+    .some((name) => existsSync(join(root, 'api', `${name}.ts`))), false)
+check('  its gate, form and banner are deleted, not merely unused',
+  [existsSync(join(root, 'src/components/operator')),
    walk(join(root, 'src'))
-     // Bounded: `React.FC<OperatorAccessFormProps>` is the declaration, not a use.
-     .filter((file) => /<OperatorAccessForm[\s/>]/.test(stripComments(readFileSync(file, 'utf8'))))
+     .filter((file) => /OperatorAccessForm|OperatorAccessGate|OperatorAccessBanner/
+       .test(stripComments(readFileSync(file, 'utf8'))))
      .map((file) => file.replace(`${root}/src/`, '')).sort()],
-  [true, ['components/operator/operator-access-banner.tsx',
-          'components/operator/operator-access-gate.tsx']])
-check('  and the trusted-device marker still exists',
-  existsSync(join(root, 'src/auth/trusted-device.ts')), true)
-check('30, 61. the local Phase 7 identity remains',
+  [false, []])
+check('  and the trusted-device marker is read by nothing',
+  [existsSync(join(root, 'src/auth/trusted-device.ts')),
+   walk(join(root, 'src'))
+     .filter((file) => /navaratri-2026\.operator-device-unlocked/
+       .test(stripComments(readFileSync(file, 'utf8'))))
+     .map((file) => file.replace(`${root}/src/`, ''))],
+  [false, []])
+check('30, 61. the local identity MODEL remains; its page and writer do not',
   [existsSync(join(root, 'src/pages/device-registration-page.tsx')),
-   /registerDevice/.test(read('src/db/device.ts'))], [true, true])
+   /registerDevice/.test(stripComments(read('src/db/device.ts'))),
+   /isDeviceRegistered/.test(read('src/db/device.ts'))], [false, false, true])
 check('63. IndexedDB version unchanged (1)',
   /DATABASE_VERSION = 1/.test(read('src/db/database.ts')), true)
 check('  stores unchanged',
@@ -754,9 +803,10 @@ check('37, 40. the Sheet schema is unchanged',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-check('62. the Function inventory is unchanged at eleven', budget.actual.length, 11)
-check('  with one slot of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
+// C3B added no Function; Phase D2 removed the three Operator ones.
+check('62. the Function inventory is eight', budget.actual.length, 8)
+check('  with four slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 19, 23, 55-56. THE UI ===')
@@ -769,8 +819,13 @@ check('  and NEVER calls it Authenticated',
   /Authenticated/.test(stripComments(banner)), false)
 check('  it is amber, not destructive',
   [/amber/.test(banner), /destructive/.test(banner)], [true, false])
-check('23. the operator banner is kept for the operator source',
-  /OperatorAccessBanner/.test(banner), true)
+// Phase D2 removed the operator banner; with no grant there is simply
+// nothing to announce, and the gate below already says what is missing.
+check('23. with no grant the banner renders nothing at all',
+  [/OperatorAccessBanner/.test(banner), /grant === null \{0,2\}\)? \{\s*return null/
+    .test(banner.replace(/\s+/g, ' '))], [false, false])
+check('  it announces a device, or nothing',
+  /device\.grant === null/.test(banner), true)
 check('56. Device Readiness reports event access read-only',
   [/Event access/.test(read('src/components/device/device-readiness.tsx')),
    /refresh\(\)|acceptOfflineAuthorization|revokeOfflineAuthorization/
@@ -813,18 +868,24 @@ for (const claim of STALE_C3A_CLAIMS) {
 check('  and no rendered text still says a device unlocks nothing',
   /unlocks? (nothing|none)/i.test(renderedCopy), false)
 
-check('the Device Sign-In page describes C3B accurately',
-  [renderedCopy.includes('Eligible event operations can use Device access'),
-   renderedCopy.includes('Operator Access remains available as a transitional fallback')],
-  [true, true])
-check('the Offline Authorization section describes C3B accurately',
+/**
+ * PHASE D2 RE-SCOPE. C3B's copy named Operator Access as the transitional
+ * fallback. There is none now, so copy that still mentions one would be
+ * exactly the kind of false claim this section exists to catch.
+ */
+check('the Device Sign-In page describes D2 accurately',
+  [renderedCopy.includes(
+     'Event operations are authorized here and nowhere else'),
+   /Operator Access/i.test(renderedCopy)], [true, false])
+check('the Offline Authorization section describes D2 accurately',
   [renderedCopy.includes(
      'When this signed lease is valid, eligible event operations can continue offline until the time above.'),
-   renderedCopy.includes('Device Registration still requires Operator Access')],
+   renderedCopy.includes(
+     'Setting this device up, or changing which central device it is, always needs a connection.')],
   [true, true])
 check('  the required ideas are all present in rendered copy',
-  ['eligible event operations', 'offline authorization', 'Operator Access',
-   'Device Registration still requires Operator Access']
+  ['eligible event operations', 'offline authorization',
+   'authorized here and nowhere else', 'always needs a connection']
     .filter((needle) => !new RegExp(needle, 'i').test(renderedCopy)), [])
 
 /**
@@ -839,9 +900,9 @@ check('no copy promises a device can reach EVERY module',
 check('  and every Device-access claim is qualified as eligible',
   [...renderedCopy.matchAll(/\b([A-Za-z]+) (?:event|Event) (?:operations|Operations)/g)]
     .map((match) => match[1].toLowerCase())
-    .filter((word) => word !== 'eligible' && word !== 'to'), [])
-check('the unavailable states no longer claim Operator Access is the only path',
-  [renderedCopy.includes('Operator Access remains available for eligible event operations'),
+    .filter((word) => !['eligible', 'to', 'and'].includes(word)), [])
+check('the unavailable states offer no credential that no longer exists',
+  [renderedCopy.includes('event operations stay unavailable until it can'),
    renderedCopy.includes('Eligible event operations can continue on the signed offline')],
   [true, true])
 check('  and the unconfigured-signing state is honest about online access',

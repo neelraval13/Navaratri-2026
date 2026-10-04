@@ -442,18 +442,21 @@ check('  and the sheet learns no credential', /password|credential/i.test(stripC
 check('the sync contract is untouched',
   /password|credential|device-auth/i.test(stripComments(read('src/shared/sync-contract.ts'))), false)
 
-check('Operator Access is unchanged',
-  /navaratri-admin-session-v1|device-auth|password/.test(read('server/auth/operator-session.ts')), false)
-check('  its cookie too',
-  /__Host-navaratri_operator_session/.test(read('server/auth/cookies.ts')), true)
+// Phase D2 retired Operator Access entirely; what mattered here — that this
+// phase touched no other realm — is now asserted as its absence.
+check('the Operator realm is gone, not merely unused',
+  [existsSync(join(root, 'server/auth')), existsSync(join(root, 'src/auth'))], [false, false])
 check('Admin auth is unchanged',
   [/navaratri-admin-session-v1:/.test(read('server/admin-auth/session.ts')),
    /MIN_ADMIN_ACCESS_CODE_LENGTH = 8/.test(read('server/admin-auth/environment.ts'))], [true, true])
 check('event routes are unchanged',
   ['/', '/badge-registration', '/device-registration', '/admin']
     .every((route) => read('src/app/routes.ts').includes(`'${route}'`)), true)
-check('  /device-registration still exists',
-  existsSync(join(root, 'src/pages/device-registration-page.tsx')), true)
+// Phase D2 retired the page; the path survives as a redirect for bookmarks.
+check('  /device-registration is retired, but its path still resolves',
+  [existsSync(join(root, 'src/pages/device-registration-page.tsx')),
+   JSON.parse(read('vercel.json')).rewrites.some((r) => r.source === '/device-registration')],
+  [false, true])
 check('badge allocation stays local',
   [/nextBadge/.test(read('src/db/registrations.ts')),
    /server\/db|drizzle/.test(read('src/db/registrations.ts'))], [true, false])

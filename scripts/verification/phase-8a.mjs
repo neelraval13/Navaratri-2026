@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-import { hrefsIn, renderRoute } from './route-render.mjs'
+import { clearDeviceGrant, hrefsIn, renderRoute, setDeviceGrant } from './route-render.mjs'
 
 const HERE = import.meta.dirname
 const root = resolve(HERE, '../..')
@@ -40,12 +40,35 @@ const walkSource = (dir, out = []) => {
   }
   return out
 }
+const DEVICE_ID = '11111111-2222-4333-8444-555555555555'
+const EVENT_ID = '99999999-2222-4333-8444-555555555555'
+const ASSIGNED_AT = '2026-09-27T05:00:00.000Z'
+/**
+ * Phase D2: a browser that has CONVERGED onto its central device. `deviceId`
+ * IS the central UUID, the binding matches the live assignment, and the local
+ * range matches both — which is now the only shape that opens an event route.
+ */
 const CONFIGURED = { id: 'event', eventName: 'Navaratri 2026', currency: 'INR', amount: 20,
-  timezone: 'Asia/Kolkata', deviceId: '11111111-2222-4333-8444-555555555555',
+  timezone: 'Asia/Kolkata', deviceId: DEVICE_ID,
   deviceName: 'Registration Desk A', badgeStart: 1, badgeEnd: 250, nextBadge: 5,
-  deviceConfiguredAt: '2026-09-27T06:00:00.000Z', updatedAt: 'T1' }
-const UNCONFIGURED = { ...CONFIGURED, deviceId: undefined, deviceName: undefined, badgeEnd: undefined }
+  deviceConfiguredAt: '2026-09-27T06:00:00.000Z',
+  centralBadgeRangeBinding: { deviceId: DEVICE_ID, eventId: EVENT_ID, rangeStart: 1,
+    rangeEnd: 250, assignedAt: ASSIGNED_AT, adoptedAt: '2026-09-27T06:00:00.000Z' },
+  updatedAt: 'T1' }
+const UNCONFIGURED = { ...CONFIGURED, deviceId: undefined, deviceName: undefined,
+  badgeEnd: undefined, centralBadgeRangeBinding: undefined }
+const ENROLLMENT = { deviceId: DEVICE_ID, eventId: EVENT_ID, eventSlug: 'navaratri-2026',
+  deviceName: 'Registration Desk A', loginName: 'desk-a', attributes: ['registration'], verifiedAt: 'T' }
+const grant = (over = {}) => ({ source: 'device-online', deviceId: DEVICE_ID, eventId: EVENT_ID,
+  eventSlug: 'navaratri-2026', attributes: ['registration'],
+  activeBadgeRange: { rangeStart: 1, rangeEnd: 250, assignedAt: ASSIGNED_AT }, ...over })
+/** Every event route needs device authority now; routing is what is under test. */
+const authorized = (config = CONFIGURED) => {
+  setDeviceGrant(grant(), { config, enrollment: ENROLLMENT, deviceName: 'Registration Desk A' })
+}
 const FORM = '__REGISTRATION_FORM__'
+
+authorized()
 
 console.log('=== 1-10. ROUTING ===')
 const home = renderRoute('/', CONFIGURED)
@@ -53,9 +76,18 @@ check('`/` renders Home', [home.error ?? null, home.html.includes('Event Operati
 check('  Home does not render the badge workflow', home.html.includes(FORM), false)
 const badge = renderRoute('/badge-registration', CONFIGURED)
 check('`/badge-registration` resolves Badge Registration', badge.html.includes(FORM), true)
+/**
+ * Phase D2 RETIRED `/device-registration`. The path survives only so an old
+ * bookmark lands somewhere useful: the router answers with a redirect, so
+ * there is no page, no gate and nothing that could write an identity.
+ */
 const deviceRoute = renderRoute('/device-registration', CONFIGURED)
-check('`/device-registration` resolves Device Registration', deviceRoute.html.includes('Device Registration'), true)
+check('`/device-registration` renders no page at all',
+  [deviceRoute.error ?? null, deviceRoute.html], [null, ''])
 check('  and not the badge workflow', deviceRoute.html.includes(FORM), false)
+check('  the router redirects it to Device Sign-In',
+  /ROUTES\.deviceRegistration\}>\s*<Redirect to=\{ROUTES\.deviceLogin\} \/>/
+    .test(stripComments(read('src/components/app-router.tsx'))), true)
 const unknown = renderRoute('/definitely-not-a-route', CONFIGURED)
 check('unknown route renders Not Found', unknown.html.includes('Page not found'), true)
 check('  NEVER silently renders Badge Registration', unknown.html.includes(FORM), false)
@@ -63,11 +95,12 @@ check('  offers Back to Home', [unknown.html.includes('Back to Home'), hrefsIn(u
 
 const homeHrefs = hrefsIn(home.html)
 check('Home badge card routes correctly', homeHrefs.includes('/badge-registration'), true)
-check('Home device card routes correctly', homeHrefs.includes('/device-registration'), true)
-// Home links to the two built modules plus the subtle Admin link. What must
-// never appear is a link behind a Coming soon card.
+check('Home no longer advertises local device registration',
+  homeHrefs.includes('/device-registration'), false)
+// Home links to the one built module plus the subtle Admin and Device Sign-In
+// links. What must never appear is a link behind a Coming soon card.
 check('Home links only to real destinations', homeHrefs.sort(),
-  ['/admin', '/badge-registration', '/device-login', '/device-registration'])
+  ['/admin', '/badge-registration', '/device-login'])
 check('coming-soon cards do NOT navigate',
   homeHrefs.filter((href) => /dandiya|prize/i.test(href)), [])
 check('  Admin is a subtle link, not a module card',
@@ -76,14 +109,18 @@ check('  they are marked and inert',
   [(home.html.match(/Coming soon/g) ?? []).length, home.html.includes('aria-disabled="true"')], [2, true])
 check('  no fake module routes exist',
   [existsSync(join(root, 'src/pages/dandiya-page.tsx')), existsSync(join(root, 'src/pages/prizes-page.tsx'))], [false, false])
-const homeUnconfigured = renderRoute('/', UNCONFIGURED)
 check('Home shows static device status only',
-  [homeUnconfigured.html.includes('Device not registered'),
-   /remaining|Pending sync|Next badge/i.test(home.html)], [true, false])
+  [home.html.includes('Registration Desk A'), home.html.includes('Central device'),
+   /remaining|Pending sync|Next badge/i.test(home.html)], [true, true, false])
+authorized(UNCONFIGURED)
+check('  and an unconverged browser never reaches Home at all',
+  [renderRoute('/', UNCONFIGURED).html.includes('Event Operations'),
+   renderRoute('/', UNCONFIGURED).html.includes('Device setup required')], [false, true])
+authorized()
 
 const pageSources = ['src/pages/home-page.tsx', 'src/pages/badge-registration-page.tsx',
-  'src/pages/device-registration-page.tsx', 'src/pages/not-found-page.tsx',
-  'src/components/app-router.tsx', 'src/App.tsx', 'src/components/device/device-registered-gate.tsx']
+  'src/pages/not-found-page.tsx', 'src/components/app-router.tsx', 'src/App.tsx',
+  'src/components/event-access/device-access-required.tsx']
   .map((f) => stripComments(read(f))).join('\n')
 check('internal navigation never forces a document reload',
   /window\.location\.href|location\.assign|location\.replace|<a\s+href=/.test(pageSources), false)
@@ -96,73 +133,125 @@ const rewriteSources = vercelConfig.rewrites.map((r) => r.source)
 check('rewrites are explicit, not a catch-all', rewriteSources.sort(),
   ['/admin', '/badge-registration', '/device-login', '/device-registration'])
 check('  no wildcard or regex source', rewriteSources.some((s) => /[*:()]/.test(s)), false)
-for (const api of ['/api/operator-login', '/api/operator-session', '/api/operator-logout', '/api/sync-registration'])
+for (const api of ['/api/device-auth', '/api/admin-auth', '/api/device-badge-claim', '/api/sync-registration'])
   check(`  ${api} is not matched`, rewriteSources.includes(api), false)
 check('  every rewrite destination is the SPA shell',
   vercelConfig.rewrites.every((r) => r.destination === '/index.html'), true)
 check('  no redirects or headers were introduced', [vercelConfig.redirects, vercelConfig.headers], [undefined, undefined])
-for (const fn of ['api/operator-login.ts', 'api/operator-session.ts', 'api/operator-logout.ts', 'api/sync-registration.ts'])
+for (const fn of ['api/device-auth.ts', 'api/admin-auth.ts', 'api/device-badge-claim.ts', 'api/sync-registration.ts'])
   check(`  ${fn} still exists as a Function`, existsSync(join(root, fn)), true)
+// The retired path keeps its rewrite so an old bookmark still loads the SPA,
+// which then redirects — a 404 would be a worse answer than a redirect.
+check('  the retired route keeps its SPA rewrite',
+  rewriteSources.includes('/device-registration'), true)
+for (const fn of ['api/operator-login.ts', 'api/operator-session.ts', 'api/operator-logout.ts'])
+  check(`  ${fn} is retired`, existsSync(join(root, fn)), false)
 
 console.log('\n=== 11-17. AUTH + DEEP LINK ===')
+/**
+ * Phase D2 removed Operator Access, so the gate this section used to test is
+ * gone. The deep-link guarantee it protected is unchanged and now belongs to
+ * the device access gate: it renders IN PLACE and never navigates, so a
+ * browser that finishes setting itself up resumes at the URL it asked for
+ * rather than being bounced Home.
+ */
 const appSource = read('src/App.tsx')
-check('OperatorAccessGate wraps the whole router',
-  appSource.indexOf('<OperatorAccessGate>') < appSource.indexOf('<AppRouter />'), true)
-const gateSource = read('src/components/operator/operator-access-gate.tsx')
+check('the device authorization provider wraps every event route',
+  stripComments(read('src/components/event-app-gate.tsx'))
+    .indexOf('<DeviceEventAuthorizationProvider>') <
+  stripComments(read('src/components/event-app-gate.tsx')).indexOf('{children}'), true)
+const accessGate = stripComments(read('src/components/event-access/event-access-gate.tsx'))
 check('the access gate renders in place, it never navigates',
-  /useLocation|navigate|setLocation|redirect|window\.location/.test(stripComments(gateSource)), false)
-check('  so a deep link survives unlocking', /return <>\{children\}<\/>/.test(gateSource), true)
-const accessSource = read('src/auth/operator-access.ts')
-check('unlocking does not send the operator Home',
-  /ROUTES\.home|navigate\(|setLocation\(/.test(stripComments(accessSource)), false)
-check('trusted offline path unchanged', /isBrowserOffline\(\)/.test(accessSource), true)
-check('Lock Device is auth only',
-  /IndexedDB|db\.|registrations|outbox/.test(stripComments(read('src/components/operator/lock-device-button.tsx'))), false)
-check('  and clears only the marker + cookie',
-  /clearTrustedDevice\(\)[\s\S]{0,200}setOperatorAccess/.test(accessSource), true)
+  /useLocation|navigate|setLocation|redirect|window\.location/.test(accessGate), false)
+check('  so a deep link survives finishing setup', /return <>\{children\}<\/>/.test(accessGate), true)
+check('  and it offers no credential of any kind',
+  /accessCode|OperatorAccess|unlock|password/i.test(accessGate), false)
+const refusal = stripComments(read('src/components/event-access/device-access-required.tsx'))
+check('the refusal screen links rather than navigating',
+  [/useLocation|navigate\(|window\.location/.test(refusal), /ROUTES\.deviceLogin/.test(refusal)],
+  [false, true])
+check('the header carries no lock control',
+  /LockDevice|lockOperatorDevice|Lock device/i.test(stripComments(appSource)), false)
+check('  but still offers a route to Device Sign-In',
+  /ROUTES\.deviceLogin/.test(appSource), true)
 
 console.log('\n=== 18-26. DEVICE GATES ===')
-check('configured `/badge-registration` renders registration', badge.html.includes(FORM), true)
+/**
+ * Phase D2 collapsed three in-page gates into ONE route-level gate. The
+ * questions are the same — is there an identity, is it the central device's,
+ * does the badge range agree — but they are now asked once, before the page
+ * mounts, and answered by a screen that points at Device Sign-In.
+ */
+authorized()
+check('configured `/badge-registration` renders registration',
+  renderRoute('/badge-registration', CONFIGURED).html.includes(FORM), true)
+authorized(UNCONFIGURED)
 const badgeUnconfigured = renderRoute('/badge-registration', UNCONFIGURED)
 check('unconfigured `/badge-registration` does NOT render the form', badgeUnconfigured.html.includes(FORM), false)
-check('  shows "This device is not registered"', badgeUnconfigured.html.includes('This device is not registered'), true)
-check('  offers Register This Device', badgeUnconfigured.html.includes('Register This Device'), true)
-check('  the CTA targets /device-registration', hrefsIn(badgeUnconfigured.html), ['/device-registration'])
-for (const status of ['loading', 'failed']) {
-  const gated = renderRoute('/badge-registration', null, status)
-  check(`  ${status} config also fails closed`, gated.html.includes(FORM), false)
-}
-check('registered `/device-registration` does NOT show the form again',
-  [deviceRoute.html.includes('Register Device'), deviceRoute.html.includes('device-name')], [false, false])
-check('  and never asks about badges',
-  [deviceRoute.html.includes('device-badge-start'), deviceRoute.html.includes('Configure Badge Distribution'),
-   deviceRoute.html.includes('physical badges')], [false, false, false])
-check('  shows identity and device id',
-  [deviceRoute.html.includes('Registration Desk A'),
-   deviceRoute.html.includes('11111111-2222-4333-8444-555555555555')], [true, true])
-check('  offers Device Readiness', deviceRoute.html.includes('Open Device Readiness'), true)
-check('  offers NO mutation control',
-  /Edit Range|Reset|Change Device ID|Delete Registration|Clear Storage/i.test(deviceRoute.html), false)
-const deviceUnconfigured = renderRoute('/device-registration', UNCONFIGURED)
-check('unregistered `/device-registration` asks only for a device name',
-  [deviceUnconfigured.html.includes('Register Device'), deviceUnconfigured.html.includes('device-name')], [true, true])
-check('  and asks NOTHING about badges',
-  [deviceUnconfigured.html.includes('device-badge-start'), deviceUnconfigured.html.includes('device-badge-end'),
-   deviceUnconfigured.html.includes('physical badges')], [false, false, false])
-const identityWriters = spawnSync('grep', ['-rl', 'registerDevice', join(root, 'src')], { encoding: 'utf8' })
-  .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort()
-check('device identity has exactly ONE writer', identityWriters,
-  ['components/device/device-registration-form.tsx', 'db/device.ts'])
+check('  says Device setup is required', badgeUnconfigured.html.includes('Device setup required'), true)
+check('  offers Device Sign-In', badgeUnconfigured.html.includes('Open Device Sign-In'), true)
+check('  and the CTA targets /device-login', hrefsIn(badgeUnconfigured.html), ['/device-login'])
+check('  it never offers local device registration',
+  /Register This Device|device-registration/.test(badgeUnconfigured.html), false)
 /**
- * Counted by CALL, comment-stripped: Phase 9C-C2A's adoption helper documents
- * that it reuses this function's canonical invariant, which is a mention, not
- * a second caller.
+ * A browser whose identity is a LEGACY local UUID is refused even though it
+ * has one, and told to converge rather than to set a device up.
+ */
+const LEGACY = { ...CONFIGURED, deviceId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa' }
+authorized(LEGACY)
+const legacyBadge = renderRoute('/badge-registration', LEGACY)
+check('a legacy local identity is refused', legacyBadge.html.includes(FORM), false)
+check('  and told to connect it to the central Device',
+  legacyBadge.html.includes('still uses an older local identity'), true)
+check('  Home refuses it too',
+  renderRoute('/', LEGACY).html.includes('Event Operations'), false)
+/**
+ * A converged device with no adopted range reaches badge SETUP, not a
+ * conflict screen — nothing is wrong, the stack has simply not been claimed.
+ */
+authorized({ ...CONFIGURED, badgeEnd: undefined, centralBadgeRangeBinding: undefined })
+const unadopted = renderRoute('/badge-registration', CONFIGURED)
+check('a converged device with no range sees Badge setup required',
+  [unadopted.html.includes('Badge setup required'), unadopted.html.includes(FORM)], [true, false])
+check('  and is not told it has a conflict',
+  /Badge registration blocked/.test(unadopted.html), false)
+/**
+ * An UNREADABLE local store fails closed at the gate, before the page. The
+ * config hook's own loading and failed states are tested where they live, in
+ * the registration form; what matters here is that the gate never authorizes
+ * a browser whose configuration it could not read.
+ */
+setDeviceGrant(grant(), { config: undefined, enrollment: ENROLLMENT, deviceName: 'Registration Desk A' })
+const unreadable = renderRoute('/badge-registration', null, 'failed')
+check('  an unreadable local store fails closed',
+  [unreadable.html.includes(FORM), unreadable.html.includes('Local storage is not ready')], [false, true])
+authorized()
+
+/**
+ * Phase D2 DELETED the local identity writer. `registerDevice` minted a
+ * `crypto.randomUUID()` from a typed name; convergence onto the central
+ * device replaced it, and it is now the only writer of `deviceId`.
+ */
+const identityWriters = walkSource(join(root, 'src'))
+  .filter((file) => /deviceId: (plan\.to\.deviceId|crypto\.randomUUID\(\))/
+    .test(stripComments(readFileSync(file, 'utf8'))))
+  .map((file) => file.replace(`${root}/src/`, '')).sort()
+check('device identity has exactly ONE writer', identityWriters,
+  ['db/device-identity-convergence.ts'])
+check('  and nothing in src mints a local device id',
+  walkSource(join(root, 'src'))
+    .filter((file) => /deviceId:\s*crypto\.randomUUID\(\)/.test(stripComments(readFileSync(file, 'utf8'))))
+    .map((file) => file.replace(`${root}/src/`, '')), [])
+/**
+ * Counted by CALL, comment-stripped. The Phase 7 hand-entered range writer
+ * SURVIVES as the canonical invariant and is still exercised by the suites,
+ * but Phase D2 left it with no product caller: a range with no central
+ * binding is refused by the access gate the moment it is written.
  */
 const badgeWriters = walkSource(join(root, 'src'))
   .filter((file) => /configureBadgeDistribution\(/.test(stripComments(readFileSync(file, 'utf8'))))
   .map((file) => file.replace(`${root}/src/`, '')).sort()
-check('the Phase 7 badge-range writer has exactly ONE caller', badgeWriters,
-  ['components/device/badge-distribution-form.tsx'])
+check('the Phase 7 badge-range writer has no product caller', badgeWriters, [])
 /**
  * Phase 9C-C2A adds a SECOND badge-range writer: adopting a central assignment
  * must commit the range and its provenance together, and chaining
@@ -179,19 +268,23 @@ check('  and every module that writes badge state is accounted for', allBadgeRan
   'db/bootstrap.ts',
   // Phase 9C-C2A: adopts a central assignment, range + provenance in one go.
   'db/central-badge-range.ts',
-  // Phase 7: the one-time local range setup.
+  // Phase 7: the one-time local range setup, now without a product caller.
   'db/device.ts',
   // Issuance: advances `nextBadge` by exactly one, inside its own transaction.
   'db/registrations.ts',
 ])
-check('  the one-time + existing-data guards are untouched',
-  ['already-registered', 'already-configured', 'existing-data'].every((o) => read('src/db/device.ts').includes(o)), true)
+check('  the one-time range guards are untouched',
+  ['already-configured', 'device-not-registered', 'stack-not-confirmed']
+    .every((o) => read('src/db/device.ts').includes(o)), true)
+check('  and the existing-data guard moved to convergence, not away',
+  /'local-data-without-identity'/.test(read('src/db/device-identity-convergence.ts')), true)
 
 console.log('\n=== 27-34. STATE PRESERVATION ACROSS ROUTES ===')
-const first = renderRoute('/device-registration', CONFIGURED).html
+authorized()
+const first = renderRoute('/badge-registration', CONFIGURED).html
 renderRoute('/', CONFIGURED)
-renderRoute('/badge-registration', CONFIGURED)
-const second = renderRoute('/device-registration', CONFIGURED).html
+renderRoute('/device-login', CONFIGURED)
+const second = renderRoute('/badge-registration', CONFIGURED).html
 check('device identity and range survive route changes', second, first)
 check('  no page writes to the database',
   /holdRegistration|issueBadge|db\.(config|registrations|outbox)\.(put|add|delete)/.test(pageSources), false)
@@ -215,9 +308,9 @@ const routerSourceForShell = read('src/components/app-router.tsx')
 check('exactly one DatabaseGate', (shellSource.match(/<DatabaseGate>/g) ?? []).length, 1)
 /**
  * Phase 9C-C3B mounts the processor through `EventSyncManager`, which exists
- * only to withhold it from a browser with no event access at all — exactly
- * what wrapping the shell in Operator Access used to do. It is still ONE
- * instance, still inside DatabaseGate, still outside the page routes.
+ * only to withhold it from a browser with no event access at all. Since
+ * Phase D2 that is one condition rather than two. It is still ONE instance,
+ * still inside DatabaseGate, still outside the page routes.
  */
 const syncManagerSource = stripComments(read('src/components/event-access/event-sync-manager.tsx'))
 check('exactly one SyncManager mount point',
@@ -228,14 +321,16 @@ check('  SyncManager is inside DatabaseGate',
   shellSource.indexOf('<DatabaseGate>') < shellSource.indexOf('<EventSyncManager />'), true)
 check('  and OUTSIDE the page routes',
   shellSource.indexOf('<EventSyncManager />') < shellSource.indexOf('{children}'), true)
-check('  it is withheld only from a browser with no access at all',
-  /access\.phase === 'unlocked'[\s\S]{0,160}device\.grant !== null/.test(syncManagerSource), true)
+check('  it is withheld only from a browser with no device grant',
+  /device\.grant === null \? null : <SyncManager \/>/.test(syncManagerSource), true)
+check('  and consults no other authority',
+  /operator|access\.phase|localStorage/i.test(syncManagerSource), false)
 check('  the shell mounts once for all event routes',
   (routerSourceForShell.match(/<EventAppGate>/g) ?? []).length, 1)
 check('  App.tsx renders only the router', (appSource.match(/<AppRouter \/>/g) ?? []).length, 1)
 const featurePageSources = ['src/pages/home-page.tsx', 'src/pages/badge-registration-page.tsx',
-  'src/pages/device-registration-page.tsx', 'src/pages/not-found-page.tsx',
-  'src/components/app-router.tsx'].map((f) => stripComments(read(f))).join('\n')
+  'src/pages/not-found-page.tsx', 'src/components/app-router.tsx']
+  .map((f) => stripComments(read(f))).join('\n')
 check('no feature page mounts its own SyncManager or DatabaseGate',
   /<SyncManager|<DatabaseGate/.test(featurePageSources), false)
 check('header carries no device badge state', /nextBadge|badgeStart|DeviceLabel|formatBadgeNumber/.test(

@@ -261,7 +261,7 @@ export const getDeviceSession = async (): Promise<DeviceSessionResult> => {
 /**
  * Ends the DEVICE session on the server.
  *
- * Auth only: it clears one cookie. It never touches Operator Access, Admin,
+ * Auth only: it clears one cookie. It never touches Admin,
  * IndexedDB, the badge range or the outbox. A failure is reported honestly
  * rather than assumed — the caller must not claim the server cookie is gone
  * when the request never arrived.

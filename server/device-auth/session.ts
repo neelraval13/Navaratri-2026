@@ -3,22 +3,19 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 /**
  * Stateless signed DEVICE sessions.
  *
- * A third realm, with its own implementation rather than a shared one with
- * Operator Access or Admin: they are separate realms, and a shared signer
- * would make a change for one silently a change for all three. Nothing here
- * imports `server/auth/` or `server/admin-auth/`.
+ * Its own implementation rather than one shared with Admin: they are
+ * separate realms, and a shared signer would make a change for one silently
+ * a change for both. Nothing here imports `server/admin-auth/`.
  *
  * Realm isolation is CRYPTOGRAPHIC, not configuration-dependent. Each realm
  * signs a different message:
  *
- *   operator:  HMAC(secret, encodedPayload)
  *   admin:     HMAC(secret, "navaratri-admin-session-v1:"  + encodedPayload)
  *   device:    HMAC(secret, "navaratri-device-session-v1:" + encodedPayload)
  *
- * Therefore, EVEN IF all three secrets were accidentally identical, every
+ * Therefore, EVEN IF both secrets were accidentally identical, every
  * cross-realm token is rejected. The `t` claim is a second, independent
- * barrier. The operator and admin implementations are untouched, so every
- * session live in production stays valid.
+ * barrier.
  *
  * Rotating `EVENT_DEVICE_SESSION_SECRET` invalidates every device session at
  * once. There is NO session store, and none should be added — per-device
@@ -35,7 +32,7 @@ const TOKEN_TYPE = 'device'
  */
 const DEVICE_SIGNING_CONTEXT = 'navaratri-device-session-v1:'
 
-/** Event desks may run across several days, so this matches Operator Access. */
+/** Event desks may run across several days, so a session lasts 14 of them. */
 export const DEVICE_SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
 /**

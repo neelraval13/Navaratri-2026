@@ -1,4 +1,4 @@
-import { ShieldAlert } from 'lucide-react'
+import { MonitorSmartphone, ShieldAlert } from 'lucide-react'
 import type * as React from 'react'
 
 import { Link } from 'wouter'
@@ -46,18 +46,54 @@ const EXPLANATION: Record<BadgeSafetyConflict, string> = {
 }
 
 /**
+ * `binding-missing` is the ONE state here that is ordinary setup rather than
+ * a disagreement: central has assigned a range this browser has simply never
+ * adopted. It is still a hard refusal with no override — adopting a range is
+ * a physically confirmed act and nothing here can see the badge stack — but
+ * reporting it in the language of a ledger conflict would send someone
+ * hunting for a problem that does not exist.
+ */
+const SETUP_REQUIRED: readonly BadgeSafetyConflict[] = ['binding-missing']
+
+/**
  * The hard stop. Badge registration is closed and NOTHING here opens it.
  *
- * There is deliberately no Continue, no Override and no Operator Access
- * button. The operator code authorizes a person at a browser; it cannot make
- * two desks owning the same physical badge numbers safe, so offering it would
- * be offering the wrong instrument for the actual problem.
+ * There is deliberately no Continue, no Override and no credential of any
+ * kind — since Phase D2 there is not even one to offer. Two desks holding the
+ * same physical badge numbers is not a problem an identity can solve, so the
+ * only way out is a human reconciling the ledger.
  */
 const BadgeOwnershipBlock: React.FC<BadgeOwnershipBlockProps> = ({
   conflict,
   central,
   local,
-}) => (
+}) => SETUP_REQUIRED.includes(conflict) ? (
+  <Card>
+    <CardContent className="space-y-4">
+      <p className="flex items-center gap-2 font-heading text-xl font-semibold">
+        <MonitorSmartphone className="size-5 text-muted-foreground" />
+        Badge setup required
+      </p>
+
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        The central Device is verified, but this browser has not adopted its
+        assigned badge range
+        {central === null
+          ? ''
+          : ` (${formatBadgeRange(central.rangeStart, central.rangeEnd)})`}
+        . Confirm the physical badges are at this desk and adopt the range at
+        Device Sign-In.
+      </p>
+
+      <Link
+        href={ROUTES.deviceLogin}
+        className={buttonVariants({ className: 'h-12 w-full sm:w-auto sm:min-w-52' })}
+      >
+        Open Device Sign-In
+      </Link>
+    </CardContent>
+  </Card>
+) : (
   <Card>
     <CardContent className="space-y-5">
       <p className="flex items-center gap-2 font-heading text-xl font-semibold text-destructive">
@@ -97,9 +133,9 @@ const BadgeOwnershipBlock: React.FC<BadgeOwnershipBlockProps> = ({
       </p>
 
       <p className="text-sm leading-relaxed text-muted-foreground">
-        This cannot be unlocked with an operator code. Two desks holding the
-        same physical badge numbers would hand the same badge to two people,
-        and no credential changes that.
+        There is no override for this. Two desks holding the same physical
+        badge numbers would hand the same badge to two people, and no
+        credential or sign-in changes that.
       </p>
 
       <div>

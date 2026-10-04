@@ -2,30 +2,24 @@ import type * as React from 'react'
 
 import SyncManager from '@/components/sync-manager'
 import { useDeviceEventAuthorization } from '@/device-auth/device-event-authorization-context'
-import { useOperatorAccess } from '@/hooks/use-operator-access'
 
 /**
- * SyncManager, mounted once the desk has SOME event access.
+ * SyncManager, mounted once the desk holds device event authority.
  *
  * Still app-global: one instance, outside the page routes, so a pending
- * outbox row keeps draining while the operator moves between modules. The
- * condition only reproduces what the shell already did — Operator Access
- * previously wrapped the whole subtree, so a locked browser never ran the
- * processor either.
+ * outbox row keeps draining while the operator moves between modules.
  *
- * `expired` still syncs. The rows are parked on an attention hold rather than
- * lost, and an unlock releases them; that behaviour predates this phase.
+ * An OFFLINE grant mounts it too, and that is deliberate. The processor
+ * already declines to send anything while the browser reports offline, and
+ * the moment connectivity returns the queue must drain without waiting for a
+ * session check to land first. The signed lease is never sent as server
+ * authorization — `/api/sync-registration` requires a live device cookie and
+ * will answer 401 without one, which is an ordinary retained-row failure.
  */
 const EventSyncManager: React.FC = () => {
-  const access = useOperatorAccess()
   const device = useDeviceEventAuthorization()
 
-  const hasAccess =
-    access.phase === 'unlocked' ||
-    access.phase === 'expired' ||
-    device.grant !== null
-
-  return hasAccess ? <SyncManager /> : null
+  return device.grant === null ? null : <SyncManager />
 }
 
 export default EventSyncManager

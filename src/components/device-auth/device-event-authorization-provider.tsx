@@ -82,7 +82,7 @@ const DeviceEventAuthorizationProvider: React.FC<
    * It is not a heartbeat and must never become one: it resolves LOCALLY, so
    * no request of any kind results from a lease running out. The lease is
    * never extended and nothing is retried — authority simply ends, and the
-   * gate falls back to Operator Access if that is unlocked.
+   * gate asks the desk to verify the device again.
    */
   const expiresAt = settled?.grant?.expiresAt
 

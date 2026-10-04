@@ -1,7 +1,7 @@
 /**
  * Server-only DEVICE authentication configuration.
  *
- * A third security realm, independent of Operator Access and Admin. The name
+ * A security realm independent of Admin. The name
  * must never be `VITE_` prefixed, and the value is never logged, returned or
  * exposed to browser code.
  *
@@ -42,9 +42,9 @@ export const DEVICE_AUTH_LOG_MESSAGES: Record<DeviceAuthDisabledReason, string> 
  * mean the value a human thinks they configured is not the value that signs
  * device sessions.
  *
- * It should be generated independently of `EVENT_SESSION_SECRET` and
- * `EVENT_ADMIN_SESSION_SECRET` — but realm isolation does NOT depend on that.
- * See the signing context in `session.ts`.
+ * It should be generated independently of `EVENT_ADMIN_SESSION_SECRET` — but
+ * realm isolation does NOT depend on that. See the signing context in
+ * `session.ts`.
  */
 export const readDeviceAuthEnvironment = (
   source: EnvironmentSource = process.env,

@@ -144,7 +144,8 @@ authentication: a disabled device or an inactive event cannot sign in and its
 existing sessions stop verifying, and a successful device login is the only
 thing that writes `last_seen_at`. See `docs/DEVICE_AUTH.md`.
 
-**The event application still runs on Operator Access.** A device session
+*Historical for that phase — Phase D2 made the device session the event
+application's only authority.* At the time, a device session
 unlocks none of its routes; that is Phase 9C-C.
 
 ### Attributes are text, not an enum

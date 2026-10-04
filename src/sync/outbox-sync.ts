@@ -8,7 +8,6 @@ import {
   type OutboxSnapshotRef,
 } from '@/db/outbox'
 import type { OutboxItem } from '@/db/types'
-import { reportOperatorSessionRejected } from '@/auth/operator-access-store'
 import {
   parseSyncRegistrationRequest,
   parseSyncRegistrationResponse,
@@ -133,9 +132,10 @@ const postSnapshot = async (
       body: JSON.stringify(request),
       cache: 'no-store',
       /**
-       * Explicit, because the operator session cookie is what authenticates
-       * this request. It changes nothing about the body or the exact-snapshot
-       * semantics — only that the cookie is attached.
+       * Explicit, because the central device session cookie is what
+       * authenticates this request. It changes nothing about the body or the
+       * exact-snapshot semantics — only that the cookie is attached. The
+       * signed offline lease is never sent and would not be accepted.
        */
       credentials: 'same-origin',
       signal: controller.signal,
@@ -397,15 +397,16 @@ const processSnapshot = async (
   await recordSnapshotFailure(ref, outcome.code, outcome.message)
 
   /**
-   * The row is KEPT — an auth failure means the server never looked at it. The
-   * UI switches to "operator access required" so the desk knows what to do,
+   * The row is KEPT — an auth failure means the server never looked at it,
    * and `unauthorized` being global stops the cycle rather than replaying the
    * same 401 for every queued row.
+   *
+   * Nothing is revoked from here. The device realm owns that decision and
+   * makes it from its own session check: a sync 401 can equally mean the
+   * device session simply lapsed while the desk kept working offline, and
+   * tearing down event authority on the strength of one queued POST would
+   * close a desk that is still perfectly authorized.
    */
-  if (outcome.code === 'unauthorized') {
-    reportOperatorSessionRejected()
-  }
-
   return isGlobalFailure(outcome.code) ? 'stop' : 'continue'
 }
 

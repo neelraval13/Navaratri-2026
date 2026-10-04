@@ -1,8 +1,9 @@
-import { ArrowRight, IdCard, MonitorSmartphone, Music, Trophy } from 'lucide-react'
+import { ArrowRight, IdCard, Music, Trophy } from 'lucide-react'
 import type * as React from 'react'
 import { Link } from 'wouter'
 
 import { ROUTES } from '@/app/routes'
+import DeviceReadiness from '@/components/device/device-readiness'
 import { Badge } from '@/components/ui/badge'
 import { isDeviceRegistered } from '@/db/device'
 import { useEventConfig } from '@/hooks/use-event-config'
@@ -88,11 +89,15 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
 /**
  * The module launcher.
  *
- * Any device line here is STATIC generic identity only. It shows whether the
- * hardware is registered, never whether it distributes badges, and never
- * `nextBadge`, remaining or the pending queue — Home holds its own
- * configuration instance and would show those stale. They live in Device
- * Readiness, which reads fresh.
+ * The device line here is STATIC generic identity only. It names the device,
+ * never whether it distributes badges, and never `nextBadge`, remaining or
+ * the pending queue — Home holds its own configuration instance and would
+ * show those stale. They live in Device Readiness, which reads fresh from
+ * IndexedDB every time it is opened.
+ *
+ * Since Phase D2 this page renders only for a browser whose identity IS the
+ * signed-in central device, so the identity is always present. It is still
+ * read defensively rather than asserted.
  */
 const HomePage: React.FC = () => {
   const eventConfig = useEventConfig()
@@ -115,26 +120,21 @@ const HomePage: React.FC = () => {
 
         {/*
           GENERIC device identity only. It deliberately says nothing about
-          badges: "registered" must never be read as "distributes badges",
-          because a prize or dandiya desk is registered and owns none.
+          badges: a prize or dandiya desk is a real central device and owns
+          none. Device Readiness sits beside it because retiring the old
+          device page left no other way to open the read-only diagnostics.
         */}
-        {eventConfig.status !== 'loaded' ? null : registered === null ? (
-          <p className="text-sm text-muted-foreground">
-            Device not registered ·{' '}
-            <Link
-              href={ROUTES.deviceRegistration}
-              className="text-primary underline-offset-4 hover:underline"
-            >
-              Register this device
-            </Link>
-          </p>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            <span className="font-medium text-foreground">
-              {registered.deviceName}
-            </span>
-            {' · Registered'}
-          </p>
+        {eventConfig.status !== 'loaded' || registered === null ? null : (
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {registered.deviceName}
+              </span>
+              {' · Central device'}
+            </p>
+
+            <DeviceReadiness />
+          </div>
         )}
       </div>
 
@@ -144,19 +144,6 @@ const HomePage: React.FC = () => {
           title="Badge Registration"
           description="Register attendees, manage holds, payment and badge issuance."
           href={ROUTES.badgeRegistration}
-        />
-
-        {/*
-          Two device routes, deliberately named for what they each do. Device
-          Registration is the transitional LOCAL badge-device setup this desk
-          already runs on; Device Sign-In is the CENTRAL identity, which
-          authorizes nothing here yet.
-        */}
-        <ModuleCard
-          icon={<MonitorSmartphone className="size-5" />}
-          title="Device Registration"
-          description="Configure this event device locally and verify operational readiness."
-          href={ROUTES.deviceRegistration}
         />
 
         <ModuleCard
@@ -173,8 +160,8 @@ const HomePage: React.FC = () => {
       </div>
 
       {/* Deliberately subtle links, not module cards: neither is an event
-          operation. Admin is a control plane, and Device Sign-In identifies
-          this browser centrally without unlocking anything here. */}
+          operation. Admin is a control plane, and Device Sign-In is where
+          this browser's central identity, badge range and sign-out live. */}
       <p className="flex flex-wrap gap-4 text-xs text-muted-foreground">
         <Link
           href={ROUTES.deviceLogin}

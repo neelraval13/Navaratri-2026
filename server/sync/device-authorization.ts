@@ -6,12 +6,8 @@ import { isDatabaseConfigured } from '../db/client.js'
 import { BADGE_RANGE_REQUIRED_ATTRIBUTE } from '../../src/shared/device-attributes.js'
 
 /**
- * The ALTERNATIVE authorization for `/api/sync-registration`: a live central
- * device session.
- *
- * It exists because a device that opens `/badge-registration` on its own
- * authority must also be able to drain its outbox, without a human typing the
- * legacy operator code at every desk.
+ * THE authorization for `/api/sync-registration`: a live central device
+ * session. Since Phase D2 there is no other.
  *
  * ONLINE ONLY, AND LIVE. The signed offline lease is never sent and would
  * never be accepted here: it is local authorization, and the server has no

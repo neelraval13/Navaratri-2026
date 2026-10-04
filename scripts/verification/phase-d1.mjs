@@ -379,18 +379,34 @@ const authorize = (config, grant) => authz.authorizeEventModule('registration', 
   grant, config, enrollment: config.centralDeviceEnrollment,
 })
 const liveGrant = authz.grantFromDeviceSession(context())
-check('34. a LEGACY unconverged browser still authorizes registration',
-  authorize(LEGACY, liveGrant), { outcome: 'authorized', source: 'device-online' })
-check('  and a CONVERGED one does too',
+/**
+ * PHASE D2 RE-SCOPE. D1 was deliberately backward compatible: a legacy
+ * unconverged browser still authorized. D2 made convergence MANDATORY, so
+ * the same two cases now have opposite answers — and that difference is
+ * exactly what D1's migration exists to close.
+ */
+check('34. a LEGACY unconverged browser is now refused, and told to converge',
+  authorize(LEGACY, liveGrant),
+  { outcome: 'unavailable', gap: 'identity-convergence-required' })
+check('  and a CONVERGED one authorizes',
   authorize({ ...LEGACY, deviceId: CENTRAL_B, deviceName: 'Claim Test Desk 2' }, liveGrant),
   { outcome: 'authorized', source: 'device-online' })
 check('35. identity equality ALONE grants nothing without a live grant',
   authorize({ ...LEGACY, deviceId: CENTRAL_B, deviceName: 'Claim Test Desk 2' }, null),
   { outcome: 'unavailable', gap: 'no-grant' })
-check('  the authorization domain never compares local identity to central',
-  /config\.deviceId === |deviceId === config\.deviceId|isConverged/
-    .test(stripComments(read('src/device-auth/event-authorization.ts'))), false)
-check('  it still only requires a VALID local identity',
+/**
+ * The comparison exists now, but it is a REQUIREMENT, never a credential:
+ * one function, which cannot be called without a grant and can only ever
+ * return a gap.
+ */
+const authDomain = stripComments(read('src/device-auth/event-authorization.ts'))
+check('  identity is compared in exactly one place',
+  (authDomain.match(/config\.deviceId === /g) ?? []).length, 1)
+check('    and that place can only ever return a gap',
+  [/checkConvergedDeviceIdentity = \(\s*grant: DeviceOperationalGrant,/.test(authDomain),
+   /IdentityConsistencyGap \| null/.test(authDomain),
+   /isConverged/.test(authDomain)], [true, true, false])
+check('  it still also requires a VALID local identity',
   /isDeviceRegistered\(config\)/.test(read('src/device-auth/event-authorization.ts')), true)
 
 console.log('\n=== 2, 45. ONLINE ONLY, AGAINST A FRESH CONTEXT ===')
@@ -430,11 +446,12 @@ const identityWriters = walk(join(root, 'src'))
     return literals.some((match) => /^\s{4,}deviceId:/m.test(match[1]))
   })
   .map((file) => file.replace(`${root}/src/`, '')).sort()
-check('exactly two modules write a device identity',
-  identityWriters, ['db/device-identity-convergence.ts', 'db/device.ts'])
-check('  the Phase 7 writer is unchanged and still the only uuid minter',
-  [/crypto\.randomUUID\(\)/.test(read('src/db/device.ts')),
-   /registerDevice/.test(read('src/db/device.ts'))], [true, true])
+// Phase D2 deleted `registerDevice`, leaving convergence as the only writer.
+check('exactly one module writes a device identity',
+  identityWriters, ['db/device-identity-convergence.ts'])
+check('  and nothing mints a device id locally any more',
+  [/deviceId:\s*crypto\.randomUUID\(\)/.test(read('src/db/device.ts')),
+   /registerDevice/.test(stripComments(read('src/db/device.ts')))], [false, false])
 check('  and no React component writes an identity',
   walk(join(root, 'src/components')).concat(walk(join(root, 'src/pages')))
     .filter((file) => /db\.config\.(put|add)/.test(stripComments(readFileSync(file, 'utf8'))))
@@ -459,18 +476,21 @@ check('  a conflict offers no override',
   /Continue anyway|Override|Force|Operator Access/i
     .test(stripComments(identityUi).replace(/cannot be unlocked with an operator code/i, '')),
   false)
-check('27, 37. /device-registration is still Operator-only',
-  [/ROUTES\.deviceRegistration[\s\S]{0,160}<OperatorAccessGate>/
+/**
+ * D1 kept `/device-registration` as an Operator-only legacy page. D2 retired
+ * it: convergence became the only setup path, so the page that offered a
+ * second one had to go rather than sit there contradicting it.
+ */
+check('27, 37. /device-registration is a redirect, with no page behind it',
+  [/ROUTES\.deviceRegistration\}> <Redirect to=\{ROUTES\.deviceLogin\} \/>/
      .test(stripComments(read('src/components/app-router.tsx')).replace(/\s+/g, ' ')),
-   /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
-     .test(stripComments(read('src/components/app-router.tsx')))], [true, false])
-check('  it carries the legacy transition copy',
-  /Legacy local device setup/.test(read('src/pages/device-registration-page.tsx')), true)
-check('  and offers no local registration once converged',
-  /managed by central Device Sign-In/.test(read('src/pages/device-registration-page.tsx')), true)
-check('36. Operator Access is untouched',
+   existsSync(join(root, 'src/pages/device-registration-page.tsx'))], [true, false])
+check('  the convergence action is the only setup path offered',
+  [/Set Up This Device/.test(identityUi), /Converge Device Identity/.test(identityUi)],
+  [true, true])
+check('36. Operator Access is gone',
   ['operator-login', 'operator-logout', 'operator-session']
-    .every((name) => existsSync(join(root, 'api', `${name}.ts`))), true)
+    .some((name) => existsSync(join(root, 'api', `${name}.ts`))), false)
 check('6, 38. no new EventConfig identity field was added',
   /centralDeviceId|effectiveDeviceId|canonicalDeviceId|legacyDeviceId/
     .test(read('src/db/types.ts')), false)
@@ -494,9 +514,10 @@ check('40. nextBadge is still local only',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-check('46. the Function inventory is unchanged at eleven', budget.actual.length, 11)
-check('  with one slot of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
+// D1 added no Function; Phase D2 removed the three Operator ones.
+check('46. the Function inventory is eight', budget.actual.length, 8)
+check('  with four slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 52. DOCUMENTATION ===')

@@ -54,30 +54,31 @@ meant to be client-visible.
 | 3.2 | `SYNC_ALLOWED_ORIGIN` is set to the exact canonical production origin | ☐ |
 | 3.3 | You have acknowledged that Origin restriction is **not** authentication | ☐ |
 
-First-party **Operator Access** is the application's own authentication and is
-the production API auth boundary. Vercel Authentication stays enabled in front
-of it until operator access is proven on a real deployment, then is disabled
-manually.
+**Phase D2 retired Operator Access.** The central DEVICE session is the
+application's own authentication and the production API auth boundary. Vercel
+Authentication stays enabled in front of it until device access is proven on a
+real deployment, then is disabled manually.
 
 | # | Step | Pass |
 |---|---|---|
-| 3.4 | `EVENT_OPERATOR_ACCESS_CODE` set, 12+ chars, a strong passphrase not a PIN | ☐ |
-| 3.5 | `EVENT_SESSION_SECRET` set, 32+ chars, unique to production | ☐ |
-| 3.6 | Unlock verified on a real device; `/api/sync-registration` returns `unauthorized` without a session | ☐ |
-
-| 3.7 | Operator-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
-| 3.8 | `EVENT_ADMIN_ACCESS_CODE` set (8 char minimum; use a longer passphrase), distinct from the operator code | ☐ |
-| 3.9 | `EVENT_ADMIN_SESSION_SECRET` set, 32+ chars, and a different value from `EVENT_SESSION_SECRET` (recommended; isolation is enforced cryptographically regardless) | ☐ |
+| 3.4 | `EVENT_OPERATOR_ACCESS_CODE` **deleted** from Production, Preview and Development — nothing reads it | ☐ |
+| 3.5 | `EVENT_SESSION_SECRET` **deleted** from all three environments — nothing reads it | ☐ |
+| 3.6 | `/api/sync-registration` returns `unauthorized` without a device session, verified on the deployment | ☐ |
+| 3.6a | `/api/operator-login`, `/api/operator-session` and `/api/operator-logout` all 404 on the deployment | ☐ |
+| 3.7 | Device and Admin sign-in rate limits configured per `docs/VERCEL_FIREWALL.md`; any surviving operator-login rule deleted | ☐ |
+| 3.8 | `EVENT_ADMIN_ACCESS_CODE` set (8 char minimum; use a longer passphrase) | ☐ |
+| 3.9 | `EVENT_ADMIN_SESSION_SECRET` set, 32+ chars, and a different value from `EVENT_DEVICE_SESSION_SECRET` (recommended; isolation is enforced cryptographically regardless) | ☐ |
 | 3.10 | Admin-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
-| 3.11 | `/admin` verified to require its own sign-in, and an operator session does not reach it | ☐ |
+| 3.11 | `/admin` verified to require its own sign-in, and a device session does not reach it | ☐ |
 | 3.12 | `0002_device_credentials.sql` reviewed and applied to Development first, then Production, by hand | ☐ |
 | 3.13 | Device passwords recorded wherever the organizer keeps operational secrets — they are never shown again | ☐ |
 | 3.14 | No device password provisioned on a shared or reused passphrase | ☐ |
 | 3.15 | `EVENT_DEVICE_SESSION_SECRET` set, 32+ chars, generated independently of the other two secrets | ☐ |
 | 3.16 | Device-login rate limit configured per `docs/VERCEL_FIREWALL.md`, **with the venue's NAT checked** | ☐ |
-| 3.17 | All three realms verified apart on the deployment: a device cookie reaches no Admin or operator API, and neither reaches `GET /api/device-auth` | ☐ |
+| 3.17 | Both realms verified apart on the deployment: a device cookie reaches no Admin API, and an Admin cookie reaches no device API | ☐ |
 
-Rotating `EVENT_SESSION_SECRET` revokes every issued session immediately.
+Rotating `EVENT_DEVICE_SESSION_SECRET` revokes every issued device session
+immediately. There is no session store to clear.
 
 ### Build parity
 
@@ -106,10 +107,10 @@ make the error disappear.
 
 ### Device credentials (Phase 9C-A)
 
-Provisioning a device password **stores a credential; it does not enable a
-device login**. There is no device login endpoint, session or cookie yet, so
-nothing about the deployment's auth boundary changes: Operator Access is still
-the production API boundary and `/admin` is still its own realm.
+*Historical: at 9C-A, provisioning a device password stored a credential and
+enabled nothing — there was no device login endpoint, session or cookie yet.
+Since Phase 9C-B it is a working credential, and since Phase D2 it is the
+ONLY way a desk gets event access.*
 
 `password_hash = NULL` means *not provisioned*, never *passwordless*. A
 password is never displayed after it is set and cannot be recovered — only
@@ -118,26 +119,22 @@ browser it is logged into**.
 
 ### Device authentication (Phase 9C-B)
 
-The device realm exists and works, but **the event application does not use
-it**: `/`, `/badge-registration` and `/device-registration` still sit behind
-Operator Access, and a device session unlocks none of them. Enabling
-`EVENT_DEVICE_SESSION_SECRET` in Production therefore changes nothing an
-operator sees — it only makes `POST /api/device-auth` functional.
+*Historical: at 9C-B the device realm existed but the event application did
+not use it.*
 
-Leaving it unset is a valid Production posture for this phase: device
-authentication simply reports itself unavailable, and everything else runs
-unchanged.
+Since Phase D2 it is the production auth boundary.
+**`EVENT_DEVICE_SESSION_SECRET` is now REQUIRED in Production** — leaving it
+unset means no desk can sign in and no desk can work.
 
 Rotating it invalidates every device session at once. Per-device revocation is
 an Admin password reset or disabling the device.
 
 ### Device sign-in UI (Phase 9C-C1)
 
-`/device-login` exists and works, and still **authorizes nothing**. It records
-a safe central-identity snapshot on this browser's config row; it does not
-import a badge range, does not touch the local device identity, and does not
-gate any event route. Operator Access remains the only thing standing in front
-of `/`, `/badge-registration` and `/device-registration`.
+*Historical: at 9C-C1, `/device-login` recorded a central-identity snapshot
+and authorized nothing. Since Phase D2 signing in here is what opens the
+event application, and Set Up This Device is what gives this browser its
+identity.*
 
 | # | Step | Pass |
 |---|---|---|
@@ -147,9 +144,11 @@ of `/`, `/badge-registration` and `/device-registration`.
 | 3.21 | Each desk's central badge range adopted at `/device-login`, with the physical badge stack verified at that desk | ☐ |
 | 3.22 | Any desk showing a range conflict reconciled BEFORE the event — adoption is blocked, so that desk cannot issue | ☐ |
 
-Adoption is per-browser and explicit: a central assignment does not start local
-issuance. Central revocation also cannot yet stop an operator-gated or offline
-desk, so a desk that must stop issuing has to be stopped physically.
+Adoption is per-browser and explicit: a central assignment does not start
+local issuance. Since Phase D2, central revocation closes an ONLINE desk at
+its next session check — but an OFFLINE desk keeps working until its signed
+lease expires, so a desk that must stop issuing immediately still has to be
+stopped physically.
 
 The third is the one to take seriously: binding a browser to the wrong central
 device succeeds, because it is the first binding. Later phases make badge
@@ -173,9 +172,11 @@ badge stack actually standing at that desk, which no software can verify.
 
 ### Offline device authorization (Phase 9C-C3A)
 
-The signed lease is **foundation only** in this phase: it is issued, verified
-and displayed, and it unlocks nothing. Event routes still answer to Operator
-Access, so these steps prepare the ground rather than gate the event.
+*Historical: at 9C-C3A the signed lease was foundation only.*
+
+Since Phase D2 the lease is the ONLY thing that keeps an offline desk
+working, so **these steps are no longer preparatory — an unconfigured signing
+key means every desk stops the moment the venue's internet does.**
 
 | # | Step | Pass |
 |---|---|---|
@@ -191,38 +192,38 @@ the page reports offline authorization unavailable, and nothing fails open.
 **Phase 9C-C3B is required before a device lease can unlock event
 operations,** and it must not be switched on until these are configured.
 
-### Device-authorized event operations (Phase 9C-C3B)
+### Device-authorized event operations (Phase 9C-C3B, D2)
 
-A centrally enrolled device can now open `/` and `/badge-registration` without
-the operator code, online or from a verified offline lease.
-`/device-registration` still requires Operator Access, and Operator Access
-remains the fallback everywhere else until Phase D.
+A centrally enrolled, CONVERGED device opens `/` and `/badge-registration` on
+its own authority, online or from a verified offline lease. Since Phase D2
+there is nothing else that opens them.
 
 | # | Step | Pass |
 |---|---|---|
-| 3.35 | With Operator Access **locked**, each desk opens `/badge-registration` and the banner reads *Device access · Verified online* | ☐ |
+| 3.35 | Each desk opens `/badge-registration` and the banner reads *Device access · Verified online* | ☐ |
 | 3.36 | With the network disabled, the same desk still opens it and the banner reads *Offline device access* with a sensible *valid until* — never "Authenticated" | ☐ |
 | 3.37 | A badge issued offline advances `nextBadge` locally and queues in the outbox with no device-auth request | ☐ |
-| 3.38 | On reconnect, one device revalidation happens and the outbox drains **without** anyone entering the operator code | ☐ |
-| 3.39 | Removing `registration` centrally, then reconnecting, removes device registration access and offers the operator fallback | ☐ |
-| 3.40 | Disabling a device centrally, then reconnecting, clears its lease and its authority | ☐ |
-| 3.41 | A desk whose local range disagrees with its central assignment **hard-blocks** with no override — verified with Operator Access unlocked | ☐ |
-| 3.42 | A legacy browser with no central enrollment still works exactly as before on Operator Access | ☐ |
+| 3.38 | On reconnect, one device revalidation happens and the outbox drains with no further action | ☐ |
+| 3.39 | Removing `registration` centrally, then reconnecting, closes badge registration on that desk | ☐ |
+| 3.40 | Disabling a device centrally, then reconnecting, clears its lease and its authority — and NO fallback appears | ☐ |
+| 3.41 | A desk whose local range disagrees with its central assignment **hard-blocks** with no override | ☐ |
+| 3.42 | A browser with no device grant shows *Device access required* and a link to Device Sign-In, and nothing else | ☐ |
 
-**Operator Access is not removed in this phase.** Keep
-`EVENT_OPERATOR_ACCESS_CODE` and `EVENT_SESSION_SECRET` configured: they are
-still the fallback for every desk that is not centrally enrolled, and the only
-authority for `/device-registration`.
+Run 3.36-3.38 against the **deployment**, or against `pnpm build` +
+`pnpm preview` locally. `vercel dev` registers no service worker, so an
+offline reload there fails before any application code runs; and Preview
+serves no Vercel Functions, so the reconnect in 3.38 needs `vercel dev` on the
+same origin. `docs/DEVICE_AUTH.md` has the two-server procedure.
 
 Step 3.41 is the one to take seriously. It is the only case a credential
-cannot resolve, and it is the case that protects two attendees from receiving
-the same badge.
+could never have resolved, and it is the case that protects two attendees
+from receiving the same badge.
 
 ### Device identity convergence (Phase D1)
 
-A browser may converge its local device identity onto the central one. It is
-optional in D1 — unconverged desks keep working — but a converged desk is
-simpler to reason about, because only one identity exists.
+A browser converges its local device identity onto the central one. **Phase
+D2 made this mandatory**: an unconverged browser cannot open any event route,
+so every desk must be converged before the event.
 
 | # | Step | Pass |
 |---|---|---|
@@ -362,13 +363,13 @@ Point it at a **disposable development spreadsheet** only.
 | # | Step | Pass |
 |---|---|---|
 | 6.1 | Production app loaded on the event device **while online** | ☐ |
-| 6.1a | `/`, `/badge-registration` and `/device-registration` all open by direct URL | ☐ |
-| 6.1b | `/api/operator-session` still returns JSON, not the SPA shell | ☐ |
+| 6.1a | `/` and `/badge-registration` open by direct URL; `/device-registration` redirects to `/device-login` | ☐ |
+| 6.1b | `GET /api/device-auth` still returns JSON, not the SPA shell | ☐ |
 | 6.2 | Installed as a PWA | ☐ |
 | 6.3 | `await navigator.storage.persisted()` returns `true`, or the refusal is accepted | ☐ |
 | 6.3 | Provisioned per `docs/DEVICE_PROVISIONING.md`, against `docs/DEVICE_RANGE_PLAN.md` | ☐ |
-| 6.3a | Device **registered** at `/device-registration` | ☐ |
-| 6.3a1 | *Badge desks only:* badge range assigned at `/badge-registration` | ☐ |
+| 6.3a | Device signed in and **converged** at `/device-login` — Set Up This Device, or Converge Device Identity | ☐ |
+| 6.3a1 | *Badge desks only:* central badge range adopted at `/device-login`, with the physical stack confirmed | ☐ |
 | 6.3b | Its range does not overlap any other device's | ☐ |
 | 6.3c | The matching physical badge stack is at this device | ☐ |
 | 6.4 | `nextBadge` matches the first physical badge on the desk | ☐ |

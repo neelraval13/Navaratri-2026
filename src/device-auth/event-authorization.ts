@@ -12,6 +12,10 @@ import { CURRENT_EVENT_SLUG } from '@/shared/event'
  * Whether a centrally enrolled device may run an event module, and on what
  * authority.
  *
+ * SINCE PHASE D2 THIS IS THE ONLY EVENT AUTHORITY. There is no operator
+ * fallback: an `unavailable` verdict means the browser must go to Device
+ * Sign-In, not that some other credential may be offered instead.
+ *
  * PURE. No React, no database, no network — it is handed the facts and
  * returns a verdict, so every branch of a security decision is testable
  * without mounting anything.
@@ -22,8 +26,9 @@ import { CURRENT_EVENT_SLUG } from '@/shared/event'
  *   device-offline  the claims of a CRYPTOGRAPHICALLY VERIFIED C3A lease
  *
  * Nothing else may produce a grant. A cached enrollment, a `localStorage`
- * flag or the mere existence of a token are not authority — the first two are
- * unsigned and the third means nothing until its signature is checked.
+ * flag, a matching device id or the mere existence of a token are not
+ * authority — the first three are unsigned facts and the last means nothing
+ * until its signature is checked.
  */
 
 export type DeviceGrantSource = 'device-online' | 'device-offline'
@@ -93,24 +98,30 @@ export type EventModule = 'home' | 'registration'
 /**
  * Device authority is absent or insufficient, but nothing is WRONG.
  *
- * Operator Access remains available for these during the transition: they
- * describe who is asking, not whether the physical badges are safe.
+ * These describe who is asking and how far this browser has been set up, not
+ * whether the physical badges are safe. Since D2 removed the second realm
+ * none of them has a fallback: each one is answered by finishing setup at
+ * Device Sign-In, and the gate says which step is missing.
  */
 export type DeviceAuthorizationGap =
   | 'no-grant'
   | 'event-mismatch'
   | 'storage-unavailable'
   | 'no-enrollment'
-  | 'local-device-not-registered'
+  /** No usable local identity at all — a browser that was never set up. */
+  | 'missing-local-identity'
+  /** A legacy local identity that is not this central device's. */
+  | 'identity-convergence-required'
   | 'not-permitted'
   | 'no-central-range'
 
 /**
- * BADGE UNIQUENESS is at risk. These must NEVER fall back to Operator Access.
+ * BADGE UNIQUENESS is at risk, or this browser disagrees with central about
+ * which device it is.
  *
- * The operator code authorizes a person at a browser. It cannot make two
- * desks owning the same physical badge numbers safe, so a credential is the
- * wrong instrument entirely — these need a human to reconcile the ledger.
+ * These are never softened and nothing overrides them. No credential can make
+ * two desks owning the same physical badge numbers safe, so they need a human
+ * to reconcile the ledger rather than another way in.
  */
 export type BadgeSafetyConflict =
   | 'enrollment-device-mismatch'
@@ -133,7 +144,7 @@ export interface AuthorizationFacts {
 
 export type ModuleAuthorization =
   | { outcome: 'authorized'; source: DeviceGrantSource }
-  /** Operator Access may still be offered. */
+  /** Not authorized. The answer is Device Sign-In, never another credential. */
   | { outcome: 'unavailable'; gap: DeviceAuthorizationGap }
   /** HARD. No credential overrides it. */
   | {
@@ -155,7 +166,7 @@ const sameRange = (
  * worth checking: if a signed grant says device B while this browser is
  * enrolled as device A, something is wrong that nobody has noticed, and
  * guessing which one is right is how a desk ends up operating as the wrong
- * device. It fails closed and sends the operator to `/device-login`.
+ * device. It fails closed and sends the person to Device Sign-In.
  */
 export const checkEnrollment = (
   grant: DeviceOperationalGrant,
@@ -203,9 +214,11 @@ export const checkBadgeOwnership = (
      * reconciled before this browser issues anything.
      *
      * A local range WITHOUT a binding is the ordinary legacy Phase 7 desk: it
-     * was never centrally assigned, so there is nothing to disagree with. It
-     * simply has no device authority for registration and keeps using
-     * Operator Access exactly as before.
+     * was never centrally assigned, so there is nothing to disagree with —
+     * there is simply no central assignment behind it. Since D2 that desk
+     * cannot register at all: `no-central-range` below sends it to Device
+     * Sign-In to claim or adopt one, rather than reporting a conflict it does
+     * not have.
      */
     return binding === undefined ? null : 'central-range-missing'
   }
@@ -268,6 +281,42 @@ export const hasLocalBadgeOwnership = (config: EventConfig): boolean => {
   return config.badgeEnd !== undefined || config.centralBadgeRangeBinding !== undefined
 }
 
+/**
+ * Is this browser's own stored identity the identity of the device that is
+ * presenting authority?
+ *
+ * ONE definition, used by every module, so the rule cannot drift between
+ * pages. It is a CONSISTENCY check, never a credential: it is only ever
+ * reached with a grant already in hand, and returning `null` here authorizes
+ * nothing on its own. A browser whose `deviceId` happens to equal a central
+ * UUID still needs a live session or a verified signed lease.
+ *
+ * Why it must pass at all: every registration this browser writes is stamped
+ * with `config.deviceId`. If that is a legacy local UUID while the authority
+ * came from a central device, the ledger records work under an identity the
+ * central registry has never heard of, and a revoked device's rows would be
+ * indistinguishable from anyone else's.
+ *
+ * It MUTATES NOTHING. Converging is Phase D1's explicit, online action; this
+ * only reports that it has not happened yet.
+ */
+export type IdentityConsistencyGap =
+  | 'missing-local-identity'
+  | 'identity-convergence-required'
+
+export const checkConvergedDeviceIdentity = (
+  grant: DeviceOperationalGrant,
+  config: EventConfig | undefined,
+): IdentityConsistencyGap | null => {
+  if (config === undefined || !isDeviceRegistered(config)) {
+    return 'missing-local-identity'
+  }
+
+  // The NAME is editable Admin metadata and is deliberately not compared. The
+  // UUID is the identity; a rename is not a different device.
+  return config.deviceId === grant.deviceId ? null : 'identity-convergence-required'
+}
+
 const localRangeOf = (
   config: EventConfig | undefined,
 ): { rangeStart: number; rangeEnd: number } | null => {
@@ -279,11 +328,23 @@ const localRangeOf = (
 /**
  * May this grant run this module?
  *
- * ORDER MATTERS. The badge-safety checks run BEFORE the permission check, so
- * a browser whose local badge state disagrees with central is blocked even
- * when the device could not have registered anyway — the conflict is about
- * the physical badges on the table, not about who is holding the tablet, and
- * Operator Access must not be able to open that desk.
+ * ORDER MATTERS, and each step answers a different question:
+ *
+ *   1. is there authority at all, and for THIS event
+ *   2. does the central enrollment agree with it          (blocked on conflict)
+ *   3. has this browser been bound to a central device
+ *   4. is this browser's own identity that device's       (D2 convergence)
+ *   5. do central and local badge ownership agree         (blocked on conflict)
+ *   6. does the device have the module's permission
+ *
+ * The badge-safety checks run BEFORE the permission check, so a browser whose
+ * local badge state disagrees with central is blocked even when the device
+ * could not have registered anyway — the conflict is about the physical
+ * badges on the table, not about who is holding the tablet.
+ *
+ * SINCE D2 nothing here has a fallback. `unavailable` means "finish setting
+ * this browser up at Device Sign-In", and `blocked` means "a human must
+ * reconcile the ledger". Neither is answered by a credential.
  */
 export const authorizeEventModule = (
   module: EventModule,
@@ -320,6 +381,21 @@ export const authorizeEventModule = (
     return { outcome: 'unavailable', gap: 'no-enrollment' }
   }
 
+  if (config === undefined) {
+    return { outcome: 'unavailable', gap: 'storage-unavailable' }
+  }
+
+  /**
+   * EVERY module, including Home. A browser still carrying a legacy local
+   * identity would stamp that identity onto anything it produced, so it is
+   * sent to converge rather than opened on the strength of the grant alone.
+   */
+  const identityGap = checkConvergedDeviceIdentity(grant, config)
+
+  if (identityGap !== null) {
+    return { outcome: 'unavailable', gap: identityGap }
+  }
+
   if (module === 'home') {
     /**
      * The launcher needs no badge range. A prizes-only desk must be able to
@@ -329,24 +405,6 @@ export const authorizeEventModule = (
     return grant.attributes.length > 0
       ? { outcome: 'authorized', source: grant.source }
       : { outcome: 'unavailable', gap: 'not-permitted' }
-  }
-
-  if (config === undefined) {
-    return { outcome: 'unavailable', gap: 'storage-unavailable' }
-  }
-
-  /**
-   * Transitional until Phase D: registrations are still stamped with this
-   * browser's own Phase 7 identity, so it must exist.
-   *
-   * Checked BEFORE badge ownership on purpose. Without it the allocator
-   * invariant below reports an incoherent RANGE, which is both misleading
-   * and the wrong severity — a browser that was never set up locally cannot
-   * issue anything at all, so it is an ordinary fallback rather than a badge
-   * conflict needing reconciliation.
-   */
-  if (!isDeviceRegistered(config)) {
-    return { outcome: 'unavailable', gap: 'local-device-not-registered' }
   }
 
   const conflict = checkBadgeOwnership(grant, config)

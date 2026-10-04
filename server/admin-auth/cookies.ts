@@ -1,10 +1,10 @@
 import { ADMIN_SESSION_TTL_SECONDS } from './session.js'
 
 /**
- * A DIFFERENT cookie from the operator session, deliberately.
+ * A DIFFERENT cookie from the device session, deliberately.
  *
  * An authenticated event device must never be an Admin, and an Admin must
- * never inherit operator access. Separate names mean neither realm can be
+ * never inherit event access. Separate names mean neither realm can be
  * satisfied by the other's credential.
  *
  * The `__Host-` prefix is browser-enforced: it refuses the cookie unless it is

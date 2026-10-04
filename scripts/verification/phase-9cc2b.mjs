@@ -1182,16 +1182,16 @@ check('  and the claim is one deliberate action, not two',
 console.log('\n=== 46-51. BOUNDARIES ===')
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-check('46. the Function inventory is exactly eleven', budget.actual.length, 11)
-check('  with one slot of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
-check('  the new entry is device-badge-claim',
+// Phase D2 deleted the three Operator Functions; C2B's own entry remains.
+check('46. the Function inventory is exactly eight', budget.actual.length, 8)
+check('  with four slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+check('  the C2B entry is still device-badge-claim',
   budget.actual.includes('device-badge-claim'), true)
-check('  every existing Function remains',
+check('  and every Function that should remain does',
   budget.actual, [
     'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-    'admin-events', 'device-auth', 'device-badge-claim', 'operator-login',
-    'operator-logout', 'operator-session', 'sync-registration',
+    'admin-events', 'device-auth', 'device-badge-claim', 'sync-registration',
   ])
 check('  and nothing unexpected', budget.problems, [])
 check('  no helper was placed under api/',
@@ -1244,17 +1244,21 @@ check('  sign-out and clear still keep badge state',
   /clearCentralBadgeRange|centralBadgeRangeBinding:\s*undefined|badgeStart:/.test(panelSource), false)
 
 console.log('  -- 49, 50. the event app is untouched --')
-// 9C-C3B moved Operator Access from the shell to the routes; it remains the
-// fallback everywhere, and the sole authority for /device-registration.
-check('49. Operator Access still gates event routes',
+/**
+ * Phase D2 removed Operator Access. C2B still touched no route policy of its
+ * own, which is what this section is for — so the statement became the
+ * policy that replaced it.
+ */
+check('49. every event route is gated by the device alone',
   [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
    /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
-     .test(stripComments(read('src/components/app-router.tsx')))], [true, false])
-check('  the operator realm is still its own three Functions',
+     .test(stripComments(read('src/components/app-router.tsx')))], [false, false])
+check('  the operator realm is gone, not merely unused',
   ['operator-login', 'operator-logout', 'operator-session']
-    .every((name) => budget.actual.includes(name)), true)
-check('50. /device-registration still exists',
-  existsSync(join(root, 'src/pages/device-registration-page.tsx')), true)
+    .some((name) => budget.actual.includes(name)), false)
+check('50. /device-registration is retired, and C2B added no page of its own',
+  [existsSync(join(root, 'src/pages/device-registration-page.tsx')),
+   existsSync(join(root, 'src/pages/device-login-page.tsx'))], [false, true])
 check('  and local identity is never replaced by a central one',
   /deviceId:\s*context\.device\.id|deviceName:\s*context\.device\.name/
     .test(stripComments(read('src/db/central-badge-range.ts')

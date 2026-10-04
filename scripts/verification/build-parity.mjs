@@ -254,7 +254,7 @@ console.log(`  ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_
 
 check('the deployment stays within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  at exactly eleven Functions', budget.actual.length, 11)
+check('  at exactly eight Functions', budget.actual.length, 8)
 check('  with no unexpected entrypoint', budget.problems, [])
 check('the six consolidated Functions are GONE, not wrappers',
   ['admin-login', 'admin-session', 'admin-logout',
@@ -273,10 +273,12 @@ check('  and neither using a query action',
     /searchParams\.get\('action'\)|\baction\b\s*===/.test(stripComments(read(`api/${name}.ts`)))), [])
 check('the two realms remain separate Functions',
   existsSync(join(root, 'api/auth.ts')), false)
-check('Operator Access keeps its three Functions',
-  ['operator-login', 'operator-logout', 'operator-session']
-    .filter((name) => existsSync(join(root, 'api', `${name}.ts`))).sort(),
-  ['operator-login', 'operator-logout', 'operator-session'])
+// Phase D2 DELETED the operator realm rather than consolidating it. Three
+// Functions were freed, not folded into another entrypoint.
+check('Operator Access was removed, not merged into another Function',
+  [['operator-login', 'operator-logout', 'operator-session']
+     .filter((name) => existsSync(join(root, 'api', `${name}.ts`))),
+   existsSync(join(root, 'api/operator-auth.ts'))], [[], false])
 check('no api file is a helper rather than a Function',
   functionChecker.functionEntrypoints()
     .filter((file) => !/export (async )?function (GET|POST|PUT|PATCH|DELETE)\(/
@@ -373,9 +375,10 @@ check('  and still carries no badge range or credential',
   false)
 check('no device gate was added to the event routes',
   /Device(Access|Session|Auth)Gate/.test(read('src/components/event-app-gate.tsx')), false)
-// 9C-C3B moved Operator Access from the shell to the routes; it remains.
-check('  and the event routes still use Operator Access',
-  /OperatorAccessGate/.test(read('src/components/app-router.tsx')), true)
+// Phase D2 made the device gate the only one; the operator gate is gone.
+check('  and the event routes use the device access gate alone',
+  [/OperatorAccessGate/.test(read('src/components/app-router.tsx')),
+   /<EventAccessGate module="/.test(read('src/components/app-router.tsx'))], [false, true])
 
 console.log(fails === 0 ? '\nALL CHECKS PASS' : `\n${fails} FAILURE(S)`)
 process.exit(fails === 0 ? 0 : 1)

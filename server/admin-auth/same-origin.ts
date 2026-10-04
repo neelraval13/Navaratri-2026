@@ -1,7 +1,7 @@
 /**
  * Exact same-origin check for the Admin endpoints.
  *
- * Its own copy rather than a shared helper: Operator Access is live in
+ * Its own copy rather than a shared helper: the other realm is live in
  * production, and a change made here must not be able to alter its behaviour.
  *
  * This is NOT authentication — any direct HTTP client can set an Origin

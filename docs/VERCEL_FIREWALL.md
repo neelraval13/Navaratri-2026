@@ -1,7 +1,12 @@
 # Vercel Firewall — Login Rate Limits
 
-`POST /api/operator-login` is the one public, unauthenticated endpoint in this
-application. It needs edge rate limiting.
+`POST /api/device-auth` and `POST /api/admin-auth` are the only public,
+unauthenticated endpoints in this application. Both need edge rate limiting.
+
+> **Phase D2 retired Operator Access.** `/api/operator-login`,
+> `/api/operator-session` and `/api/operator-logout` no longer exist. Any
+> firewall rule still naming one of those paths matches nothing and should be
+> deleted at the next review.
 
 > **This rule is NOT created by application code.** It must be configured
 > manually in the Vercel project firewall after deployment. Nothing in this
@@ -24,36 +29,6 @@ So:
 
 ---
 
-## The rule
-
-Configure in the Vercel Dashboard under the project's Firewall settings:
-
-| Setting | Value |
-|---|---|
-| **Condition — Path** | `/api/operator-login` |
-| **Condition — Method** | `POST` |
-| **Action** | Rate Limit |
-| **Key** | IP |
-| **Limit** | 10 |
-| **Window** | 60 seconds |
-| **Algorithm** | Fixed Window |
-| **On exceed** | Deny / rate-limit response |
-
-Ten attempts per minute per IP leaves an operator who fat-fingers the code
-plenty of room, while making online guessing against a 12+ character passphrase
-pointless.
-
-> **The final IP threshold must be confirmed once the expected device count and
-> the venue network topology are known.** Several event devices may sit behind
-> one NAT public address, in which case they share the limit — a venue with
-> many desks on one uplink needs a higher number than a single device would.
-> Do not weaken application authentication to compensate.
-
-A fixed window is sufficient here. The burst a sliding window would prevent is
-not a meaningful threat against a strong passphrase.
-
----
-
 ## Admin login
 
 `POST /api/admin-auth` is the second public, unauthenticated endpoint and
@@ -70,14 +45,15 @@ is far lower, so the limit is tighter:
 | **Window** | 60 seconds |
 | **Algorithm** | Fixed Window |
 
-Like the operator rule, this is **not created by application code** and must
+Like the device rule, this is **not created by application code** and must
 be configured manually in the Vercel Dashboard. Review it before production
 enablement. The client shows a generic *"Too many admin login attempts"*
 message on 429 and reveals no address, counter or code correctness.
 
 ## Device login
 
-`POST /api/device-auth` is the third public, unauthenticated endpoint.
+`POST /api/device-auth` is the event desk's only sign-in, and since Phase D2
+the only way any desk gets event authority at all.
 
 **The limit must be looser than it looks like it should be.** Several event
 devices normally share the venue's Wi-Fi and leave through **one NAT address**,
@@ -99,14 +75,18 @@ production, count the devices that will actually be at the venue and confirm
 whether they egress through a single address. A site with twenty desks
 provisioning on the morning of the event will exceed 30/minute legitimately.
 
-Like the other two, it is not created by application code and must be
+Like the Admin rule, it is not created by application code and must be
 configured manually in the Vercel Dashboard.
 
 Rate limiting is a smaller part of the protection here than it is for the
-operator or Admin endpoints: every device login path — unknown event, unknown
-login name, unprovisioned device, wrong password — pays for a full scrypt
-derivation, so guessing is inherently expensive and every failure looks
-identical. See `docs/DEVICE_AUTH.md`.
+Admin endpoint: every device login path — unknown event, unknown login name,
+unprovisioned device, wrong password — pays for a full scrypt derivation, so
+guessing is inherently expensive and every failure looks identical. See
+`docs/DEVICE_AUTH.md`.
+
+**A rate limit that locks out the venue is an outage, not a defence.** This is
+the endpoint an entire event depends on; set the threshold after counting the
+desks, not before.
 
 ### The method matters
 
@@ -128,15 +108,15 @@ That is an improvement on the previous shape: when login had its own path,
 the path was the whole condition and a mistake was invisible. Now the method
 is doing real work, so it must be set explicitly.
 
-## Scope: this endpoint only
+## Scope: these two POSTs only
 
 **Do not rate-limit:**
 
 | Endpoint | Why not |
 |---|---|
-| `/api/operator-session` | Called on startup, on focus and on reconnect by every device. Normal traffic looks bursty. |
-| `/api/operator-logout` | Rarely called, and blocking a logout is worse than allowing it. |
-| `/api/sync-registration` | Already requires a valid operator session, and a device returning from offline legitimately drains a queue in a burst. Rate-limiting it would stall recovery exactly when it matters. |
+| `GET /api/device-auth` | Called on startup and on reconnect by every device. Normal traffic looks bursty, and throttling it closes a desk that is still authorized. |
+| `DELETE /api/device-auth` | Rarely called, and blocking a sign-out is worse than allowing it. |
+| `/api/sync-registration` | Already requires a valid device session, and a device returning from offline legitimately drains a queue in a burst. Rate-limiting it would stall recovery exactly when it matters. |
 
 ---
 
@@ -163,28 +143,26 @@ behaviour.
 
 Every existing application protection stays exactly as it is:
 
-- exact access-code comparison, no trimming, no case folding
-- constant-time comparison over SHA-256 digests
-- fixed delay before a wrong-code response
-- same-origin requirement on login
-- `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Strict` cookie
-- 14-day session expiry
+- exact password and access-code comparison, no trimming, no case folding
+- scrypt verification for every device credential, including a failing one
+- a fixed timing-equalizer hash, so every device failure costs the same
+- constant-time digest comparison for the Admin code
+- same-origin requirement on every sign-in
+- `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Strict` cookies
+- `session_version` revocation, re-read from Postgres on every request
 - server-only secrets, never `VITE_` prefixed
-- generic invalid-code response
-- the access code is never logged and never persisted client-side
+- one generic 401 for every credential failure
 
-The firewall reduces attempt volume. The passphrase and the constant-time
-comparison are what actually protect the endpoint.
+The firewall reduces attempt volume. The credentials and the constant-cost
+comparisons are what actually protect the endpoints.
 
 ---
 
 ## Client behaviour on 429
 
-The unlock form treats a rate-limited response as its own case and shows:
-
-> Too many unlock attempts. Wait a moment and try again.
+Each sign-in form treats a rate-limited response as its own case and shows a
+generic wait message.
 
 It never renders the server's response text, and never reveals the caller's
-address, the remaining attempt count, or whether the submitted code was
-correct. A 401 still says the code is incorrect; any other unsuccessful status
-says *Unable to unlock. Try again.*
+address, the remaining attempt count, or whether the submitted credential was
+correct.

@@ -2,12 +2,17 @@
 
 How a central device proves its identity to this deployment.
 
-> ## The realm exists and has a UI. It does not yet run the event application.
+> ## Read the Phase D2 section at the end first.
 >
-> `/`, `/badge-registration` and `/device-registration` still sit behind
-> **Operator Access**, exactly as before. Holding a device session unlocks none
-> of them, and signing out of a device locks none of them. Connecting the two
-> is **Phase 9C-C2 / 9C-C3**.
+> **Operator Access was RETIRED in Phase D2.** The central device is the sole
+> event-operations authority, `/device-registration` is a redirect, and the
+> three `/api/operator-*` Functions were deleted.
+>
+> Everything between here and the Phase D2 section is the phase history that
+> built the realm, and several statements in it — about Operator Access
+> remaining, about `/device-registration`, about the Function count — were
+> **true when written and are not true now**. They are kept because the
+> reasoning still explains why the design is shaped as it is.
 
 ---
 
@@ -30,14 +35,16 @@ method have moved.
 
 ## Three independent realms
 
+*Historical — Phase D2 removed the Operator realm; two remain.*
+
 | Realm | Cookie | Unlocks |
 |---|---|---|
-| Operator | `__Host-navaratri_operator_session` | the event desk and `POST /api/sync-registration` |
+| Operator | `__Host-navaratri_operator_session` | **retired in D2 — read by nothing** |
 | Admin | `__Host-navaratri_admin_session` | `/admin` and the central registry APIs |
-| **Device** | `__Host-navaratri_device_session` | the device auth APIs |
+| **Device** | `__Host-navaratri_device_session` | the event application and `POST /api/sync-registration` |
 
-**None of them satisfies another.** A device session authorizes no Admin API
-and no operator API. An operator or Admin cookie authenticates no device.
+**None of them satisfies another.** A device session authorizes no Admin API,
+and an Admin cookie authenticates no device.
 
 Separation is **cryptographic**, not a configuration rule. Each realm signs a
 different message:
@@ -853,7 +860,7 @@ signature.
 A centrally enrolled device can now **open event modules on its own
 authority**, online or offline, without the shared operator code.
 
-Operator Access remains, as a transitional fallback. **Phase D** is what
+Operator Access remained, as a transitional fallback. **Phase D** is what
 removes it and converges the local identity; until then both exist, and a
 browser may legitimately be `claim-test-2` centrally and `claim-test-local-2`
 locally.
@@ -876,15 +883,18 @@ the cached lease.
 
 ### Route policy
 
+*Historical — see the Phase D2 table at the end for the current policy.*
+
 | Route | Authority |
 |---|---|
 | `/` | device grant **or** Operator Access |
 | `/badge-registration` | device Registration authority **or** Operator Access |
 | `/device-registration` | **Operator Access only** |
 
-The last is deliberate: that page rewrites this browser's transitional Phase 7
+The last was deliberate: that page rewrote this browser's transitional Phase 7
 identity — the very identity the lease's badge checks are measured against. A
-device lease must not unlock the thing it is measured by.
+device lease must not unlock the thing it is measured by. Phase D2 settled it
+by deleting the page.
 
 ### Registration needs more than permission
 
@@ -1065,19 +1075,191 @@ metadata. After a live verification, a converged browser refreshes its stored
 name to the current central one — name only, never `deviceConfiguredAt`, and
 only when it actually differs. Never from a lease or the cached enrollment.
 
-### Still true in D1
+### True in D1, and since superseded
 
-Operator Access remains, unchanged, as the fallback.
-`/device-registration` remains and remains **Operator-only**; it now carries
-transition copy, and a converged browser is told its identity comes from
-Device Sign-In instead of being offered another local registration.
-Unconverged legacy browsers keep working exactly as before — C3B authorizes
-both the transitional and the converged shape.
+D1 was deliberately backward compatible: Operator Access remained as the
+fallback, `/device-registration` remained Operator-only with transition copy,
+and unconverged legacy browsers kept working. **Phase D2 reversed all three.**
 
 **Identity equality grants nothing.** `config.deviceId === central device.id`
 is a consistency fact, not a credential: authority still comes only from a
-live session or a verified signed lease.
+live session or a verified signed lease. That has not changed, and D2
+deliberately kept it true while making the equality *required*.
 
-**Phase D2** is what makes convergence mandatory and retires the legacy
-system. No Postgres change, no migration, no Dexie change, no Sheet change,
-and the Function count is unchanged at 11 / 12.
+---
+
+# Phase D2 — Operator Access retired
+
+The **central device is the sole event-operations authority.** There is no
+second credential anywhere in the application or at the sync endpoint.
+
+## What was deleted
+
+| Deleted | Was |
+|---|---|
+| `api/operator-login.ts`, `api/operator-session.ts`, `api/operator-logout.ts` | three deployment Functions |
+| `server/auth/` | the access-code policy, the HMAC session, the cookie |
+| `src/auth/` | the access client, its store, the trusted-device marker |
+| `src/components/operator/` | the gate, the form, the banner, Lock Device |
+| `src/hooks/use-operator-access.ts` | the React binding |
+| `src/pages/device-registration-page.tsx` | the legacy local provisioning page |
+| `src/components/device/device-registration-form.tsx` | the random-UUID identity writer |
+| `registerDevice` in `src/db/device.ts` | the only caller of `crypto.randomUUID()` for a `deviceId` |
+
+`EVENT_OPERATOR_ACCESS_CODE` and `EVENT_SESSION_SECRET` are **obsolete**. No
+runtime code reads either; removing them from a deployment is housekeeping.
+
+The Function budget fell from **11 / 12 to 8 / 12, four slots of headroom** —
+by deletion, not consolidation. Those three names must never reappear.
+
+## Route policy after D2
+
+| Route | Authority |
+|---|---|
+| `/device-login` | public — the only sign-in and the only provisioning path |
+| `/admin` | Admin realm, unchanged and separate |
+| `/` | a device grant for this event, on a **converged** browser |
+| `/badge-registration` | the same, plus Registration and agreeing badge state |
+| `/device-registration` | **retired** — a redirect to `/device-login` |
+
+A grant still comes only from a LIVE session or a cryptographically VERIFIED
+offline lease.
+
+## Convergence is mandatory
+
+`config.deviceId` must equal the signed-in central device's UUID before any
+event module opens. A browser still carrying a legacy Phase 7 identity gets
+**Device setup required** and a link to Device Sign-In.
+
+It is never silently converged, never cleared, and keeps every registration,
+held record, outbox row, badge number and binding it holds. The actual
+migration remains D1's explicit, online, acknowledged action.
+
+The device **name** is deliberately not compared: it is editable Admin
+metadata, and a rename is not a different device.
+
+**Identity equality is a requirement, never authority.**
+`checkConvergedDeviceIdentity` takes the grant as its first argument, so it
+cannot be reached without one, and it can only ever return a gap or `null`.
+
+## Gaps versus conflicts
+
+An `unavailable` **gap** means this browser has not finished becoming an event
+device, and the answer is Device Sign-In: `no-grant`, `event-mismatch`,
+`storage-unavailable`, `no-enrollment`, `missing-local-identity`,
+`identity-convergence-required`, `not-permitted`, `no-central-range`.
+
+A `blocked` **conflict** means central and local disagree. No override, no
+Continue, no credential — a human reconciles the ledger.
+
+`binding-missing` is the one conflict shown as ordinary **Badge setup
+required** rather than a ledger problem: nothing is wrong, a range has simply
+never been adopted here. It still refuses, and adoption stays C2A's
+physically confirmed act.
+
+## Sync is device-only
+
+`/api/sync-registration` authorizes with a live device session and nothing
+else. `session_version`, `enabled`, the event's `active`, provisioned
+credentials, the current attributes and the current badge assignment are all
+re-read from Postgres on every request.
+
+**`payload.deviceId` is never compared to the authenticated device.** A row
+queued before convergence carries the old local id; requiring a match would
+strand exactly the rows the D1 migration creates. It is provenance, not a
+credential. The badge NUMBER is what must be owned.
+
+The signed offline lease is still never sent and accepted by nothing.
+
+## Inert leftovers
+
+An operator session cookie still in a browser, and the old
+`navaratri-2026.operator-device-unlocked.v1` localStorage marker, are both
+**inert**. Nothing reads either. No compatibility endpoint exists to clear
+them and none may be added.
+
+## What D2 did not change
+
+No Postgres migration, no Dexie version or store change, no Sheet contract
+change, no new Function, no new EventConfig field, and no change to the
+offline lease, the badge allocator or the outbox.
+
+## Testing device authorization locally
+
+**No local server does both halves of this.** Proving offline authorization
+and proving the reconnect need two different servers, and the procedure below
+exists because getting that wrong produces a convincing-looking failure that
+has nothing to do with the code under test.
+
+| Server | Service worker | Vercel Functions |
+|---|---|---|
+| `pnpm dev` | no — deliberately | no |
+| `vercel dev` | **no** | yes |
+| `pnpm preview` | **yes** — the real generated `sw.js` | **no** |
+
+`vercel dev` serves the built assets but does not register the generated
+production service worker. On that server:
+
+```js
+navigator.serviceWorker.controller   // null
+await navigator.serviceWorker.getRegistrations()   // []
+await caches.keys()                  // []
+```
+
+So setting DevTools → Network → **Offline** and reloading gets Chrome's
+network error page. The document never loads, so none of the offline
+authorization code runs. That is the server, not a regression — `pnpm build`
+still produces `dist/sw.js`, `dist/workbox-*.js` and 18 precache entries.
+
+### A. Offline shell and lease authorization — `pnpm preview`
+
+```bash
+pnpm build
+pnpm preview --host 0.0.0.0 --port 3001
+```
+
+1. Open `http://localhost:3001` **while online** and sign the device in.
+2. DevTools → Application → Service Workers: *activated and is running*.
+   Confirm `navigator.serviceWorker.controller` is `/sw.js` and Cache Storage
+   holds the Workbox precache.
+3. DevTools → Network → **Offline**.
+4. Reload `/`. It must open on the signed lease, with the amber
+   *Offline device access* banner.
+5. Reload `/badge-registration`. It must open if the badge range agrees.
+6. Issue one disposable badge and confirm `nextBadge` advances locally and the
+   row queues in the outbox, with **no** `/api/device-auth` request.
+
+Preview has **no Vercel Functions**, so stop here. Anything that needs a live
+`GET /api/device-auth` cannot be tested on it.
+
+### B. Reconnect and revocation — switch to `vercel dev`
+
+With the browser **still offline**, and without reloading:
+
+1. Stop `pnpm preview`.
+2. Start, on the **same origin and port**:
+   ```bash
+   env VERCEL_ENV=development pnpm dlx vercel@latest dev --listen 3001
+   ```
+3. Switch DevTools → Network from **Offline** back to **No throttling**.
+4. Confirm exactly **one** `GET /api/device-auth`.
+5. Confirm online device authority resumes and the banner returns to
+   *Verified online*.
+
+The already-controlling service worker keeps serving the cached shell across
+the switch, which is what makes the reconnect observable at all.
+
+### What breaks this test
+
+- **Do not clear site data between Preview and `vercel dev`.** The lease, the
+  enrollment, the badge state and the service-worker registration all live in
+  that origin; clearing them restarts the test from nothing.
+- **Use the same hostname and port.** `http://localhost:3001` and
+  `http://127.0.0.1:3001` are **different browser storage origins** — the
+  second sees no IndexedDB, no lease and no service worker.
+- **Switch servers while the browser is offline.** Switching online lets the
+  page issue requests against a server that is going away.
+- **Do not reload between the switch and the reconnect.** The reload is what
+  you are avoiding: the point is to observe the live transition.
+- **Do not use `vercel dev` for the offline half, or Preview for the API
+  half.** Neither can do the other's job.
