@@ -218,6 +218,25 @@ Step 3.41 is the one to take seriously. It is the only case a credential
 cannot resolve, and it is the case that protects two attendees from receiving
 the same badge.
 
+### Device identity convergence (Phase D1)
+
+A browser may converge its local device identity onto the central one. It is
+optional in D1 — unconverged desks keep working — but a converged desk is
+simpler to reason about, because only one identity exists.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.43 | Each desk's `/device-login` Identity section reviewed; the central device shown is the right one for that desk | ☐ |
+| 3.44 | Convergence performed deliberately, with the acknowledgement read, while online | ☐ |
+| 3.45 | After convergence, Event Operations shows the central device name | ☐ |
+| 3.46 | Badge range, next badge number and the central binding unchanged by the migration | ☐ |
+| 3.47 | Any desk reporting an identity conflict reconciled BEFORE the event — it cannot be overridden | ☐ |
+| 3.48 | Registrations created before convergence still show the old device id in the Sheet's technical columns; that is expected and correct | ☐ |
+
+Converge **before** the event, not during it. The identity applies to future
+registrations only, so converging mid-event deliberately splits one desk's
+records across two device ids — legible, but avoidable.
+
 **There is no undo.** Nothing in the application releases, edits, transfers or
 extends a central badge range, so a range claimed against the wrong desk has to
 be reconciled by hand in the database before the event. Reserve a range only

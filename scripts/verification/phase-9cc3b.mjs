@@ -254,11 +254,18 @@ const provider = stripComments(
 const runtimeSource = stripComments(read('src/device-auth/event-authorization-runtime.ts'))
 check('11. ONE session check lives in the online path',
   [...runtimeSource.matchAll(/checkSession\(\)/g)].length, 1)
-check('  and only the device-login panel calls the endpoint as well',
+/**
+ * Phase D1 added one more caller: the pre-migration recheck, which must see
+ * a live session before rewriting the device identity. The authorization
+ * runtime still reaches the endpoint only through an injected source, which
+ * is what keeps its local path provably offline.
+ */
+check('  the endpoint has exactly two other callers, both deliberate',
   walk(join(root, 'src'))
     .filter((file) => /getDeviceSession\(\)/.test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/src/`, '')).sort(),
-  ['components/device-auth/device-enrollment-panel.tsx'])
+  ['components/device-auth/device-enrollment-panel.tsx',
+   'device-auth/identity-convergence.ts'])
 check('3. an authenticated answer is PREFERRED over the cached lease',
   /status === 'authenticated'[\s\S]{0,400}grantFromDeviceSession/.test(runtimeSource), true)
 check('  and replaces the cached lease with the fresh one',

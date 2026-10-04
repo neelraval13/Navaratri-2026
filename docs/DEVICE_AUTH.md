@@ -979,3 +979,105 @@ not anywhere. It is local authorization; the server reads Postgres instead.
 Registration stays offline-first: IndexedDB transaction, local `nextBadge`,
 durable outbox. Issuance performs **no** device-auth request — authorization
 happens at the route boundary, not on every button.
+
+
+## Phase D1 — device identity convergence
+
+Until now a browser carried **two** identities: a locally generated Phase 7
+UUID that stamps attendee records, and the central device it authenticates
+as. D1 lets a browser deliberately make the central UUID its own, so there is
+one identity rather than two.
+
+```
+before   local  cb160e13-…  claim-test-local-c3b
+         central 0810abd4-… Claim Test Desk 2
+
+after    local  0810abd4-… Claim Test Desk 2
+```
+
+### Explicit, and online only
+
+Signing in does not converge. Neither does reconnecting, verifying a lease,
+mounting a route, or unlocking Operator Access. It takes **one operator
+action** on `/device-login`, behind an explicit acknowledgement, because it
+changes the identity written onto every future attendee record.
+
+The destination comes **only** from the live `GET /api/device-auth` context —
+never from `centralDeviceEnrollment`, which is unsigned, and never from the
+signed offline lease. Nobody types a UUID, a name, an event id or a slug.
+
+Because the button may have been rendered minutes ago, the action performs
+**one fresh session check immediately before writing**, using the existing
+endpoint — no Function was added. If that recheck is unauthenticated, is
+unreachable, or returns a *different* device, **nothing is written**.
+
+### What it writes, and what it must not
+
+One transaction over `config` **alone**, changing `deviceId`, `deviceName`
+and `deviceConfiguredAt`. The registrations and outbox tables are absent from
+the transaction because they are not being mutated.
+
+Untouched: `badgeStart`, `badgeEnd`, **`nextBadge`**, `badgeConfiguredAt`,
+`centralBadgeRangeBinding`, `centralDeviceEnrollment`,
+`centralDeviceOfflineAuthorization`, the UPI and event configuration. No new
+EventConfig field: convergence is simply `config.deviceId === central
+device.id`, and a second field recording it would be a second thing that can
+disagree.
+
+### History keeps its own identity
+
+Existing registrations, held registrations and **queued outbox snapshots**
+keep the historical identity they were created with. Nothing iterates them, nothing
+rewrites the Sheet. Only records created **after** convergence carry the
+central identity, and that mixed history is truthful about where each record
+came from.
+
+The server therefore does **not** compare `payload.deviceId` to the current
+central device — such a rule would strand exactly the pre-convergence rows
+this migration creates. Device-authorized sync still rests on the live
+session, `registration`, and the completed badge number being inside the
+device's current central range.
+
+### Preconditions
+
+Convergence reuses **C3B's own** badge-safety check rather than a second
+copy, and applies it whenever this browser has badge ownership to protect.
+Blocked: a binding naming another device or event, a binding or local range
+that disagrees with the live central assignment, a reissued `assignedAt`, an
+incoherent counter, a central range with no local one — and, stricter than
+C3B, a **badge-distributing desk whose central device owns no range**.
+
+A browser with **no** local badge state and a central range is *safe* to
+converge: identity and physical badge ownership stay separate, and adopting
+the range remains C2A's deliberate, physically confirmed act.
+
+A browser with event data but **no** local identity is blocked: that history
+cannot be attributed, and stamping an identity onto it now would be a guess.
+
+### Fresh devices, and renames
+
+A newly provisioned central device needs no visit to `/device-registration`
+at all — **Set Up This Device** adopts the central identity directly. No
+random UUID is minted.
+
+The central UUID is stable authority; the **name** is editable Admin
+metadata. After a live verification, a converged browser refreshes its stored
+name to the current central one — name only, never `deviceConfiguredAt`, and
+only when it actually differs. Never from a lease or the cached enrollment.
+
+### Still true in D1
+
+Operator Access remains, unchanged, as the fallback.
+`/device-registration` remains and remains **Operator-only**; it now carries
+transition copy, and a converged browser is told its identity comes from
+Device Sign-In instead of being offered another local registration.
+Unconverged legacy browsers keep working exactly as before — C3B authorizes
+both the transitional and the converged shape.
+
+**Identity equality grants nothing.** `config.deviceId === central device.id`
+is a consistency fact, not a credential: authority still comes only from a
+live session or a verified signed lease.
+
+**Phase D2** is what makes convergence mandatory and retires the legacy
+system. No Postgres change, no migration, no Dexie change, no Sheet change,
+and the Function count is unchanged at 11 / 12.

@@ -490,16 +490,29 @@ check('  and there it can only ever refuse',
     const domain = stripComments(read('src/device-auth/event-authorization.ts'))
     const checker = domain.slice(
       domain.indexOf('const checkBadgeOwnership'),
+      domain.indexOf('export const hasLocalBadgeOwnership'))
+    const ownership = domain.slice(
+      domain.indexOf('export const hasLocalBadgeOwnership'),
       domain.indexOf('const localRangeOf'))
     return [
       checker.includes('centralBadgeRangeBinding'),
       // Everything it can return is a conflict or `null`; it cannot authorize.
       /BadgeSafetyConflict \| null/.test(checker),
       /authorized/.test(checker),
-      // And no other part of the domain reads it.
+      /**
+       * Phase D1 added the SECOND and last reader: `hasLocalBadgeOwnership`,
+       * a boolean predicate that decides whether the badge check APPLIES.
+       * It is named here rather than counted loosely, and it is held to the
+       * same rule — it is not consulted when a module is authorized.
+       */
       domain.split('centralBadgeRangeBinding').length - 1,
+      ownership.includes('centralBadgeRangeBinding'),
+      /: boolean =>/.test(ownership),
+      /authorized|ModuleAuthorization|BadgeSafetyConflict/.test(ownership),
+      /hasLocalBadgeOwnership/.test(
+        domain.slice(domain.indexOf('const authorizeEventModule'))),
     ]
-  })(), [true, true, false, 1])
+  })(), [true, true, false, 2, true, true, false, false])
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()

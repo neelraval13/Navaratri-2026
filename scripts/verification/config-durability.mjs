@@ -81,6 +81,7 @@ const enrollment = await jiti.import(`${root}/src/db/central-enrollment.ts`)
 const offlineStore = await jiti.import(`${root}/src/db/central-offline-authorization.ts`)
 const adoption = await jiti.import(`${root}/src/db/central-badge-range.ts`)
 const issuance = await jiti.import(`${root}/src/db/registrations.ts`)
+const convergence = await jiti.import(`${root}/src/db/device-identity-convergence.ts`)
 
 const CENTRAL_DEVICE = 'dddddddd-1111-4111-8111-dddddddddddd'
 const CENTRAL_EVENT = 'eeeeeeee-1111-4111-8111-eeeeeeeeeeee'
@@ -155,6 +156,8 @@ check('every module that writes the config row is accounted for', configWriters,
   'db/central-enrollment.ts',
   // the signed offline lease
   'db/central-offline-authorization.ts',
+  // Phase D1: rewrites the identity fields onto the central device's
+  'db/device-identity-convergence.ts',
   // Phase 7 identity and the one-time local range
   'db/device.ts',
   // the nextBadge increment
@@ -398,6 +401,44 @@ check('  and no auth module writes the config row',
   walk(join(root, 'src/auth'))
     .filter((file) => /db\.config/.test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/src/`, '')), [])
+
+console.log('\n=== 11. IDENTITY CONVERGENCE PRESERVES EVERYTHING ELSE ===')
+/**
+ * Phase D1's writer, run for real. Listing it in the inventory above only
+ * says it exists; this says what it does to a row that holds a badge range,
+ * an advanced `nextBadge`, a binding, an enrollment and a lease.
+ */
+seed(CONFIGURED, { completed: [501] })
+const beforeConvergence = structuredClone(state.config)
+const registrationsBefore = structuredClone([...state.registrations.values()])
+const outboxBefore = structuredClone([...state.outbox.values()])
+const converged = await convergence.convergeDeviceIdentity({ context })
+check('convergence rewrites the local identity', converged.outcome, 'converged')
+check('  deviceId becomes the central one', state.config.deviceId, CENTRAL_DEVICE)
+check('  deviceName becomes the central name', state.config.deviceName, 'Claim Test Desk 2')
+const IDENTITY_FIELDS = ['deviceId', 'deviceName', 'deviceConfiguredAt']
+const nonIdentity = (config) => Object.fromEntries(DURABLE_FIELDS
+  .filter((field) => !IDENTITY_FIELDS.includes(field))
+  .map((field) => [field, config?.[field]]))
+check('  every other durable field survives untouched',
+  nonIdentity(state.config), nonIdentity(beforeConvergence))
+check('    including nextBadge', state.config.nextBadge, 502)
+check('  the enrollment, the lease and the binding are untouched', [
+  state.config.centralDeviceEnrollment,
+  state.config.centralDeviceOfflineAuthorization,
+  state.config.centralBadgeRangeBinding,
+], [
+  beforeConvergence.centralDeviceEnrollment,
+  beforeConvergence.centralDeviceOfflineAuthorization,
+  beforeConvergence.centralBadgeRangeBinding,
+])
+check('  no registration or outbox row is touched',
+  [[...state.registrations.values()], [...state.outbox.values()]],
+  [registrationsBefore, outboxBefore])
+const convergedRow = structuredClone(state.config)
+const secondRun = await convergence.convergeDeviceIdentity({ context })
+check('  a second run is idempotent', secondRun.outcome, 'already-converged')
+check('    and writes nothing at all', state.config, convergedRow)
 
 console.log('\n=== 12. NO RECOVERY MAGIC WAS ADDED ===')
 /**

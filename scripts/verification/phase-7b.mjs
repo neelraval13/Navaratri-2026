@@ -282,8 +282,32 @@ check('readiness trigger is NOT in the global header', /<DeviceReadiness/.test(h
 check('  the router mounts inside DatabaseGate', appSource.indexOf('<DatabaseGate>') < appSource.indexOf('<AppRouter />'), true)
 check('  badge page gates readiness behind DeviceRequiredGate',
   badgePageSource.indexOf('<DeviceRequiredGate>') < badgePageSource.indexOf('<DeviceReadiness'), true)
-check('  device page shows it only for a registered device',
-  devicePageSource.indexOf('isDeviceRegistered(config)') < devicePageSource.indexOf('<DeviceReadiness'), true)
+/**
+ * Phase D1 added a CONVERGED branch above the registered one, so a single
+ * "the guard appears before the render" position test no longer describes the
+ * page. The invariant it was protecting is unchanged and is now stated
+ * directly: every readiness render sits inside a branch that has already
+ * established a device identity, and the unregistered fall-through renders
+ * none at all.
+ */
+const devicePageBody = devicePageSource.slice(devicePageSource.indexOf('const DeviceRegistrationPage'))
+const convergedGuardAt = devicePageBody.indexOf('if (isConverged) {')
+const registeredGuardAt = devicePageBody.indexOf('if (isDeviceRegistered(config)) {')
+const readinessAt = [...devicePageBody.matchAll(/<DeviceReadiness/g)].map((match) => match.index)
+const unregisteredReturn = devicePageBody.slice(devicePageBody.lastIndexOf('\n  return ('))
+check('  device page shows it only for a device that has an identity', [
+  convergedGuardAt > -1,
+  registeredGuardAt > convergedGuardAt,
+  readinessAt.length === 2,
+  readinessAt.every((at) => at > convergedGuardAt),
+  readinessAt[1] > registeredGuardAt,
+  unregisteredReturn.includes('<DeviceRegistrationForm'),
+  unregisteredReturn.includes('<DeviceReadiness'),
+], [true, true, true, true, true, true, false])
+const convergedDefinition = devicePageBody.slice(
+  devicePageBody.indexOf('const isConverged ='), convergedGuardAt)
+check('    converged is an identity match, never a stored flag',
+  /config\.deviceId === config\.centralDeviceEnrollment\.deviceId/.test(convergedDefinition), true)
 check('readiness reads no config hook to decide visibility',
   /useEventConfig/.test(panelSource), false)
 

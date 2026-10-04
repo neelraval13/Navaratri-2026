@@ -683,11 +683,16 @@ globalThis.fetch = async (url, init = {}) => {
 
 const runClaim = (input) => badgeClaim.claimCentralBadgeRange({ context: context(), ...input })
 
-/** The panel's claim handler alone, so an assertion cannot match `adopt`. */
+/**
+ * The panel's claim handler ALONE, so an assertion cannot match `adopt` —
+ * and, since Phase D1, not `converge` either. The slice ends at the next
+ * handler rather than at the end of the handler block, because a window that
+ * runs past its subject stops testing its subject.
+ */
 const panelFull = stripComments(read('src/components/device-auth/device-enrollment-panel.tsx'))
 const panelClaimSource = panelFull.slice(
   panelFull.indexOf('const claim = async'),
-  panelFull.indexOf('const clearEnrollment'),
+  panelFull.indexOf('const converge = async'),
 )
 
 console.log('\n=== 37-49, 41. THE HAPPY PATH, END TO END ===')
@@ -1218,8 +1223,20 @@ check('  adoption still has exactly one caller in the panel',
   [...panelSource.matchAll(/adoptCentralBadgeRange\(/g)].length, 1)
 check('  and the claim exactly one',
   [...panelSource.matchAll(/claimCentralBadgeRange\(/g)].length, 1)
-check('  both only from an authenticated state',
-  [...panelSource.matchAll(/state\.phase !== 'authenticated'/g)].length, 2)
+/**
+ * Named one by one rather than counted. Phase D1 added a third mutating
+ * handler, `converge`, which carries the same guard — and a bare count would
+ * have been satisfied by any three occurrences anywhere, including three in
+ * one handler while another had none.
+ */
+check('  each mutating handler is guarded by an authenticated state', [
+  'const adopt = async', 'const claim = async', 'const converge = async',
+].map((handler) => {
+  const body = panelSource.slice(panelSource.indexOf(handler))
+  return /^[\s\S]{0,220}state\.phase !== 'authenticated'/.test(body)
+}), [true, true, true])
+check('    and nothing else in the panel claims that guard',
+  [...panelSource.matchAll(/state\.phase !== 'authenticated'/g)].length, 3)
 check('  the offline branches reach neither',
   /'last-verified'[\s\S]{0,700}(adoptCentralBadgeRange|claimCentralBadgeRange)/
     .test(panelSource), false)

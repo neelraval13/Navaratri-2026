@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type * as React from 'react'
 
 import DeviceIdentitySummary from '@/components/device-auth/device-identity-summary'
+import DeviceIdentitySection from '@/components/device-auth/device-identity-section'
 import LocalBadgeSetup from '@/components/device-auth/local-badge-setup'
 import OfflineAuthorizationSummary from '@/components/device-auth/offline-authorization-summary'
 import DeviceLoginForm from '@/components/device-auth/device-login-form'
@@ -26,7 +27,16 @@ import {
   contextAfterClaim,
   type BadgeClaimFlowResult,
 } from '@/device-auth/badge-claim'
+import {
+  readDeviceIdentityConvergencePlan,
+  refreshConvergedDeviceName,
+  type ConvergencePlan,
+} from '@/db/device-identity-convergence'
 import { getDeviceSession, logoutDevice } from '@/device-auth/device-api'
+import {
+  convergeDeviceIdentityOnline,
+  type ConvergenceFlowResult,
+} from '@/device-auth/identity-convergence'
 import {
   acceptOfflineAuthorization,
   readVerifiedOfflineAuthorization,
@@ -65,6 +75,8 @@ type PanelState =
       }
       /** What became of the lease the server just issued. */
       offline: OfflineLeaseOutcome
+      /** What identity convergence would do, from the COMMITTED config row. */
+      identity: ConvergencePlan
     }
   | { phase: 'signed-out'; enrollment: CentralDeviceEnrollment | null }
   | {
@@ -102,6 +114,8 @@ const DeviceEnrollmentPanel: React.FC = () => {
   const [isBusy, setIsBusy] = useState(false)
   const [badgeError, setBadgeError] = useState<string | null>(null)
   const [claimResult, setClaimResult] = useState<BadgeClaimFlowResult | null>(null)
+  const [convergenceResult, setConvergenceResult] =
+    useState<ConvergenceFlowResult | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   /**
@@ -135,12 +149,23 @@ const DeviceEnrollmentPanel: React.FC = () => {
        */
       const offline = await acceptOfflineAuthorization({ context, envelope })
 
+      /**
+       * A CONVERGED browser follows the central name, which is editable Admin
+       * metadata. Only after this live verification, only the name, and only
+       * when it actually differs — the stable UUID is the identity, and a
+       * rename is not a new one.
+       */
+      await refreshConvergedDeviceName({ context })
+
+      const identity = await readDeviceIdentityConvergencePlan(context)
+
       setState({
         phase: 'authenticated',
         context,
         verifiedAt: saved.enrollment.verifiedAt,
         badge,
         offline,
+        identity: identity.plan,
       })
 
       return
@@ -239,6 +264,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
 
   const refresh = () => {
     setClaimResult(null)
+    setConvergenceResult(null)
     setBadgeError(null)
     setState({ phase: 'checking' })
     setAttempt((previous) => previous + 1)
@@ -377,6 +403,31 @@ const DeviceEnrollmentPanel: React.FC = () => {
     setState({ ...state, context, badge, offline })
   }
 
+  /**
+   * The ONE identity migration. It re-verifies the session against the server
+   * first, so a button rendered minutes ago cannot migrate from a context
+   * that has since been revoked or swapped.
+   */
+  const converge = async () => {
+    if (isBusy || state.phase !== 'authenticated') {
+      return
+    }
+
+    setIsBusy(true)
+    setConvergenceResult(null)
+
+    const result = await convergeDeviceIdentityOnline({ expected: state.context })
+
+    // Re-read from the committed row, whatever happened: the page must never
+    // claim an identity this browser did not actually store.
+    const identity = await readDeviceIdentityConvergencePlan(state.context)
+    const badge = await readCentralBadgeRangePlan(state.context)
+
+    setIsBusy(false)
+    setConvergenceResult(result)
+    setState({ ...state, badge, identity: identity.plan })
+  }
+
   const clearEnrollment = async () => {
     if (isBusy) {
       return
@@ -510,6 +561,14 @@ const DeviceEnrollmentPanel: React.FC = () => {
             fallback.
           </p>
 
+          <DeviceIdentitySection
+            plan={null}
+            result={null}
+            isBusy={isBusy}
+            isOffline
+            onConverge={() => undefined}
+          />
+
           <OfflineAuthorizationSummary state={state.offline} isOffline />
 
           <Button
@@ -578,6 +637,16 @@ const DeviceEnrollmentPanel: React.FC = () => {
               setClaimResult(null)
             }}
             onRefresh={refresh}
+          />
+
+          <DeviceIdentitySection
+            plan={state.identity}
+            result={convergenceResult}
+            isBusy={isBusy}
+            isOffline={false}
+            onConverge={() => {
+              void converge()
+            }}
           />
 
           <OfflineAuthorizationSummary state={state.offline} isOffline={false} />

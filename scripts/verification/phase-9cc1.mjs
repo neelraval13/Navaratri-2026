@@ -498,13 +498,53 @@ check('  the word Authenticated is never shown for a cached identity',
 check('authenticated is only ever reached from a server answer',
   [...panelSource.slice(panelSource.indexOf('const DeviceEnrollmentPanel'))
     .matchAll(/phase: 'authenticated'/g)].length, 1)
-check('  which follows a successful save of a verified context',
-  /saved\.outcome === 'saved'[\s\S]{0,200}phase: 'authenticated'/.test(panelSource), true)
+/**
+ * Stated structurally rather than as a character window: Phase D1 added the
+ * convergence read between the save and the state, and a fixed-width window
+ * would have failed for a reason that has nothing to do with the rule. The
+ * rule is that the ONLY authenticated state is constructed INSIDE the branch
+ * that a successful save opened.
+ */
+const savedBranchAt = panelSource.indexOf("if (saved.outcome === 'saved') {")
+const savedBranchEndsAt = panelSource.indexOf("if (saved.outcome === 'missing-config') {")
+const authenticatedAt = panelSource.indexOf("phase: 'authenticated'", savedBranchAt)
+check('  which follows a successful save of a verified context', [
+  savedBranchAt > -1,
+  savedBranchEndsAt > savedBranchAt,
+  authenticatedAt > savedBranchAt,
+  authenticatedAt < savedBranchEndsAt,
+], [true, true, true, true])
+/**
+ * Phase D1 added two readers outside `device-auth`, and both are listed by
+ * name rather than waved through: the convergence domain module, which reads
+ * the enrollment to decide whether the LOCAL identity may be rewritten, and
+ * the legacy provisioning page, which reads it to choose copy. Each is held
+ * to what it is allowed to do immediately below, so the list cannot grow a
+ * route-unlocking reader quietly.
+ */
 check('no cached enrollment unlocks an event route',
   walkSource(join(root, 'src'))
     .filter((file) => !file.includes('device-auth') && !file.endsWith('central-enrollment.ts'))
     .filter((file) => /centralDeviceEnrollment/.test(stripComments(readFileSync(file, 'utf8'))))
-    .map((file) => file.replace(`${root}/`, '')), ['src/db/types.ts'])
+    .map((file) => file.replace(`${root}/`, '')),
+  [
+    'src/db/device-identity-convergence.ts',
+    'src/db/types.ts',
+    'src/pages/device-registration-page.tsx',
+  ])
+const convergenceReader = stripComments(read('src/db/device-identity-convergence.ts'))
+check('  the convergence reader authorizes nothing',
+  /authorizeEventModule|ModuleAuthorization|EventAccessGate|OperatorAccessGate|useLocation|navigate|ROUTES/
+    .test(convergenceReader), false)
+check('    it reads the enrollment to plan a CONFIG write only',
+  [/config\.centralDeviceEnrollment/.test(convergenceReader),
+    /db\.transaction\('rw', db\.config/.test(convergenceReader)], [true, true])
+const legacyProvisioningPage = stripComments(read('src/pages/device-registration-page.tsx'))
+check('  the legacy provisioning page only picks copy from it',
+  /config\.deviceId === config\.centralDeviceEnrollment\.deviceId/.test(legacyProvisioningPage), true)
+check('    and grants no access with it',
+  /authorizeEventModule|ModuleAuthorization|EventAccessGate|grantFrom|offlineAuthorization/
+    .test(legacyProvisioningPage), false)
 check('  and the operator gate never reads it',
   /centralDeviceEnrollment|deviceSession/.test(
     read('src/components/operator/operator-access-gate.tsx')), false)

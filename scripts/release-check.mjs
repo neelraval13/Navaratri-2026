@@ -109,6 +109,8 @@ const REQUIRED_FILES = [
   'src/device-auth/offline-lease.ts',
   'src/db/central-offline-authorization.ts',
   'src/device-auth/event-authorization.ts',
+  'src/db/device-identity-convergence.ts',
+  'src/device-auth/identity-convergence.ts',
   'src/device-auth/device-event-authorization-context.ts',
   'src/components/device-auth/device-event-authorization-provider.tsx',
   'src/components/event-access/event-access-gate.tsx',
@@ -1939,9 +1941,18 @@ if (authDomain === null || authProvider === null || authRuntime === null ||
     .filter((path) => /getDeviceSession\(\)/.test(stripComments(readText(path) ?? '')))
     .map((path) => rel(path))
 
-  // The device-login panel, plus the runtime's single injected default.
-  if (sessionCallers.length !== 1 ||
-      sessionCallers[0] !== 'src/components/device-auth/device-enrollment-panel.tsx') {
+  /**
+   * Two callers, and only two: the device-login panel, and Phase D1's
+   * pre-migration recheck. The authorization runtime reaches the endpoint
+   * through an injected source, not a direct call, which is what keeps its
+   * local path provably offline.
+   */
+  const ALLOWED_SESSION_CALLERS = [
+    'src/components/device-auth/device-enrollment-panel.tsx',
+    'src/device-auth/identity-convergence.ts',
+  ]
+
+  if (sessionCallers.sort().join(', ') !== ALLOWED_SESSION_CALLERS.join(', ')) {
     eventAuthProblems.push(
       `the device session is checked from: ${sessionCallers.join(', ') || 'nowhere'}`,
     )
@@ -2118,6 +2129,146 @@ if (standIn === null) {
 if (!exists(join(ROOT, 'scripts/verification/config-durability.mjs'))) {
   configProblems.push('the config durability suite is missing')
 }
+
+// --- I6. Phase D1 device identity convergence ------------------------------
+/**
+ * A browser may converge its transitional Phase 7 identity onto the central
+ * device. That changes the identity stamped onto every FUTURE attendee
+ * record, so it is explicit, online-only, and must never rewrite history.
+ */
+const convergenceProblems = []
+const convergenceDomain = readText(join(ROOT, 'src/db/device-identity-convergence.ts'))
+const convergenceFlow = readText(join(ROOT, 'src/device-auth/identity-convergence.ts'))
+
+if (convergenceDomain === null || convergenceFlow === null) {
+  convergenceProblems.push('the convergence domain or its online flow is missing')
+} else {
+  const domain = stripComments(convergenceDomain)
+  const flow = stripComments(convergenceFlow)
+
+  // ONE writer, and it touches only the identity fields.
+  if (/db\.(registrations|outbox)\.(put|add|update|delete|clear)/.test(domain)) {
+    convergenceProblems.push('convergence mutates registrations or the outbox')
+  }
+
+  for (const forbidden of [
+    'badgeStart:', 'badgeEnd:', 'nextBadge:', 'badgeConfiguredAt:',
+    'centralBadgeRangeBinding:', 'centralDeviceEnrollment:',
+    'centralDeviceOfflineAuthorization:',
+  ]) {
+    if (domain.includes(forbidden)) {
+      convergenceProblems.push(`convergence writes ${forbidden} onto the config row`)
+    }
+  }
+
+  // The transaction names only `config`; the other tables are not mutated.
+  for (const match of domain.matchAll(/db\.transaction\('rw',([^)]*?),\s*async/g)) {
+    if (/registrations|outbox/.test(match[1])) {
+      convergenceProblems.push('the convergence transaction names a table it does not mutate')
+    }
+  }
+
+  if (/randomUUID/.test(domain)) {
+    convergenceProblems.push('convergence mints a device id instead of adopting the central one')
+  }
+
+  if (/adoptCentralBadgeRange|configureBadgeDistribution/.test(domain)) {
+    convergenceProblems.push('convergence adopts a badge range')
+  }
+
+  if (/nextBadge[^\n]*(Math\.max|\.length|count)/i.test(domain)) {
+    convergenceProblems.push('convergence reconstructs nextBadge')
+  }
+
+  // The badge-safety question is C3B's, not a second copy.
+  if (!/checkBadgeOwnership/.test(domain) || !/checkEnrollment/.test(domain)) {
+    convergenceProblems.push('convergence does not reuse the canonical safety checks')
+  }
+
+  // Mentioning the check is not running it: the gate must be the real one.
+  if (!/if \(hasLocalBadgeOwnership\(config\)\) \{/.test(domain)) {
+    convergenceProblems.push('the badge-safety check is not gated on local badge ownership')
+  }
+
+  // ONLINE ONLY, against a freshly verified session.
+  if (/offline-lease|verifyOfflineAuthorization|centralDeviceOfflineAuthorization/
+    .test(flow + domain)) {
+    convergenceProblems.push('a cached offline lease can reach the convergence path')
+  }
+
+  if (/operator/i.test(flow + domain)) {
+    convergenceProblems.push('Operator Access can reach the convergence path')
+  }
+
+  if (!/getDeviceSession\(\)/.test(flow)) {
+    convergenceProblems.push('convergence does not re-verify the session before writing')
+  }
+
+  if (flow.indexOf('getDeviceSession()') > flow.indexOf('convergeDeviceIdentity(')) {
+    convergenceProblems.push('convergence writes before re-verifying the session')
+  }
+
+  if (!/convergeDeviceIdentity\(\{ context: session\.context \}\)/.test(flow)) {
+    convergenceProblems.push('convergence writes from a stale context rather than the fresh one')
+  }
+
+  // The enrollment constrains; it never creates authority.
+  if (/saveCentralDeviceEnrollment/.test(domain + flow)) {
+    convergenceProblems.push('convergence creates a central enrollment')
+  }
+}
+
+/** Exactly two modules may assign an identity onto the config row. */
+const identityWriters = []
+for (const path of walk(join(ROOT, 'src'))) {
+  if (extname(path) !== '.ts' && extname(path) !== '.tsx') {
+    continue
+  }
+
+  const code = stripComments(readText(path) ?? '')
+  const literals = [
+    ...code.matchAll(/:\s*\w*Config\s*=\s*\{([\s\S]*?)\n\s*\}/g),
+    ...code.matchAll(/db\.config\.put\(\{([\s\S]*?)\n\s*\}\)/g),
+  ]
+
+  if (literals.some((match) => /^\s{4,}deviceId:/m.test(match[1]))) {
+    identityWriters.push(rel(path))
+  }
+}
+
+if (identityWriters.sort().join(', ') !==
+    'src/db/device-identity-convergence.ts, src/db/device.ts') {
+  convergenceProblems.push(
+    `device identity is written in: ${identityWriters.join(', ') || 'nowhere'}`,
+  )
+}
+
+/**
+ * HISTORY IS NOT REWRITTEN. A pre-convergence outbox row carries the old
+ * local device id, and a server rule requiring it to match the current
+ * central device would strand exactly the rows this migration creates.
+ */
+const syncDevice = stripComments(readText(join(ROOT, 'server/sync/device-authorization.ts')) ?? '')
+const syncRoute = stripComments(readText(join(ROOT, 'api/sync-registration.ts')) ?? '')
+
+if (/payload\.deviceId|deviceId ===|deviceName ===/.test(syncDevice + syncRoute)) {
+  convergenceProblems.push('sync compares the payload device identity to the central device')
+}
+
+// Identity equality is a consistency fact, never a credential.
+const authorizationDomain = stripComments(
+  readText(join(ROOT, 'src/device-auth/event-authorization.ts')) ?? '',
+)
+
+if (/config\.deviceId ===|isConverged/.test(authorizationDomain)) {
+  convergenceProblems.push('event authorization treats identity equality as authority')
+}
+
+addCheck(
+  'device-identity-convergence',
+  'Local device identity converges onto the central one only by explicit, online action',
+  convergenceProblems,
+)
 
 addCheck(
   'config-durability',

@@ -157,7 +157,7 @@ const sameRange = (
  * guessing which one is right is how a desk ends up operating as the wrong
  * device. It fails closed and sends the operator to `/device-login`.
  */
-const checkEnrollment = (
+export const checkEnrollment = (
   grant: DeviceOperationalGrant,
   enrollment: CentralDeviceEnrollment | undefined,
 ): BadgeSafetyConflict | null => {
@@ -179,12 +179,16 @@ const checkEnrollment = (
 /**
  * Does central badge ownership agree with this browser's local allocator?
  *
+ * EXPORTED so Phase D1's identity convergence asks the SAME question before
+ * it rewrites the local device identity. Convergence must never be able to
+ * hide or normalise a conflict this would have caught.
+ *
  * Registration offline cannot rest on "this device once had Registration". It
  * must also prove that the numbers it is about to hand out are the numbers
  * central says it owns, and that its local provenance records exactly that
  * assignment. Every disagreement is a conflict, never a preference.
  */
-const checkBadgeOwnership = (
+export const checkBadgeOwnership = (
   grant: DeviceOperationalGrant,
   config: EventConfig,
 ): BadgeSafetyConflict | null => {
@@ -247,6 +251,21 @@ const checkBadgeOwnership = (
   }
 
   return null
+}
+
+/**
+ * Does this browser hold badge ownership of its own — a configured range, or
+ * provenance recording one?
+ *
+ * EXPORTED for Phase D1. Convergence must run the full badge-safety check
+ * whenever there is local ownership to protect, and must NOT when there is
+ * none: a browser that has never been given a range cannot conflict with a
+ * central assignment, and demanding one would block the very case D1 exists
+ * to make easy — a freshly provisioned central device adopting its identity
+ * before any badges are at the desk.
+ */
+export const hasLocalBadgeOwnership = (config: EventConfig): boolean => {
+  return config.badgeEnd !== undefined || config.centralBadgeRangeBinding !== undefined
 }
 
 const localRangeOf = (

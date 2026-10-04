@@ -179,11 +179,28 @@ that device's current central range, or the server refuses it and the outbox
 row stays pending — which is what stops a desk disabled while offline from
 writing to the ledger the moment it reconnects.
 
+A browser can now **converge** its transitional local device identity onto
+the central one, so the central UUID becomes the identity stamped on future
+registrations. It takes one explicit action on `/device-login`, behind an
+acknowledgement, against a session re-checked at that moment — never from a
+cached enrollment, a signed lease, or Operator Access.
+
+It migrates **identity only**: the badge range, `nextBadge` and the central
+binding are untouched, and adopting a central range stays a separate,
+physically confirmed act. **Existing registrations and queued sync rows keep
+their original identity** — nothing rewrites history, and the server never
+requires a queued row's device id to match the current central device.
+
+A freshly provisioned central device needs no visit to
+`/device-registration` at all. Unconverged legacy browsers keep working
+exactly as before, and `/device-registration` remains Operator-only.
+
 **Still deliberately absent:** a heartbeat, any way to release, edit or
-transfer a central badge range, and Phase D's removal of Operator Access and
-the separate local device identity. `/device-registration` remains the transitional *local*
-badge-device setup, distinct from `/device-login`, which is the *central*
-identity. Those converge in Phase 9C-C3 and beyond.
+transfer a central badge range, and Phase D2's removal of Operator Access and
+the legacy local device identity. `/device-registration` remains the legacy
+*local* identity setup for a browser that has not converged; a converged one
+is told so and sent to `/device-login`, which is where the *central* identity
+lives.
 
 ## Central database (Phase 9A — foundation only)
 
