@@ -224,8 +224,52 @@ Old operator cookies and the old `localStorage` marker may still sit in
 browsers. Both are **inert**: nothing reads either, and no compatibility
 endpoint exists to clear them.
 
-**Still deliberately absent:** a heartbeat, and any way to release, edit or
-transfer a central badge range.
+## Phase D2.1 — badge refill
+
+A desk that runs out of badges receives more and **extends the range it
+already owns**, upward and contiguously. One `PATCH` on the same
+`/api/device-badge-claim` Function; no new endpoint, no migration, no schema
+change.
+
+```
+before   central #001-#002   local #001-#002   nextBadge #003
+after    central #001-#050   local #001-#050   nextBadge #003
+```
+
+The operator enters only the **new last badge**. The first badge of the new
+batch is derived — one past the current end — so a gap cannot be asked for,
+and `rangeStart` is refused in the body rather than ignored. The confirmation
+is per batch: *"I have physical badges #003–#050 at this device."*
+
+**`nextBadge` stays exactly where it is.** It is the local allocator, and its
+value is authoritative: a desk at #037 that receives #051–#100 still issues
+#037 next. A refill before exhaustion is normal and safe.
+
+It is an **extension, not a replacement**: the central assignment is neither
+released nor duplicated, so badges already issued stay owned by the same
+device and queued outbox rows stay valid. Only `range_end` moves, and locally
+only `badgeEnd`, the binding's `rangeEnd` and `updatedAt`.
+
+Concurrency is a **compare-and-set** on the expected end, so two callers
+racing cannot both win; widening into another device's numbers is refused by
+the database as `range-overlap`, with nothing written and no other device
+named. A repeat is idempotent.
+
+If central succeeds and the local write does not, the extension is **not**
+rolled back — the page says so and Refresh Device Status finishes the local
+half, because a central range that is a strict superset of local state with
+the same device, event, start and grant timestamp is safely extendable. A
+range is never decreased and `nextBadge` is never changed.
+
+Online only: no offline path, no queue, no retry timer, no polling. After
+success the signed offline lease is re-issued for the new range, and offline
+readiness is reported separately from the range.
+
+On `/badge-registration`, an exhausted range names what this desk owns and
+offers **Add More Badges**. Hold Registration stays available throughout.
+
+**Still deliberately absent:** a heartbeat, arbitrary multi-range ownership,
+and any way to release, shrink or transfer a central badge range.
 
 ## Central database (Phase 9A — foundation only)
 

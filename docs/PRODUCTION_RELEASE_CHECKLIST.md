@@ -219,6 +219,27 @@ Step 3.41 is the one to take seriously. It is the only case a credential
 could never have resolved, and it is the case that protects two attendees
 from receiving the same badge.
 
+### Badge refill (Phase D2.1)
+
+A desk that runs out extends its OWN range upward and contiguously, at
+`/device-login`. There is no new endpoint, no migration and no schema change,
+so nothing new has to be configured — but the plan has to be right before the
+event, because a refill cannot start anywhere but one past a desk's current
+last badge.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.49 | `docs/DEVICE_RANGE_PLAN.md` keeps the reserve as a SINGLE block above every assigned range | ☐ |
+| 3.50 | Every desk's physical stack ends exactly where its recorded range ends | ☐ |
+| 3.51 | Whoever is on the floor knows that **Add More Badges** is the answer to an exhausted desk, and that Hold Registration keeps working | ☐ |
+| 3.52 | Refill rehearsed once in Development on a disposable device and range — never with production numbers | ☐ |
+| 3.53 | Confirmed in that rehearsal that the next badge number did NOT change | ☐ |
+| 3.54 | A refill needs connectivity; the venue has a way to get one desk online if it runs out mid-outage | ☐ |
+
+**Do not refill with production badge numbers to prove the feature works.**
+Extending a range consumes reserve numbers, and nothing shrinks a central
+range afterwards.
+
 ### Device identity convergence (Phase D1)
 
 A browser converges its local device identity onto the central one. **Phase

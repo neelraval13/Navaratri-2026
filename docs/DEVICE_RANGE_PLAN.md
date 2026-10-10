@@ -81,10 +81,33 @@ Reserve    #751–#800   ← not configured anywhere
 A reserve gives the organizer somewhere to go if a desk exhausts its range
 early, without having to take numbers from a desk that is still working.
 
-Transferring the reserve to a live device is **not** something the application
-can do today, and it is not a matter of editing a number: the safe procedure has
-to account for badges already issued and rows not yet synced. That procedure is
-Phase 7C.
+### Handing the reserve out — badge refill
+
+Since Phase D2.1 a desk takes more badges by **refill**: its existing range is
+extended upward and contiguously, at `/device-login`. The first badge of the
+refill is derived from the desk's current last badge and **cannot be typed**.
+
+So the reserve is handed out **from the bottom up, to the desk whose range the
+reserve follows**. With the plan above, #751 can only go to Desk C:
+
+```
+Desk C     #501–#750  →  refill through #800  →  #501–#800
+Reserve    (consumed)
+```
+
+Giving #751–#800 to Desk A is not expressible, and must not be attempted by
+editing a number: a desk's range start never moves, because badges already
+issued from it would then belong to numbers it no longer owns.
+
+Plan the reserve as a **single block above every assigned range**, and record
+each desk's new last badge here after every refill. A refill does not change
+the desk's next badge, so a desk part-way through its range can be topped up
+before it runs out.
+
+Releasing, shrinking or transferring a range between desks is still **not**
+something the application can do, and it is not a matter of editing a number:
+the safe procedure has to account for badges already issued and rows not yet
+synced.
 
 ---
 

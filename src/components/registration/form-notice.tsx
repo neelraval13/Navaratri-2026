@@ -1,6 +1,8 @@
 import { CircleAlert, CircleCheck } from 'lucide-react'
 import type * as React from 'react'
+import { Link } from 'wouter'
 
+import { buttonVariants } from '@/components/ui/button'
 import type { FormNotice as FormNoticeState } from '@/components/registration/types'
 
 interface FormNoticeProps {
@@ -14,15 +16,29 @@ interface FormNoticeProps {
  * A successful hold is amber, not green: it is a held state, not a completed
  * one, and it says plainly that no badge was assigned. Badge issuance has its
  * own full completion screen, so only its failures appear here.
+ *
+ * An error may carry ONE way out, as a link. An exhausted range is the only
+ * error that has one, because the answer is a badge refill at Device Sign-In
+ * rather than anything this form can do.
  */
 const FormNotice: React.FC<FormNoticeProps> = ({ notice }) => {
   if (notice.kind === 'error') {
     return (
-      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3">
+      <div className="space-y-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3">
         <p className="flex items-center gap-2 text-sm font-medium text-destructive">
           <CircleAlert className="size-4" />
           {notice.message}
         </p>
+
+        {notice.action === undefined ? null : (
+          /* A real link styled as a button — see device-login-page. */
+          <Link
+            href={notice.action.href}
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          >
+            {notice.action.label}
+          </Link>
+        )}
       </div>
     )
   }

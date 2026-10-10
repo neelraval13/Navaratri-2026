@@ -1263,3 +1263,143 @@ the switch, which is what makes the reconnect observable at all.
   you are avoiding: the point is to observe the live transition.
 - **Do not use `vercel dev` for the offline half, or Preview for the API
   half.** Neither can do the other's job.
+
+---
+
+# Phase D2.1 — contiguous badge refill
+
+A desk runs out of badges. More arrive. It must be able to issue them without
+giving up the numbers it already owns.
+
+```
+before   central #001-#002   local #001-#002   nextBadge #003   exhausted
+after    central #001-#050   local #001-#050   nextBadge #003
+```
+
+That is a **range extension**, not a second range and not a replacement.
+
+## One Function, two methods
+
+```
+POST   /api/device-badge-claim   reserve a FIRST range for a device with none
+PATCH  /api/device-badge-claim   extend the range it already owns
+```
+
+The same question asked twice — *which physical badge numbers does this device
+own?* — so one Function rather than two, because every file under `api/` costs
+a deployment Function. The budget stays **8 / 12**.
+
+Request:
+
+```json
+{ "expectedRangeEnd": 2, "newRangeEnd": 50, "physicalStackConfirmed": true }
+```
+
+Refused in the body, rather than ignored: `deviceId`, `eventId`, `eventSlug`,
+`loginName`, `rangeStart`, `nextBadge`. The session decides identity; the
+server derives `refillStart = expectedRangeEnd + 1`; the counter is local and
+central has none.
+
+Before anything is written: a live device session, event active, device
+enabled, credentials provisioned, the CURRENT `registration` attribute, an
+active assignment whose end is `expectedRangeEnd`, a positive integer
+`newRangeEnd` strictly greater than it, and `physicalStackConfirmed === true`.
+
+## Only `range_end` moves
+
+`range_start`, `assigned_at`, `device_id`, `event_id` and `released_at` are
+untouched, so the assignment keeps its identity and its provenance. Nothing is
+inserted and nothing is released: a refill adds numbers to the end of a range a
+desk already owns.
+
+## Concurrency is a compare-and-set
+
+The expected end is part of the `WHERE` clause. Two callers racing to extend
+the same assignment cannot both win — the loser matches no row.
+
+Cross-DEVICE races stay the database's. The GiST exclusion constraint applies
+to an `UPDATE` exactly as it does to an `INSERT`, so extending #001-#050 to
+#001-#100 fails if another device owns any of #051-#100. The answer is
+`range-overlap`: nothing written, no other device named, no constraint name and
+no SQLSTATE on the wire.
+
+A zero-row result **re-reads** the assignment:
+
+| Re-read says | Answer |
+|---|---|
+| already ends at `newRangeEnd` | `already-extended` — idempotent, and what recovers a lost response |
+| ends somewhere else | `stale-range`, with the authoritative range |
+| no active assignment | `no-active-range` |
+
+## `nextBadge` is never touched
+
+On any path, central or local. It is the allocator and its existing value is
+authoritative: a desk at #037 that receives #051-#100 still issues #037 next.
+Recomputing it from the new batch's start would skip every badge between.
+
+A refill BEFORE exhaustion is therefore normal and safe.
+
+## The local write
+
+ONE transaction over `config` alone. Exactly three fields change:
+
+- `badgeEnd`
+- `centralBadgeRangeBinding.rangeEnd`
+- `updatedAt`
+
+`badgeStart`, `nextBadge`, `badgeConfiguredAt`, the device identity, the
+binding's `rangeStart`, `assignedAt` and `adoptedAt`, and every unrelated
+configuration field are carried through. No registration, held record or
+outbox row is read or written.
+
+It is its own writer, `extendLocalBadgeRange`, and not a flag on
+`adoptCentralBadgeRange`: adoption may set `nextBadge`, and expressing "widen
+the end" as a boolean on it would put a counter reset one argument away from a
+desk part-way through its range.
+
+## Central succeeded, local did not
+
+The extension is **never rolled back**. It is real, and undoing it would hand
+the numbers back while a human believes this desk owns them. The page says so
+loudly and tells the operator not to issue badges until local setup is
+finished.
+
+Refresh Device Status recovers it, because what is left behind is the one
+recoverable shape. A central range is a **safe superset** of local state when:
+
+- the binding names the same central device
+- the binding names the same event
+- `rangeStart` is the same, centrally, locally and in the binding
+- `assignedAt` is the same — a reissued grant is a DIFFERENT grant that happens
+  to start at the same number
+- local and its own binding already agree about the old end
+- the central end is **strictly** greater
+
+Recovery then raises `badgeEnd` and the binding's `rangeEnd`, and nothing else.
+A range is never decreased, `nextBadge` is never changed, and an unrelated
+central range is NEVER reinterpreted as an extension — that stays the hard
+badge-ownership block it has always been.
+
+## Offline authorization
+
+Range extension is **online only**: no offline path, no queue, no retry timer,
+no polling, no heartbeat.
+
+After a successful extension the server re-issues the signed lease for the
+post-extension state, so the browser's offline authority names the new
+numbers. **Offline readiness is reported separately from the range.** The
+extension can be entirely real while the new lease fails to verify, and calling
+that "done" would leave a desk believing it can work through an outage it
+cannot. The range stays extended; the page says the lease still needs an online
+refresh.
+
+Offline authorization still fails closed if a lease and a range disagree.
+
+## What D2.1 did not change
+
+No new Function, no Postgres migration, no Dexie version or store change, no
+Sheet contract change, no new EventConfig field, no new environment variable.
+Every D2 invariant stands: the central device is the only event authority,
+convergence is mandatory, the binding checks are exact, `nextBadge` is local,
+attendee PII never enters Postgres, historical registration provenance is
+untouched, and sync still authenticates with a live device session.

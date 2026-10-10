@@ -2023,8 +2023,18 @@ Phase 9C-C2A adds `adoptCentralBadgeRange` as a SECOND badge-range writer. It
 exists because the range and its central provenance must commit together, and
 chaining `configureBadgeDistribution` with a separate binding write would be
 two independently committed mutations. It enforces the same canonical invariant
-and still never touches the device identity. A THIRD badge-range writer must
-not be added; `verify:8a` pins the full set.
+and still never touches the device identity.
+
+Phase D2.1 adds `extendLocalBadgeRange` as a THIRD, and the last. It exists
+because a refill is NOT an adoption: adoption may set `nextBadge`, and an
+extension must never touch it. Expressing "widen the end" as a flag on the
+adoption writer would put a counter reset one boolean away from a desk that is
+part-way through its range.
+
+The full set is therefore `configureBadgeDistribution` (no product caller),
+`adoptCentralBadgeRange` and `extendLocalBadgeRange`. `verify:8a` pins the
+MODULES that write badge state, and `release:check` pins one transaction per
+writer. A FOURTH writer must not be added.
 
 `holdRegistration`, `issueBadge` and `hasBadgeAvailable` require BADGE
 distribution, not mere registration. A registered prize or dandiya desk must
@@ -2495,6 +2505,86 @@ recall a badge already handed over.
 
 Self-claim arrived in 9C-C2B as `POST /api/device-badge-claim`. With no
 central assignment and no claim, there is nothing to adopt.
+
+### Contiguous Badge Refill
+
+A desk that runs out of badges receives more and EXTENDS the range it already
+owns, upward and contiguously. `PATCH /api/device-badge-claim` — the same
+Function, dispatched by method, because it is the same question asked twice.
+
+```
+before   central #001-#002   local #001-#002   nextBadge #003
+after    central #001-#050   local #001-#050   nextBadge #003
+```
+
+IT IS AN EXTENSION, never a replacement and never a second range. The
+assignment is neither released nor duplicated, so every badge already issued
+stays owned by the same device, every queued outbox snapshot stays valid, and
+the GiST overlap constraint keeps protecting the event. There is deliberately
+NO arbitrary multi-range ownership: one active `badge_assignments` row per
+device, one local `badgeStart`/`badgeEnd`/`nextBadge`.
+
+THE OPERATOR CHOOSES ONLY THE NEW END. The first badge of the new batch is
+derived — one past the current end — so a gap cannot be requested. `rangeStart`
+and `nextBadge` are REFUSED in the body rather than ignored, for the same
+reason the identity fields are: a field a caller believes it can choose is one
+a later refactor might start reading.
+
+```
+current #001-#050 → new end #100   ALLOWED
+current #001-#050 → new end #051   ALLOWED
+current #001-#050 → new end #050   REFUSED — not an increase
+current #001-#050 → add #060-#100  NOT EXPRESSIBLE
+```
+
+Only `range_end` moves. `range_start`, `assigned_at`, `device_id`, `event_id`
+and `released_at` are untouched, so the assignment keeps its identity and its
+provenance.
+
+CONCURRENCY IS A COMPARE-AND-SET. `expectedRangeEnd` is part of the WHERE
+clause, so two callers racing to extend the same assignment cannot both win —
+the loser matches no row and is told the range moved. Cross-DEVICE races stay
+the database's: the exclusion constraint applies to an UPDATE exactly as it
+does to an INSERT, so widening into numbers another device owns fails closed
+as `range-overlap` with nothing written and no other device named. A zero-row
+result RE-READS: a range that already ends where the request asked is an
+idempotent `already-extended`, which is also what recovers a response lost in
+flight.
+
+`nextBadge` IS NEVER TOUCHED, on any path. It is the allocator and its
+existing value is authoritative: a desk at #037 that receives #051-#100 still
+issues #037 next. A refill before exhaustion is normal and safe.
+
+The local write is ONE transaction over `config` alone and changes exactly
+three things: `badgeEnd`, the binding's `rangeEnd`, and `updatedAt`.
+`badgeStart`, `nextBadge`, `badgeConfiguredAt`, the device identity and every
+other field are carried through. No registration, held record or outbox row is
+read or written.
+
+CENTRAL CAN SUCCEED WHILE LOCAL FAILS, and the extension is never rolled back:
+it is real, and undoing it would hand the numbers back while a human believes
+this desk owns them. The page says so loudly and tells the operator not to
+issue badges until it is finished. Refresh Device Status then recovers it,
+because the result is the one recoverable shape:
+
+A central range is a SAFE SUPERSET of local state when the binding names the
+SAME device and event, the start is the same, `assignedAt` is the same, local
+and its binding already agree, and the central end is STRICTLY greater.
+Recovery then raises `badgeEnd` and the binding's `rangeEnd` and nothing else.
+A range is never decreased, `nextBadge` is never changed, and an unrelated
+central range is NEVER reinterpreted as an extension.
+
+ONLINE ONLY. There is no offline path, no queue, no retry timer and no
+polling. After success the server re-issues the signed lease for the extended
+range, and offline readiness is reported SEPARATELY from the range: the
+extension can be entirely real while the new lease fails to verify, and
+calling that done would leave a desk believing it can work through an outage
+it cannot.
+
+On `/badge-registration`, an exhausted range names the range this desk owns
+and offers **Add More Badges**, which links to Device Sign-In. Hold
+Registration stays available throughout, and nothing in the registration
+workflow writes a badge range.
 
 ### Google Sheets Client
 

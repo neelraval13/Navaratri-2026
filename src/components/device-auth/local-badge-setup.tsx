@@ -4,8 +4,10 @@ import type * as React from 'react'
 
 import AdoptionBlock from '@/components/device-auth/adoption-block'
 import BadgeRangeClaim from '@/components/device-auth/badge-range-claim'
+import BadgeRefill from '@/components/device-auth/badge-refill'
 import BadgeStateRow from '@/components/device-auth/badge-state-row'
 import ClaimResult from '@/components/device-auth/claim-result'
+import RefillResult from '@/components/device-auth/refill-result'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,17 +18,23 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import type { AdoptionPlan, ClaimPlan } from '@/db/central-badge-range'
+import type { AdoptionPlan, ClaimPlan, RefillPlan } from '@/db/central-badge-range'
 import { formatBadgeRange } from '@/db/device'
 import type { CentralBadgeRangeBinding, EventConfig } from '@/db/types'
 import type { BadgeClaimFlowResult } from '@/device-auth/badge-claim'
+import type { BadgeRefillFlowResult } from '@/device-auth/badge-refill'
+import type { OfflineLeaseOutcome } from '@/device-auth/offline-lease'
 import { formatBadgeNumber } from '@/lib/badge'
 
 interface LocalBadgeSetupProps {
   deviceName: string
   plan: AdoptionPlan
   claimPlan: ClaimPlan
+  refillPlan: RefillPlan
   claimResult: BadgeClaimFlowResult | null
+  refillResult: BadgeRefillFlowResult | null
+  /** What became of the lease, for reporting offline readiness after a refill. */
+  offline: OfflineLeaseOutcome
   config: EventConfig | undefined
   isBusy: boolean
   error: string | null
@@ -36,6 +44,8 @@ interface LocalBadgeSetupProps {
     rangeEnd: number
     physicalStackConfirmed: boolean
   }) => void
+  onRefill: (input: { newRangeEnd: number; physicalStackConfirmed: boolean }) => void
+  onFinishExtension: () => void
   onRangeEdited: () => void
   onRefresh: () => void
 }
@@ -197,12 +207,17 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
   deviceName,
   plan,
   claimPlan,
+  refillPlan,
   claimResult,
+  refillResult,
+  offline,
   config,
   isBusy,
   error,
   onAdopt,
   onClaim,
+  onRefill,
+  onFinishExtension,
   onRangeEdited,
   onRefresh,
 }) => {
@@ -210,6 +225,17 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
     config?.badgeEnd === undefined
       ? null
       : formatBadgeRange(config.badgeStart, config.badgeEnd)
+
+  /**
+   * A refill whose central half committed and whose local half did not makes
+   * the adoption planner report `central-range-changed` — correctly, since
+   * the two ranges differ, but as an unreconcilable conflict. The refill
+   * section explains the same facts and offers the safe recovery, so the
+   * harder block is suppressed rather than stacked on top of it.
+   *
+   * Only for THIS exact shape. Every other disagreement keeps its block.
+   */
+  const isPendingExtension = refillPlan.outcome === 'extension-pending'
 
   return (
     <div className="space-y-4 border-t border-border pt-6">
@@ -319,8 +345,20 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
         </div>
       ) : null}
 
+      {/*
+        Adding more physical badges to a range this desk already owns, and
+        finishing an extension whose central half is already real.
+      */}
+      <BadgeRefill
+        plan={refillPlan}
+        isBusy={isBusy}
+        onRefill={onRefill}
+        onFinishExtension={onFinishExtension}
+        onRangeEdited={onRangeEdited}
+      />
+
       {/* Every refusal, rendered once, shared with the self-claim section. */}
-      <AdoptionBlock plan={plan} />
+      {isPendingExtension ? null : <AdoptionBlock plan={plan} />}
 
       {/*
         Outside the claim form on purpose. A successful reservation moves this
@@ -330,6 +368,10 @@ const LocalBadgeSetup: React.FC<LocalBadgeSetupProps> = ({
       */}
       {claimResult === null ? null : (
         <ClaimResult result={claimResult} onRefresh={onRefresh} />
+      )}
+
+      {refillResult === null ? null : (
+        <RefillResult result={refillResult} offline={offline} onRefresh={onRefresh} />
       )}
     </div>
   )

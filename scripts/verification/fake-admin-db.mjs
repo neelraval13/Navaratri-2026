@@ -165,6 +165,53 @@ const guardBadgeAssignment = (row) => {
   }
 }
 
+/**
+ * The same guarantees, re-checked after an UPDATE.
+ *
+ * The GiST exclusion constraint is not an INSERT trigger: extending an active
+ * range widens the interval the constraint compares, so Postgres re-evaluates
+ * it. A fake that only guarded inserts would let "extend #001-#050 to
+ * #001-#100 while another device owns #051-#100" look safe — which is exactly
+ * the cross-device race the constraint exists to stop.
+ *
+ * The row being updated is excluded from the comparison by id: a range always
+ * overlaps itself.
+ */
+const guardBadgeAssignmentUpdate = (row) => {
+  if (!(row.rangeStart > 0) || !(row.rangeEnd > 0)) {
+    throw constraintViolation(
+      row.rangeStart > 0
+        ? 'badge_assignments_range_end_positive'
+        : 'badge_assignments_range_start_positive',
+    )
+  }
+
+  if (row.rangeStart > row.rangeEnd) {
+    throw constraintViolation('badge_assignments_range_ordered')
+  }
+
+  if (row.releasedAt !== null && row.releasedAt !== undefined) {
+    return
+  }
+
+  const others = state.assignments.filter(
+    (entry) =>
+      entry.id !== row.id &&
+      (entry.releasedAt === null || entry.releasedAt === undefined),
+  )
+
+  if (
+    others.some(
+      (entry) =>
+        entry.eventId === row.eventId &&
+        row.rangeStart <= entry.rangeEnd &&
+        entry.rangeStart <= row.rangeEnd,
+    )
+  ) {
+    throw constraintViolation('badge_assignments_active_ranges_no_overlap')
+  }
+}
+
 const guardFailure = () => {
   if (state.beforeNextWrite !== null) {
     const commit = state.beforeNextWrite
@@ -327,15 +374,41 @@ const updateBuilder = (table) => {
           guardFailure()
 
           const changed = []
+          /**
+           * Only `badge_assignments` is guarded, so only it needs reverting.
+           * Scoped deliberately rather than applied to every table: `rowsOf`
+           * builds a fresh array for `devices`, so a generic restore there
+           * would mutate a throwaway and look like a rollback without being
+           * one.
+           *
+           * A failed UPDATE in Postgres leaves the row as it was. Without
+           * this, an overlap refusal would still have widened the range in
+           * memory and every "nothing was written" assertion would pass for
+           * the wrong reason.
+           */
+          const guarded = target === 'badge_assignments'
+          const before = guarded ? state.assignments.map((row) => clone(row)) : null
 
-          for (const row of rowsOf(target)) {
-            if (matches(row, condition)) {
-              for (const [key, value] of Object.entries(patch)) {
-                row[key] = isSqlExpression(value) ? applyExpression(row, value) : value
+          try {
+            for (const row of rowsOf(target)) {
+              if (matches(row, condition)) {
+                for (const [key, value] of Object.entries(patch)) {
+                  row[key] = isSqlExpression(value) ? applyExpression(row, value) : value
+                }
+
+                if (guarded) {
+                  guardBadgeAssignmentUpdate(row)
+                }
+
+                changed.push(clone(row))
               }
-
-              changed.push(clone(row))
             }
+          } catch (error) {
+            if (before !== null) {
+              state.assignments = before
+            }
+
+            throw error
           }
 
           return changed

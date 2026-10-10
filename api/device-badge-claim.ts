@@ -2,6 +2,7 @@ import { BADGE_RANGE_REQUIRED_ATTRIBUTE } from '../src/shared/device-attributes.
 import { PUBLIC_BADGE_CLAIM_CONFLICT } from '../server/badge-assignments/conflicts.js'
 import { isSameBadgeRange, type BadgeRangeInput } from '../server/badge-assignments/range.js'
 import {
+  extendActiveBadgeRange,
   readActiveBadgeAssignment,
   reserveBadgeRange,
   type CentralBadgeRange,
@@ -10,10 +11,22 @@ import type { AuthenticatedDeviceContext } from '../server/device-auth/authentic
 import { authorizeDeviceRequest } from '../server/device-auth/authorize.js'
 import { issueDeviceOfflineAuthorization } from '../server/device-auth/offline-authorization.js'
 import { deviceJson, readDeviceBody } from '../server/device-auth/http.js'
-import { parseDeviceBadgeClaimInput } from '../server/device-auth/requests.js'
+import {
+  parseDeviceBadgeClaimInput,
+  parseDeviceBadgeRefillInput,
+} from '../server/device-auth/requests.js'
 
 /**
- * AUTHENTICATED ONLINE BADGE-RANGE SELF-CLAIM.
+ * AUTHENTICATED ONLINE BADGE-RANGE SELF-CLAIM, AND CONTIGUOUS REFILL.
+ *
+ * Two operations, dispatched by METHOD:
+ *
+ *   POST    reserve a FIRST range for a device that owns none
+ *   PATCH   extend the range it already owns, upward and contiguously
+ *
+ * One Function rather than two, because they are the same question asked
+ * twice — "which physical badge numbers does this device own?" — and because
+ * every file under `api/` costs a deployment Function.
  *
  * An operator standing at a desk with a physical badge stack asks central
  * Postgres to record that THIS device owns those numbers. Postgres decides
@@ -40,6 +53,10 @@ const MESSAGES = {
   alreadyAssigned: 'This device already has a central badge assignment.',
   eventMismatch: 'That badge range could not be claimed for this device.',
   unexpected: 'That badge range could not be claimed. Try again.',
+  refillOverlap: 'The additional badges are already assigned.',
+  refillStale: "This device's badge range has changed. Refresh and try again.",
+  refillNoRange: 'This device has no badge range to extend.',
+  refillUnexpected: 'The badge range could not be extended. Try again.',
 } as const
 
 /**
@@ -212,5 +229,156 @@ export async function POST(request: Request): Promise<Response> {
     console.error(`Navaratri device badge claim: failed (SQLSTATE ${code}).`)
 
     return deviceJson({ ok: false, message: MESSAGES.unexpected }, 500)
+  }
+}
+
+
+/**
+ * A refill CHANGES central badge ownership, so the lease the browser holds is
+ * stale the moment this returns — exactly as a first claim does. A fresh one
+ * is issued from the post-extension state, which spares the caller a session
+ * round trip purely to catch up.
+ *
+ * The COMPLETE range comes back, not the delta: the browser needs to know
+ * which numbers it now owns, and "48 more" is not that.
+ */
+const extended = (
+  range: CentralBadgeRange,
+  outcome: 'extended' | 'already-extended',
+  authorized: { context: AuthenticatedDeviceContext; eventEndsAt: Date | null },
+): Response =>
+  deviceJson(
+    {
+      ok: true,
+      outcome,
+      activeBadgeRange: range,
+      offlineAuthorization: issueDeviceOfflineAuthorization({
+        context: { ...authorized.context, activeBadgeRange: range },
+        eventEndsAt: authorized.eventEndsAt,
+      }),
+    },
+    200,
+  )
+
+/**
+ * CONTIGUOUS BADGE REFILL.
+ *
+ * A desk receives more physical badges and must be able to issue them without
+ * giving up the numbers it already owns. The range is EXTENDED upward: the
+ * previous assignment is neither released nor duplicated, so every badge
+ * already issued stays owned by the same device and every queued outbox
+ * snapshot stays valid.
+ *
+ * The operator chooses only the new END. The first badge of the new batch is
+ * derived — one past the current end — because a refill with a gap is not a
+ * contiguous range, and this phase deliberately implements no multi-range
+ * ownership.
+ *
+ * `nextBadge` is never involved. It is local, it is the allocator, and
+ * central has no counter to reconcile it with.
+ */
+export async function PATCH(request: Request): Promise<Response> {
+  const authorized = await authorizeDeviceRequest(request, { mutating: true })
+
+  if (authorized.ok === false) {
+    return authorized.response
+  }
+
+  const { device } = authorized.context
+
+  const body = await readDeviceBody(request)
+
+  if (body.ok === false) {
+    return body.response
+  }
+
+  const input = parseDeviceBadgeRefillInput(body.body)
+
+  if (input.ok === false) {
+    return deviceJson({ ok: false, message: input.message }, 400)
+  }
+
+  /**
+   * The CURRENT central attribute set, re-read with the session. A device
+   * that has lost `registration` owns no badges and must not gain more.
+   */
+  if (!device.attributes.includes(BADGE_RANGE_REQUIRED_ATTRIBUTE)) {
+    return deviceJson(
+      {
+        ok: false,
+        blocked: 'registration-required',
+        message: MESSAGES.registrationRequired,
+      },
+      403,
+    )
+  }
+
+  try {
+    /**
+     * No precheck. The guarded update IS the check: reading the assignment
+     * first and then trusting it is the race this compare-and-set exists to
+     * close, and a zero-row result re-reads anyway to tell an idempotent
+     * repeat from a genuinely stale caller.
+     */
+    const result = await extendActiveBadgeRange({
+      deviceId: device.id,
+      expectedRangeEnd: input.value.expectedRangeEnd,
+      newRangeEnd: input.value.newRangeEnd,
+    })
+
+    if (result.ok === true) {
+      return extended(result.value, result.outcome, authorized)
+    }
+
+    if (result.reason === 'stale-range') {
+      /**
+       * `null` means there is nothing to extend at all, which is a different
+       * situation from a range that moved and deserves its own name. The
+       * current assignment travels back either way so the browser reconciles
+       * against the truth rather than against what it asked for.
+       */
+      return deviceJson(
+        {
+          ok: false,
+          conflict: result.current === null ? 'no-active-range' : 'stale-range',
+          activeBadgeRange: result.current,
+          message:
+            result.current === null ? MESSAGES.refillNoRange : MESSAGES.refillStale,
+        },
+        409,
+      )
+    }
+
+    /**
+     * `range-overlap` means another device in this event owns part of the new
+     * span. Nothing is written, and nothing is said about WHICH device — the
+     * operator needs to check the physical stack, not the registry.
+     *
+     * The other internal conflicts cannot describe an UPDATE that touches
+     * only `range_end`: this row already exists, so neither the
+     * one-active-per-device index nor the device/event foreign key can fire.
+     * They are still translated rather than assumed unreachable.
+     */
+    const conflict = PUBLIC_BADGE_CLAIM_CONFLICT[result.conflict]
+
+    return deviceJson(
+      {
+        ok: false,
+        conflict: conflict === 'range-overlap' ? 'range-overlap' : 'stale-range',
+        activeBadgeRange: null,
+        message:
+          conflict === 'range-overlap' ? MESSAGES.refillOverlap : MESSAGES.refillStale,
+      },
+      409,
+    )
+  } catch (error: unknown) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code: unknown }).code)
+        : 'unknown'
+
+    console.error(`Navaratri device badge refill: failed (SQLSTATE ${code}).`)
+
+    return deviceJson({ ok: false, message: MESSAGES.refillUnexpected }, 500)
   }
 }

@@ -297,12 +297,30 @@ check('the adoption transaction never writes a registration or outbox row',
     .test(stripComments(read('src/db/central-badge-range.ts'))), false)
 check('  it only counts them', /db\.registrations\s*\n?\s*\.where\('status'\)/
   .test(read('src/db/central-badge-range.ts')), true)
-check('  and commits in ONE transaction',
-  [...stripComments(read('src/db/central-badge-range.ts'))
-    .matchAll(/db\.transaction\(/g)].length, 1)
-check('  with a single config write',
-  [...stripComments(read('src/db/central-badge-range.ts'))
-    .matchAll(/db\.config\.put\(/g)].length, 2)
+/**
+ * ONE TRANSACTION PER WRITER. Phase D2.1 added the contiguous extension as a
+ * second writer in this module, so a bare count of one no longer describes
+ * it — and a bare count of two would be satisfied by two transactions inside
+ * `adoptCentralBadgeRange`. Each writer is therefore named and checked to
+ * open its own.
+ */
+const RANGE_WRITERS = ['adoptCentralBadgeRange', 'extendLocalBadgeRange']
+const rangeDomain = stripComments(read('src/db/central-badge-range.ts'))
+
+check('  and each writer commits in ONE transaction of its own',
+  RANGE_WRITERS.map((writer) => {
+    const body = rangeDomain.slice(rangeDomain.indexOf(`export const ${writer} = async`))
+
+    return /^[\s\S]{0,400}db\.transaction\(/.test(body)
+  }), RANGE_WRITERS.map(() => true))
+check('    and there are exactly that many',
+  [...rangeDomain.matchAll(/db\.transaction\(/g)].length, RANGE_WRITERS.length)
+/**
+ * Three config writes: adoption's fresh path, adoption's alignment path, and
+ * the extension. Each is a single `put` inside its own transaction.
+ */
+check('  with one config write per outcome',
+  [...rangeDomain.matchAll(/db\.config\.put\(/g)].length, 3)
 
 const dexie = read('src/db/database.ts')
 check('IndexedDB version unchanged (1)', /DATABASE_VERSION = 1/.test(dexie), true)
@@ -355,10 +373,23 @@ check('verifying a session only READS the plan',
   [/readCentralBadgeRangePlan\(context\)/.test(panelSource),
    /saved\.outcome === 'saved'[\s\S]{0,300}adoptCentralBadgeRange/.test(panelSource)],
   [true, false])
+/**
+ * Sliced to the helper's OWN body. Phase D2.1 appended the refill section
+ * after it, so a slice that ran to the end of the file would read the
+ * extension's transaction as the read helper's and report the opposite of
+ * the truth.
+ */
 check('  the read helper writes nothing',
-  /put\(|delete\(|transaction\(/.test(
-    stripComments(read('src/db/central-badge-range.ts'))
-      .slice(stripComments(read('src/db/central-badge-range.ts')).indexOf('readCentralBadgeRangePlan'))),
+  (() => {
+    const from = rangeDomain.indexOf('export const readCentralBadgeRangePlan')
+    const next = rangeDomain.indexOf('export ', from + 1)
+
+    return from === -1
+      ? 'the read helper is missing'
+      : /put\(|delete\(|transaction\(/.test(
+          rangeDomain.slice(from, next === -1 ? undefined : next),
+        )
+  })(),
   false)
 check('the offline branches cannot reach adoption',
   /'last-verified'[\s\S]{0,600}adoptCentralBadgeRange/.test(panelSource), false)

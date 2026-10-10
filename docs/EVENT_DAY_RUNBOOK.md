@@ -45,7 +45,7 @@ Before any of the checks below, provision each physical device by following
 |---|---|
 | `/` | Home — the module launcher |
 | `/badge-registration` | The registration desk workflow |
-| `/device-login` | Device sign-in, setup, badge adoption and sign-out |
+| `/device-login` | Device sign-in, setup, badge adoption, refill and sign-out |
 
 `/device-registration` is retired and redirects to `/device-login`.
 
@@ -381,3 +381,41 @@ Google Sheets is the central ledger for snapshots that have **already been
 acknowledged**. Anything still pending in the outbox exists only on this device
 until it syncs. That is the real reason to keep the pending count low and to
 finish the event with `Synced`.
+
+---
+
+## A desk has run out of badges
+
+The desk shows **Badge range exhausted**, names the range it owns, and offers
+**Add More Badges**. Hold Registration still works, so nobody has to be turned
+away while this is sorted out.
+
+| # | Step | Done |
+|---|---|---|
+| 1 | Physically bring the next badge stack to that desk | ☐ |
+| 2 | Check the Device Range Plan: the new stack must start exactly one past this desk's current last badge | ☐ |
+| 3 | Press **Add More Badges**, which opens Device Sign-In | ☐ |
+| 4 | Confirm the **Next refill starts** number matches the first badge in the new stack | ☐ |
+| 5 | Enter the **New last badge** and check the count it reports | ☐ |
+| 6 | Tick the physical confirmation and add the badges | ☐ |
+| 7 | Confirm the badge range now ends where the new stack does | ☐ |
+| 8 | Confirm the **next badge** has NOT changed | ☐ |
+| 9 | Return to Badge Registration and issue the next badge normally | ☐ |
+| 10 | Record the new last badge in the Device Range Plan | ☐ |
+
+The refill needs a **connection**. Offline, the desk keeps issuing from the
+range it already has and keeps holding registrations; the refill waits.
+
+**The new stack must be contiguous.** The first badge of the refill is derived
+from the current last badge and cannot be typed, so a stack that starts
+somewhere else cannot be added to this desk — give it to a desk whose range
+ends there, or reconcile the plan first.
+
+If the desk says *"Central badge range was extended, but this browser did not
+finish"*, do not issue badges from it. Press **Refresh Device Status** and then
+**Finish Local Setup**; the extra numbers are already recorded centrally and
+finishing changes nothing else.
+
+If it says the badges **overlap a range already assigned**, stop. Another desk
+owns those numbers. Check the physical stacks against the Device Range Plan
+before trying again.

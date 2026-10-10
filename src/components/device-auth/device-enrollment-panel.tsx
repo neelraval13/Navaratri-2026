@@ -12,9 +12,11 @@ import { Card, CardContent } from '@/components/ui/card'
 import {
   adoptCentralBadgeRange,
   readCentralBadgeRangeBinding,
+  extendLocalBadgeRange,
   readCentralBadgeRangePlan,
   type AdoptionPlan,
   type ClaimPlan,
+  type RefillPlan,
 } from '@/db/central-badge-range'
 import {
   clearCentralDeviceEnrollment,
@@ -27,6 +29,11 @@ import {
   contextAfterClaim,
   type BadgeClaimFlowResult,
 } from '@/device-auth/badge-claim'
+import {
+  contextAfterRefill,
+  refillCentralBadgeRange,
+  type BadgeRefillFlowResult,
+} from '@/device-auth/badge-refill'
 import {
   readDeviceIdentityConvergencePlan,
   refreshConvergedDeviceName,
@@ -71,6 +78,8 @@ type PanelState =
       badge: {
         plan: AdoptionPlan
         claim: ClaimPlan
+        /** What a contiguous refill could do, from the same committed row. */
+        refill: RefillPlan
         config: EventConfig | undefined
       }
       /** What became of the lease the server just issued. */
@@ -114,6 +123,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
   const [isBusy, setIsBusy] = useState(false)
   const [badgeError, setBadgeError] = useState<string | null>(null)
   const [claimResult, setClaimResult] = useState<BadgeClaimFlowResult | null>(null)
+  const [refillResult, setRefillResult] = useState<BadgeRefillFlowResult | null>(null)
   const [convergenceResult, setConvergenceResult] =
     useState<ConvergenceFlowResult | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -264,6 +274,7 @@ const DeviceEnrollmentPanel: React.FC = () => {
 
   const refresh = () => {
     setClaimResult(null)
+    setRefillResult(null)
     setConvergenceResult(null)
     setBadgeError(null)
     setState({ phase: 'checking' })
@@ -401,6 +412,95 @@ const DeviceEnrollmentPanel: React.FC = () => {
     setIsBusy(false)
     setClaimResult(result)
     setState({ ...state, context, badge, offline })
+  }
+
+  /**
+   * The ONE deliberate action behind a CONTIGUOUS REFILL: confirm the extra
+   * stack, prove locally that the range may be extended, extend it centrally
+   * under a compare-and-set, then extend local state to the range the SERVER
+   * returned.
+   *
+   * It writes no badge field itself. The local write is the extension
+   * transaction, which stays the only implementation of "local badge state
+   * follows a central extension".
+   */
+  const refill = async (input: {
+    newRangeEnd: number
+    physicalStackConfirmed: boolean
+  }) => {
+    if (isBusy || state.phase !== 'authenticated') {
+      return
+    }
+
+    setIsBusy(true)
+    setRefillResult(null)
+
+    const result = await refillCentralBadgeRange({
+      context: state.context,
+      newRangeEnd: input.newRangeEnd,
+      physicalStackConfirmed: input.physicalStackConfirmed,
+    })
+
+    /**
+     * The context was fetched BEFORE the range grew, so a successful
+     * extension makes it stale the moment it returns. Every plan below is
+     * computed against the context the SERVER's answer implies, never the one
+     * still sitting in state.
+     */
+    const context = contextAfterRefill(state.context, result)
+
+    // Re-read from the committed row, whatever happened: an extension that
+    // succeeded centrally and failed locally must not leave the page showing
+    // a range this browser does not have.
+    const badge = await readCentralBadgeRangePlan(context)
+
+    /**
+     * A refill CHANGES central badge ownership, so the server re-issued the
+     * lease for the post-extension state. It is checked against the range
+     * THAT response established — and offline readiness is reported
+     * separately from the range, because the extension can be real while the
+     * lease fails to verify.
+     */
+    const offline =
+      result.outcome === 'refilled' || result.outcome === 'refilled-not-extended'
+        ? await acceptOfflineAuthorization({
+            context,
+            envelope: result.offlineAuthorization,
+            expectedBadgeRange: result.activeBadgeRange,
+          })
+        : state.offline
+
+    setIsBusy(false)
+    setRefillResult(result)
+    setState({ ...state, context, badge, offline })
+  }
+
+  /**
+   * RECOVERY. Central already records the extension and this browser does
+   * not, so local state is advanced to match it. No server call: the central
+   * range is what the last session check proved, and no new confirmation is
+   * asked for — the operator already gave one for exactly these numbers.
+   *
+   * The same extension transaction the online flow ends with, called
+   * directly, because there is nothing to orchestrate here.
+   */
+  const finishExtension = async () => {
+    if (isBusy || state.phase !== 'authenticated') {
+      return
+    }
+
+    setIsBusy(true)
+    setBadgeError(null)
+
+    const result = await extendLocalBadgeRange({ context: state.context })
+    const badge = await readCentralBadgeRangePlan(state.context)
+
+    setIsBusy(false)
+    setState({ ...state, badge })
+
+    if (result.outcome === 'refused') {
+      setBadgeError('Local badge setup could not be finished. See the status above.')
+    }
   }
 
   /**
@@ -620,7 +720,10 @@ const DeviceEnrollmentPanel: React.FC = () => {
             deviceName={state.context.device.name}
             plan={state.badge.plan}
             claimPlan={state.badge.claim}
+            refillPlan={state.badge.refill}
             claimResult={claimResult}
+            refillResult={refillResult}
+            offline={state.offline}
             config={state.badge.config}
             isBusy={isBusy}
             error={badgeError}
@@ -630,10 +733,17 @@ const DeviceEnrollmentPanel: React.FC = () => {
             onClaim={(input) => {
               void claim(input)
             }}
+            onRefill={(input) => {
+              void refill(input)
+            }}
+            onFinishExtension={() => {
+              void finishExtension()
+            }}
             /* The old result described the old numbers; it is not the new
                range's answer, so it is dismissed rather than left to mislead. */
             onRangeEdited={() => {
               setClaimResult(null)
+              setRefillResult(null)
             }}
             onRefresh={refresh}
           />

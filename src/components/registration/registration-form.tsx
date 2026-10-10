@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type * as React from 'react'
 
+import { ROUTES } from '@/app/routes'
 import AttendeeDetailsStep from '@/components/registration/attendee-details-step'
 import {
   getFirstInvalidAttendeeField,
@@ -68,8 +69,12 @@ const ISSUE_ERROR_MESSAGES = {
 } as const
 
 /**
- * Names THIS desk's range, because the operator's next action is to go to a
- * desk that still has badges — and they need to know which stack ran out.
+ * Names THIS desk's range, because the operator needs to know which stack ran
+ * out — and, since Phase D2.1, offers the way out: a contiguous refill at
+ * Device Sign-In adds more badges to this same range without releasing it.
+ *
+ * The link is the only action. Nothing in the registration workflow writes a
+ * badge range, and Hold Registration stays available throughout.
  */
 const buildBadgeRangeExhaustedNotice = (
   config: EventConfig,
@@ -83,8 +88,9 @@ const buildBadgeRangeExhaustedNotice = (
     kind: 'error',
     message:
       range === null
-        ? 'Badge range exhausted. No more badges can be issued from this device.'
-        : `Badge range exhausted. This device was assigned ${range}. No more badges can be issued from this device. Hold Registration is still available — contact the organizer for another badge range.`,
+        ? 'Badge range exhausted. No more badges can be issued from this device. Hold Registration is still available.'
+        : `Badge range exhausted. This device owns ${range}. Hold Registration is still available, and more badges can be added to this range.`,
+    action: { href: ROUTES.deviceLogin, label: 'Add More Badges' },
   }
 }
 

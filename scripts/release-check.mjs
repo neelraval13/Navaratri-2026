@@ -1387,7 +1387,7 @@ if (adoptionSource === null || typesSource === null) {
    * holds the central `deviceId` — that is its purpose — but the config row's
    * own `deviceId` and `deviceName` must never be assigned from the session.
    */
-  const configLiterals = [...code.matchAll(/:\s*EventConfig\s*=\s*\{([\s\S]*?)\n      \}/g)]
+  const configLiterals = [...code.matchAll(/:\s*EventConfig\s*=\s*\{([\s\S]*?)\n\s*\}/g)]
     .map((match) => match[1])
 
   if (configLiterals.length === 0) {
@@ -1407,9 +1407,47 @@ if (adoptionSource === null || typesSource === null) {
     adoptionProblems.push('adoption mutates registrations or the outbox')
   }
 
-  // One transaction, so the range and its provenance cannot land separately.
-  if ((code.match(/db\.transaction\(/g) ?? []).length !== 1) {
-    adoptionProblems.push('adoption does not commit in exactly one transaction')
+  /**
+   * ONE TRANSACTION PER WRITER, so a range and its provenance can never land
+   * separately. Phase D2.1 added the second writer — the contiguous
+   * extension — and each is checked by name rather than by a bare count,
+   * which two transactions in one function would also satisfy.
+   */
+  const RANGE_WRITERS = ['adoptCentralBadgeRange', 'extendLocalBadgeRange']
+
+  if ((code.match(/db\.transaction\(/g) ?? []).length !== RANGE_WRITERS.length) {
+    adoptionProblems.push(
+      `${String(RANGE_WRITERS.length)} local badge-range transactions expected, found ` +
+      String((code.match(/db\.transaction\(/g) ?? []).length),
+    )
+  }
+
+  for (const writer of RANGE_WRITERS) {
+    const body = code.slice(code.indexOf(`export const ${writer} = async`))
+
+    if (body === '' || !/^[\s\S]{0,400}db\.transaction\(/.test(body)) {
+      adoptionProblems.push(`${writer} does not open a transaction of its own`)
+    }
+  }
+
+  /**
+   * THE EXTENSION NEVER TOUCHES THE COUNTER. `nextBadge` is the local
+   * allocator and its existing value is authoritative: a desk part-way
+   * through its range that receives more badges keeps its place, and
+   * recomputing from the new batch's start would skip every badge between.
+   */
+  const extensionBody = code.slice(
+    code.indexOf('export const extendLocalBadgeRange = async'),
+  )
+
+  if (/nextBadge/.test(extensionBody)) {
+    adoptionProblems.push('the range extension reads or writes nextBadge')
+  }
+
+  for (const forbidden of ['badgeStart:', 'badgeConfiguredAt:', 'rangeStart:', 'assignedAt:']) {
+    if (extensionBody.includes(forbidden)) {
+      adoptionProblems.push(`the range extension writes ${forbidden}`)
+    }
   }
 
   // No central write is reachable from the browser's adoption path.
@@ -1476,9 +1514,18 @@ if (claimSource === null || reserveSource === null || claimRequestSource === nul
   const validator = stripComments(claimRequestSource)
   const flow = stripComments(claimFlowSource)
 
-  // The METHOD surface: POST only, and nothing else under api/ claims a range.
-  if (/export (async )?function (GET|PUT|PATCH|DELETE)\(/.test(endpoint)) {
-    selfClaimProblems.push(`${CLAIM_ENDPOINT} exports a method other than POST`)
+  /**
+   * The METHOD surface. Phase D2.1 added PATCH for the contiguous refill —
+   * the same question asked twice, on one Function rather than two, because
+   * every file under `api/` costs a deployment Function. GET, PUT and DELETE
+   * have no business here, and nothing else under `api/` touches a range.
+   */
+  if (/export (async )?function (GET|PUT|DELETE)\(/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} exports a method other than POST or PATCH`)
+  }
+
+  if (!/export async function PATCH\(/.test(endpoint)) {
+    selfClaimProblems.push(`${CLAIM_ENDPOINT} does not expose the contiguous refill`)
   }
 
   // IDENTITY COMES FROM THE COOKIE, never from the body.
@@ -1662,6 +1709,211 @@ addCheck(
   'badge-self-claim',
   'A device may claim a badge range centrally only while authenticated and online',
   selfClaimProblems,
+)
+
+// --- I2b. contiguous badge refill -----------------------------------------
+/**
+ * A desk that runs out of badges receives more and EXTENDS the range it
+ * already owns, upward and contiguously. It is not a second range, not a
+ * replacement, and not a release: the assignment keeps its identity, so every
+ * badge already issued stays owned by the same device and every queued outbox
+ * snapshot stays valid.
+ *
+ * The three things that would make it dangerous, guarded here: a blind write
+ * instead of a compare-and-set, a local counter reset, and a central range
+ * reinterpreted as an extension when it is something else.
+ */
+const refillProblems = []
+const refillEndpointSource = readText(join(ROOT, CLAIM_ENDPOINT))
+const refillWriterSource = readText(join(ROOT, 'server/badge-assignments/reserve.ts'))
+const refillValidatorSource = readText(join(ROOT, 'server/device-auth/requests.ts'))
+const refillFlowSource = readText(join(ROOT, 'src/device-auth/badge-refill.ts'))
+const refillDomainSource = readText(join(ROOT, 'src/db/central-badge-range.ts'))
+
+if (refillEndpointSource === null || refillWriterSource === null ||
+    refillValidatorSource === null || refillFlowSource === null ||
+    refillDomainSource === null) {
+  refillProblems.push('the refill endpoint, writer, validator, flow or domain could not be read')
+} else {
+  const endpoint = stripComments(refillEndpointSource)
+  const writer = stripComments(refillWriterSource)
+  const validator = stripComments(refillValidatorSource)
+  const flow = stripComments(refillFlowSource)
+  const domain = stripComments(refillDomainSource)
+
+  /**
+   * THE COMPARE-AND-SET. The expected end is part of the WHERE clause, so two
+   * callers racing to extend the same assignment cannot both win. A SELECT
+   * followed by a blind UPDATE would pass every single-threaded test and lose
+   * a range to the second writer in production.
+   */
+  const extender = writer.slice(writer.indexOf('export const extendActiveBadgeRange'))
+
+  if (extender === '') {
+    refillProblems.push('the central range extender is missing')
+  } else {
+    if (!/eq\(badgeAssignments\.rangeEnd, input\.expectedRangeEnd\)/.test(extender)) {
+      refillProblems.push('the central extension is not guarded by the expected range end')
+    }
+
+    if (!/isNull\(badgeAssignments\.releasedAt\)/.test(extender)) {
+      refillProblems.push('the central extension can touch a released assignment')
+    }
+
+    // ONLY `range_end` moves. Everything else is the assignment's identity.
+    const patch = /\.set\(\{([\s\S]*?)\}\)/.exec(extender)?.[1] ?? ''
+
+    if (!/rangeEnd:/.test(patch)) {
+      refillProblems.push('the central extension does not set rangeEnd')
+    }
+
+    for (const forbidden of ['rangeStart', 'assignedAt', 'deviceId', 'eventId', 'releasedAt']) {
+      if (patch.includes(forbidden)) {
+        refillProblems.push(`the central extension sets ${forbidden}`)
+      }
+    }
+
+    // A refill adds to a range; it never creates a second one.
+    if (/insert\(badgeAssignments\)/.test(extender)) {
+      refillProblems.push('the central extension inserts a second assignment row')
+    }
+  }
+
+  // The DATABASE remains the authority for cross-device races.
+  if (!/mapBadgeReservationConflict\(/.test(extender)) {
+    refillProblems.push('the central extension does not translate a constraint violation')
+  }
+
+  /**
+   * The operator chooses only the new END. `rangeStart` is derived from the
+   * current end, and `nextBadge` is local — a field the server could start
+   * reading is a field that would eventually be read.
+   */
+  for (const field of ['deviceId', 'eventId', 'eventSlug', 'loginName', 'rangeStart', 'nextBadge']) {
+    if (!new RegExp(`'${field}'`).test(validator)) {
+      refillProblems.push(`the refill validator does not refuse a ${field} field`)
+    }
+  }
+
+  if (!/newRangeEnd <= expectedRangeEnd/.test(validator)) {
+    refillProblems.push('the refill validator accepts an end that is not an increase')
+  }
+
+  if (!/physicalStackConfirmed !== true/.test(validator)) {
+    refillProblems.push('the refill validator does not require an exact physical confirmation')
+  }
+
+  // The endpoint still requires Registration from CURRENT central state.
+  const patchHandler = endpoint.slice(endpoint.indexOf('export async function PATCH'))
+
+  if (patchHandler === '') {
+    refillProblems.push('the refill endpoint does not expose PATCH')
+  } else {
+    if (!/authorizeDeviceRequest\(request, \{ mutating: true \}\)/.test(patchHandler)) {
+      refillProblems.push('the refill endpoint does not authenticate a mutating device request')
+    }
+
+    if (!/BADGE_RANGE_REQUIRED_ATTRIBUTE/.test(patchHandler)) {
+      refillProblems.push('the refill endpoint does not require Registration server-side')
+    }
+
+    if (/nextBadge/.test(patchHandler)) {
+      refillProblems.push('the refill endpoint names nextBadge')
+    }
+  }
+
+  /**
+   * THE LOCAL WRITE IS THE DOMAIN'S, and the flow orders the two halves so a
+   * failure leaves the least damage: preflight, then central, then local.
+   * Reserving first and discovering a local disagreement afterwards would
+   * leave a desk owning numbers it cannot issue, and nothing shrinks a
+   * central range.
+   */
+  if (/db\.config\.put|db\.transaction|badgeEnd:|nextBadge:/.test(flow)) {
+    refillProblems.push('the refill flow writes local badge state directly')
+  }
+
+  const flowBody = flow.slice(flow.indexOf('export const refillCentralBadgeRange'))
+
+  for (const [label, needle] of [
+    ['the local preflight', 'planCentralBadgeRangeRefill('],
+    ['the central extension', 'refillDeviceBadgeRange('],
+    ['the local extension', 'extendLocalBadgeRange('],
+  ]) {
+    if (flowBody.indexOf(needle) === -1) {
+      refillProblems.push(`the refill flow does not run ${label}`)
+    }
+  }
+
+  if (flowBody.indexOf('planCentralBadgeRangeRefill(') >
+      flowBody.indexOf('refillDeviceBadgeRange(')) {
+    refillProblems.push('the refill flow extends centrally before checking local state')
+  }
+
+  if (flowBody.indexOf('refillDeviceBadgeRange(') > flowBody.indexOf('extendLocalBadgeRange(')) {
+    refillProblems.push('the refill flow extends locally before the central extension')
+  }
+
+  if (/setInterval|setTimeout|navigator\.onLine/.test(flow)) {
+    refillProblems.push('the refill flow polls, retries on a timer or guesses connectivity')
+  }
+
+  /**
+   * THE SAFE-SUPERSET RULE, which is both the normal post-success check and
+   * the recovery check. Every clause is load-bearing, so each is pinned:
+   * same start (or badges already issued would belong to numbers this desk no
+   * longer owns), same grant, and a STRICT increase so a range is never
+   * decreased.
+   */
+  const superset = domain.slice(
+    domain.indexOf('export const checkCentralRangeSuperset'),
+    domain.indexOf('export const planCentralBadgeRangeRefill'),
+  )
+
+  if (superset === '') {
+    refillProblems.push('the safe-superset rule is missing')
+  } else {
+    for (const [label, pattern] of [
+      ['the central device', /binding\.deviceId !== context\.device\.id/],
+      ['the central event', /binding\.eventId !== context\.event\.id/],
+      ['the range start', /binding\.rangeStart !== central\.rangeStart/],
+      ['the grant timestamp', /binding\.assignedAt !== central\.assignedAt/],
+      ['a strict increase', /central\.rangeEnd <= config\.badgeEnd/],
+    ]) {
+      if (!pattern.test(superset)) {
+        refillProblems.push(`the safe-superset rule does not check ${label}`)
+      }
+    }
+
+    if (/nextBadge/.test(superset)) {
+      refillProblems.push('the safe-superset rule reads nextBadge')
+    }
+  }
+
+  // The refill planner asks the CANONICAL ownership check, not a copy.
+  if (!/checkBadgeOwnership\(/.test(domain)) {
+    refillProblems.push('the refill planner does not reuse the canonical badge-safety check')
+  }
+
+  // D2.1 changes no stored contract.
+  const dexie = stripComments(readText(join(ROOT, 'src/db/database.ts')) ?? '')
+
+  if (!/DATABASE_VERSION = 1\b/.test(dexie)) {
+    refillProblems.push('the refill phase changed the IndexedDB version')
+  }
+
+  for (const column of ['range_end', 'refill', 'extended_at']) {
+    if (new RegExp(`'${column}'`).test(stripComments(readText(join(ROOT, 'server/db/schema.ts')) ?? ''))
+        && column !== 'range_end') {
+      refillProblems.push(`the refill phase added a ${column} column`)
+    }
+  }
+}
+
+addCheck(
+  'badge-refill',
+  'A device extends its own badge range upward, contiguously, and only while online',
+  refillProblems,
 )
 
 // --- I3. the signed offline authorization lease ---------------------------

@@ -28,4 +28,16 @@ export interface BlockedAttendeeField {
  */
 export type FormNotice =
   | { kind: 'held'; name: string }
-  | { kind: 'error'; message: string }
+  | {
+      kind: 'error'
+      message: string
+      /**
+       * An optional way OUT of the error, as a route.
+       *
+       * Only one error has one: an exhausted badge range, where the next step
+       * is a refill at Device Sign-In rather than anything in this form. It is
+       * a link, never a mutation — nothing in the registration workflow writes
+       * a badge range.
+       */
+      action?: { href: string; label: string }
+    }

@@ -6,7 +6,10 @@ import {
   type DeviceSessionContext,
   type OfflineAuthorizationEnvelope,
 } from '@/device-auth/device-session-contract'
-import { isBadgeClaimConflict } from '@/shared/badge-claim-contract'
+import {
+  isBadgeClaimConflict,
+  isBadgeRefillConflict,
+} from '@/shared/badge-claim-contract'
 import { CURRENT_EVENT_SLUG } from '@/shared/event'
 
 /**
@@ -63,6 +66,18 @@ export const DEVICE_MESSAGES = {
     'Enter a valid badge range. The first badge must not be after the last badge.',
   claimFailed:
     'Something went wrong while claiming this badge range. Try again, or refresh the device status.',
+  refillUnconfirmed:
+    'The badge refill could not be confirmed. Refresh the device status before trying again.',
+  refillOverlap:
+    'Those additional badges overlap a range already assigned to another device. Check the physical badge stack at this desk and enter a different last badge.',
+  refillStale:
+    "This device's badge range has changed since this page was loaded. Refresh the device status and try again.",
+  refillNoRange:
+    'This device has no central badge range to extend. Claim one first.',
+  refillInvalid:
+    'Enter a last badge higher than the current one.',
+  refillFailed:
+    'Something went wrong while adding badges. Try again, or refresh the device status.',
 } as const
 
 export type DeviceLoginResult =
@@ -452,6 +467,189 @@ export const claimDeviceBadgeRange = async (input: {
   // A TypeScript annotation would be a claim; this is the check.
   if (activeBadgeRange === null || (outcome !== 'claimed' && outcome !== 'already-claimed')) {
     return { status: 'unexpected', message: DEVICE_MESSAGES.claimFailed }
+  }
+
+  return {
+    status: outcome,
+    activeBadgeRange,
+    offlineAuthorization: parseOfflineAuthorizationEnvelope(
+      (body as { offlineAuthorization?: unknown }).offlineAuthorization,
+    ),
+  }
+}
+
+/**
+ * Every answer the CONTIGUOUS REFILL can produce, as the UI needs it.
+ *
+ * `unreachable` is AMBIGUOUS and deliberately not a failure: the extension
+ * may have committed with the response lost on the way back. The caller must
+ * re-check central state rather than assume either outcome.
+ */
+export type DeviceBadgeRefillResult =
+  /**
+   * Two members rather than one with a union discriminant: a single member
+   * typed `'extended' | 'already-extended'` is not removed by excluding both
+   * names, so narrowing would silently stop working — the exact failure the
+   * build-parity rules exist to prevent.
+   */
+  | {
+      status: 'extended'
+      /** The COMPLETE range the device now owns, never the delta. */
+      activeBadgeRange: DeviceBadgeRange
+      /** Re-issued from the authoritative POST-EXTENSION central state. */
+      offlineAuthorization: OfflineAuthorizationEnvelope
+    }
+  /** An identical extension was already recorded. Idempotent. */
+  | {
+      status: 'already-extended'
+      activeBadgeRange: DeviceBadgeRange
+      offlineAuthorization: OfflineAuthorizationEnvelope
+    }
+  /** The current end was not the expected one. Its real range, when readable. */
+  | {
+      status: 'stale-range'
+      activeBadgeRange: DeviceBadgeRange | null
+      message: string
+    }
+  | { status: 'no-active-range'; message: string }
+  | { status: 'range-overlap'; message: string }
+  | { status: 'registration-required'; message: string }
+  | { status: 'unauthenticated'; message: string }
+  | { status: 'invalid'; message: string }
+  | { status: 'not-configured'; message: string }
+  | { status: 'unreachable'; message: string }
+  | { status: 'unexpected'; message: string }
+
+/**
+ * A 409 carries a PUBLIC refill conflict whose spelling both sides import
+ * from `@/shared/badge-claim-contract`. Recognising it by the shared guard is
+ * what keeps an ordinary operational conflict from reaching the desk as a
+ * technical error.
+ */
+const refillConflict = (body: unknown): DeviceBadgeRefillResult => {
+  const raw =
+    typeof body === 'object' && body !== null && 'conflict' in body
+      ? (body as { conflict: unknown }).conflict
+      : null
+
+  if (!isBadgeRefillConflict(raw)) {
+    return { status: 'unexpected', message: DEVICE_MESSAGES.refillFailed }
+  }
+
+  if (raw === 'range-overlap') {
+    return { status: 'range-overlap', message: DEVICE_MESSAGES.refillOverlap }
+  }
+
+  if (raw === 'no-active-range') {
+    return { status: 'no-active-range', message: DEVICE_MESSAGES.refillNoRange }
+  }
+
+  return {
+    status: 'stale-range',
+    // A missing or malformed range is reported as absent rather than guessed
+    // at; the next session check is the authority either way.
+    activeBadgeRange: parseDeviceBadgeRange(
+      typeof body === 'object' && body !== null
+        ? (body as { activeBadgeRange?: unknown }).activeBadgeRange
+        : null,
+    ),
+    message: DEVICE_MESSAGES.refillStale,
+  }
+}
+
+/**
+ * Asks central Postgres to EXTEND this device's badge range upward.
+ *
+ * The device is identified by its HttpOnly session cookie alone, and the new
+ * batch's first badge is derived by the server from the current end — this
+ * request carries no `rangeStart`, and the server refuses one.
+ *
+ * `expectedRangeEnd` is a compare-and-set key, not a preference: a server
+ * whose range has moved refuses rather than overwriting it.
+ *
+ * The response is validated at RUNTIME. A 200 whose range does not parse is
+ * not an extension, because the numbers that come back decide which physical
+ * badges this desk will hand out.
+ */
+export const refillDeviceBadgeRange = async (input: {
+  expectedRangeEnd: number
+  newRangeEnd: number
+  physicalStackConfirmed: boolean
+}): Promise<DeviceBadgeRefillResult> => {
+  let response: Response
+
+  try {
+    response = await request(DEVICE_BADGE_CLAIM_ENDPOINT, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expectedRangeEnd: input.expectedRangeEnd,
+        newRangeEnd: input.newRangeEnd,
+        physicalStackConfirmed: input.physicalStackConfirmed,
+      }),
+    })
+  } catch {
+    // Includes the abort on timeout. The extension may still have committed,
+    // so this is never reported as a refusal.
+    return { status: 'unreachable', message: DEVICE_MESSAGES.refillUnconfirmed }
+  }
+
+  if (response.status === 401) {
+    return { status: 'unauthenticated', message: DEVICE_MESSAGES.claimSessionExpired }
+  }
+
+  if (response.status === 403) {
+    const body = await readJson(response)
+    const blocked =
+      typeof body === 'object' && body !== null && 'blocked' in body
+        ? (body as { blocked: unknown }).blocked
+        : null
+
+    return blocked === 'registration-required'
+      ? {
+          status: 'registration-required',
+          message: DEVICE_MESSAGES.claimRegistrationRequired,
+        }
+      : { status: 'unexpected', message: DEVICE_MESSAGES.refillFailed }
+  }
+
+  if (response.status === 409) {
+    return refillConflict(await readJson(response))
+  }
+
+  if (response.status === 429) {
+    return { status: 'unexpected', message: DEVICE_MESSAGES.claimTooMany }
+  }
+
+  if (response.status === 503) {
+    return { status: 'not-configured', message: DEVICE_MESSAGES.notConfigured }
+  }
+
+  if (response.status === 400 || response.status === 413 || response.status === 415) {
+    return { status: 'invalid', message: DEVICE_MESSAGES.refillInvalid }
+  }
+
+  if (!response.ok) {
+    return { status: 'unexpected', message: DEVICE_MESSAGES.refillFailed }
+  }
+
+  const body = await readJson(response)
+  const outcome =
+    typeof body === 'object' && body !== null && 'outcome' in body
+      ? (body as { outcome: unknown }).outcome
+      : null
+  const activeBadgeRange = parseDeviceBadgeRange(
+    typeof body === 'object' && body !== null
+      ? (body as { activeBadgeRange?: unknown }).activeBadgeRange
+      : null,
+  )
+
+  // A TypeScript annotation would be a claim; this is the check.
+  if (
+    activeBadgeRange === null ||
+    (outcome !== 'extended' && outcome !== 'already-extended')
+  ) {
+    return { status: 'unexpected', message: DEVICE_MESSAGES.refillFailed }
   }
 
   return {

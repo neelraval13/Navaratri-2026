@@ -17,7 +17,7 @@
     "release:check": "node scripts/release-check.mjs",
     "verify:7b": "node scripts/verification/phase-7b.mjs",
     "verify:prior": "node scripts/verification/prior-phases.mjs",
-    "verify": "pnpm verify:prior && pnpm verify:7b && pnpm verify:8a && pnpm verify:8b && pnpm verify:9a && pnpm verify:9b && pnpm verify:9ca && pnpm verify:9cb && pnpm verify:9cc1 && pnpm verify:parity && pnpm verify:9cc2a && pnpm verify:9cc2b && pnpm verify:9cc3a && pnpm verify:9cc3b && pnpm verify:config && pnpm verify:d1 && pnpm verify:d2",
+    "verify": "pnpm verify:prior && pnpm verify:7b && pnpm verify:8a && pnpm verify:8b && pnpm verify:9a && pnpm verify:9b && pnpm verify:9ca && pnpm verify:9cb && pnpm verify:9cc1 && pnpm verify:parity && pnpm verify:9cc2a && pnpm verify:9cc2b && pnpm verify:9cc3a && pnpm verify:9cc3b && pnpm verify:config && pnpm verify:d1 && pnpm verify:d2 && pnpm verify:d21",
     "verify:8a": "node scripts/verification/phase-8a.mjs",
     "verify:8b": "node scripts/verification/phase-8b.mjs",
     "db:generate": "drizzle-kit generate",
@@ -36,7 +36,8 @@
     "verify:9cc3b": "node scripts/verification/phase-9cc3b.mjs",
     "verify:config": "node scripts/verification/config-durability.mjs",
     "verify:d1": "node scripts/verification/phase-d1.mjs",
-    "verify:d2": "node scripts/verification/phase-d2.mjs"
+    "verify:d2": "node scripts/verification/phase-d2.mjs",
+    "verify:d21": "node scripts/verification/phase-d21.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

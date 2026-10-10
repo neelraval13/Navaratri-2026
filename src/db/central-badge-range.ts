@@ -9,6 +9,11 @@ import {
   withActiveBadgeRange,
   type DeviceSessionContext,
 } from '@/device-auth/device-session-contract'
+import {
+  checkBadgeOwnership,
+  grantFromDeviceSession,
+  type BadgeSafetyConflict,
+} from '@/device-auth/event-authorization'
 
 /**
  * Adopting a CENTRAL badge assignment into this browser's LOCAL badge workflow.
@@ -518,6 +523,8 @@ export const readCentralBadgeRangePlan = async (
 ): Promise<{
   plan: AdoptionPlan
   claim: ClaimPlan
+  /** What a contiguous refill could do. Added by Phase D2.1. */
+  refill: RefillPlan
   config: EventConfig | undefined
 }> => {
   const config = await db.config.get(EVENT_CONFIG_ID)
@@ -529,6 +536,315 @@ export const readCentralBadgeRangePlan = async (
   return {
     plan: planCentralBadgeRangeAdoption({ config, context, issuedBadgeCount }),
     claim: planCentralBadgeRangeClaim({ config, context, issuedBadgeCount }),
+    refill: planCentralBadgeRangeRefill({ config, context }),
     config,
   }
+}
+
+/* ------------------------------------------------- contiguous badge refill */
+
+/**
+ * CONTIGUOUS REFILL: a desk that already owns a range receives more physical
+ * badges and extends its range upward.
+ *
+ * It is an EXTENSION, never a replacement and never a second range. The
+ * previous assignment keeps its identity, its `rangeStart` and its
+ * `assignedAt`, so every badge already issued stays owned by the same device
+ * and every queued outbox snapshot stays valid.
+ *
+ * `nextBadge` IS NEVER TOUCHED, on any path here. It is the local allocator
+ * and its existing value is authoritative: a desk at #037 that receives
+ * #051-#100 still issues #037 next. Recomputing it from the new batch's start
+ * would skip every badge between.
+ */
+
+export type RefillUnavailableReason =
+  | 'missing-config'
+  | 'device-not-registered'
+  | 'registration-not-permitted'
+  /** No central assignment, so there is nothing to extend. */
+  | 'no-central-assignment'
+  /** No local range: this browser has not adopted anything yet. */
+  | 'no-local-range'
+  /** A local range with no central provenance. Adoption comes first. */
+  | 'not-adopted'
+
+export type RefillPlan =
+  /**
+   * Central, local and the binding all agree. The operator chooses only the
+   * new END; `refillStart` is derived and must never be typed.
+   */
+  | {
+      outcome: 'refillable'
+      current: CentralAssignment
+      refillStart: number
+      nextBadge: number
+    }
+  /**
+   * CENTRAL IS ALREADY AHEAD, in the one shape that is safely recoverable:
+   * same device, same event, same `rangeStart`, same `assignedAt`, and a
+   * strictly greater end. This is what a refill whose central half committed
+   * and whose local half did not leaves behind, and finishing it locally is
+   * an extension rather than a reinterpretation.
+   */
+  | {
+      outcome: 'extension-pending'
+      central: CentralAssignment
+      local: { rangeStart: number; rangeEnd: number }
+      nextBadge: number
+    }
+  /** Nothing is wrong; this desk simply has no range to extend. */
+  | { outcome: 'unavailable'; reason: RefillUnavailableReason }
+  /** Central and local badge ownership DISAGREE. Refilling would compound it. */
+  | { outcome: 'blocked'; conflict: BadgeSafetyConflict }
+
+export type SupersetRefusal =
+  | 'missing-config'
+  | 'device-not-registered'
+  | 'no-central-assignment'
+  | 'no-binding'
+  | 'no-local-range'
+  | 'binding-device-mismatch'
+  | 'binding-event-mismatch'
+  | 'range-start-mismatch'
+  | 'assigned-at-mismatch'
+  | 'local-binding-disagree'
+  /** Central is not ahead. Equal is a no-op; smaller is never applied. */
+  | 'not-an-extension'
+
+export type SupersetCheck =
+  | { ok: true; from: number; to: number }
+  | { ok: false; reason: SupersetRefusal }
+
+/**
+ * Is the central range a SAFE SUPERSET extension of this browser's local
+ * state?
+ *
+ * The whole rule, in one place, used both by the normal refill write and by
+ * the recovery path. Every clause is load-bearing:
+ *
+ * - same device and event, or this is somebody else's range
+ * - same `rangeStart`, or the start moved and badges already issued from the
+ *   old start would belong to numbers this desk no longer owns
+ * - same `assignedAt`, or this is a DIFFERENT grant that happens to begin at
+ *   the same number
+ * - the local range and the binding must already agree, or local state is
+ *   inconsistent with its own provenance and nothing may be layered on it
+ * - central strictly ahead, so a range is never decreased and an equal range
+ *   is recognised as the no-op it is
+ *
+ * PURE, and it never reinterprets an unrelated central range as an extension.
+ */
+export const checkCentralRangeSuperset = (input: {
+  config: EventConfig | undefined
+  context: DeviceSessionContext
+}): SupersetCheck => {
+  const { config, context } = input
+
+  if (config === undefined) {
+    return { ok: false, reason: 'missing-config' }
+  }
+
+  if (!isDeviceRegistered(config)) {
+    return { ok: false, reason: 'device-not-registered' }
+  }
+
+  const central = context.activeBadgeRange
+
+  if (
+    central === null ||
+    !isPositiveInteger(central.rangeStart) ||
+    !isPositiveInteger(central.rangeEnd) ||
+    central.rangeStart > central.rangeEnd
+  ) {
+    return { ok: false, reason: 'no-central-assignment' }
+  }
+
+  const binding = config.centralBadgeRangeBinding
+
+  if (binding === undefined) {
+    return { ok: false, reason: 'no-binding' }
+  }
+
+  if (binding.deviceId !== context.device.id) {
+    return { ok: false, reason: 'binding-device-mismatch' }
+  }
+
+  if (binding.eventId !== context.event.id) {
+    return { ok: false, reason: 'binding-event-mismatch' }
+  }
+
+  if (
+    !isPositiveInteger(config.badgeStart) ||
+    !isPositiveInteger(config.badgeEnd) ||
+    config.badgeStart > config.badgeEnd
+  ) {
+    return { ok: false, reason: 'no-local-range' }
+  }
+
+  if (binding.rangeStart !== central.rangeStart || config.badgeStart !== central.rangeStart) {
+    return { ok: false, reason: 'range-start-mismatch' }
+  }
+
+  if (binding.assignedAt !== central.assignedAt) {
+    return { ok: false, reason: 'assigned-at-mismatch' }
+  }
+
+  if (config.badgeEnd !== binding.rangeEnd) {
+    return { ok: false, reason: 'local-binding-disagree' }
+  }
+
+  if (central.rangeEnd <= config.badgeEnd) {
+    return { ok: false, reason: 'not-an-extension' }
+  }
+
+  return { ok: true, from: config.badgeEnd, to: central.rangeEnd }
+}
+
+/**
+ * Decides what a refill COULD do, without touching anything.
+ *
+ * It owns no badge-safety rules of its own: whether central and local agree
+ * is asked of `checkBadgeOwnership`, the SAME check the event access gate
+ * runs before it authorizes registration. A refill UI that disagreed with the
+ * gate would offer an action the desk could not then use.
+ *
+ * The superset check runs FIRST, because an extension already committed
+ * centrally looks to the ownership check exactly like a mismatch — and
+ * reporting it as a conflict would hide the one case that is recoverable.
+ */
+export const planCentralBadgeRangeRefill = (input: {
+  config: EventConfig | undefined
+  context: DeviceSessionContext
+}): RefillPlan => {
+  const { config, context } = input
+
+  if (config === undefined) {
+    return { outcome: 'unavailable', reason: 'missing-config' }
+  }
+
+  if (!isDeviceRegistered(config)) {
+    return { outcome: 'unavailable', reason: 'device-not-registered' }
+  }
+
+  // Read from the CURRENT authenticated session, never the cached enrollment.
+  if (!context.device.attributes.includes('registration')) {
+    return { outcome: 'unavailable', reason: 'registration-not-permitted' }
+  }
+
+  const central = context.activeBadgeRange
+
+  if (central === null) {
+    return { outcome: 'unavailable', reason: 'no-central-assignment' }
+  }
+
+  if (config.badgeEnd === undefined) {
+    return { outcome: 'unavailable', reason: 'no-local-range' }
+  }
+
+  if (config.centralBadgeRangeBinding === undefined) {
+    return { outcome: 'unavailable', reason: 'not-adopted' }
+  }
+
+  const superset = checkCentralRangeSuperset({ config, context })
+
+  if (superset.ok === true) {
+    return {
+      outcome: 'extension-pending',
+      central: {
+        rangeStart: central.rangeStart,
+        rangeEnd: central.rangeEnd,
+        assignedAt: central.assignedAt,
+      },
+      local: { rangeStart: config.badgeStart, rangeEnd: config.badgeEnd },
+      nextBadge: config.nextBadge,
+    }
+  }
+
+  const conflict = checkBadgeOwnership(grantFromDeviceSession(context), config)
+
+  if (conflict !== null) {
+    return { outcome: 'blocked', conflict }
+  }
+
+  return {
+    outcome: 'refillable',
+    current: {
+      rangeStart: central.rangeStart,
+      rangeEnd: central.rangeEnd,
+      assignedAt: central.assignedAt,
+    },
+    // DERIVED, never typed: a refill with a gap is not a contiguous range.
+    refillStart: central.rangeEnd + 1,
+    nextBadge: config.nextBadge,
+  }
+}
+
+export type RangeExtensionResult =
+  /** `badgeEnd` and the binding's end advanced. Nothing else changed. */
+  | { outcome: 'extended'; config: EventConfig; from: number; to: number }
+  /** Local already matched the central end. Nothing was written. */
+  | { outcome: 'already-extended'; config: EventConfig }
+  /** Refused. Nothing was written. */
+  | { outcome: 'refused'; reason: SupersetRefusal }
+
+/**
+ * Advances this browser's local range to the central one, atomically.
+ *
+ * ONE transaction over `config` ALONE. `registrations` and `outbox` are not
+ * named, because they are not read and not written: a refill adds numbers to
+ * the end of a range and says nothing about any badge already issued.
+ *
+ * It writes EXACTLY three things: `badgeEnd`, the binding's `rangeEnd`, and
+ * `updatedAt`. `badgeStart`, `nextBadge`, `badgeConfiguredAt`, the device
+ * identity, and every other binding and configuration field are carried
+ * through by spread.
+ *
+ * The superset rule is re-run INSIDE the transaction against the row it is
+ * about to write, so a stale read can never widen a range the planner would
+ * have refused.
+ */
+export const extendLocalBadgeRange = async (input: {
+  context: DeviceSessionContext
+}): Promise<RangeExtensionResult> => {
+  return await db.transaction(
+    'rw',
+    db.config,
+    async (): Promise<RangeExtensionResult> => {
+      const config = await db.config.get(EVENT_CONFIG_ID)
+      const superset = checkCentralRangeSuperset({ config, context: input.context })
+
+      if (superset.ok === false) {
+        /**
+         * Idempotent: a repeat, or a reload after the write landed, finds
+         * local already at the central end. `not-an-extension` is only that
+         * when the two are EQUAL — a central range that is somehow behind
+         * local is a refusal, because nothing here ever shrinks a range.
+         */
+        if (
+          superset.reason === 'not-an-extension' &&
+          config?.badgeEnd === input.context.activeBadgeRange?.rangeEnd
+        ) {
+          return { outcome: 'already-extended', config: config as EventConfig }
+        }
+
+        return { outcome: 'refused', reason: superset.reason }
+      }
+
+      const current = config as EventConfig
+      const binding = current.centralBadgeRangeBinding as CentralBadgeRangeBinding
+      const now = new Date().toISOString()
+
+      const widened: EventConfig = {
+        ...current,
+        badgeEnd: superset.to,
+        centralBadgeRangeBinding: { ...binding, rangeEnd: superset.to },
+        updatedAt: now,
+      }
+
+      await db.config.put(widened)
+
+      return { outcome: 'extended', config: widened, from: superset.from, to: superset.to }
+    },
+  )
 }

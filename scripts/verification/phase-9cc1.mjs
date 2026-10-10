@@ -612,11 +612,21 @@ check('  the auth endpoint still serves only login, session and logout',
     .matchAll(/request\(DEVICE_AUTH_ENDPOINT, \{\s*method: '(POST|GET|DELETE)'/g)]
     .map((match) => match[1]).sort(),
   ['DELETE', 'GET', 'POST'])
-check('  and the claim is the only call that is not against it',
+/**
+ * Phase D2.1 added the contiguous refill as PATCH on the SAME endpoint, so
+ * there are now two calls against it and still exactly two endpoints. The
+ * methods are named too, because "two calls to one endpoint" would also be
+ * satisfied by two POSTs.
+ */
+check('  and the two badge calls are the only ones not against it',
   [...stripComments(read('src/device-auth/device-api.ts'))
     .matchAll(/request\((\w+)/g)].map((match) => match[1]).filter((name) => name.endsWith('ENDPOINT')),
   ['DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT', 'DEVICE_AUTH_ENDPOINT',
-   'DEVICE_BADGE_CLAIM_ENDPOINT'])
+   'DEVICE_BADGE_CLAIM_ENDPOINT', 'DEVICE_BADGE_CLAIM_ENDPOINT'])
+check('    one POST to claim, one PATCH to refill',
+  [...stripComments(read('src/device-auth/device-api.ts'))
+    .matchAll(/request\(DEVICE_BADGE_CLAIM_ENDPOINT, \{\s*method: '(\w+)'/g)]
+    .map((match) => match[1]).sort(), ['PATCH', 'POST'])
 
 console.log('\n=== 33-37. NOTHING ELSE CHANGED ===')
 const dexie = read('src/db/database.ts')

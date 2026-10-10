@@ -692,7 +692,10 @@ const runClaim = (input) => badgeClaim.claimCentralBadgeRange({ context: context
 const panelFull = stripComments(read('src/components/device-auth/device-enrollment-panel.tsx'))
 const panelClaimSource = panelFull.slice(
   panelFull.indexOf('const claim = async'),
-  panelFull.indexOf('const converge = async'),
+  // D2.1 inserted `refill` between `claim` and `converge`; the slice ends at
+  // whichever handler comes next, because a window that runs past its subject
+  // stops testing its subject.
+  panelFull.indexOf('const refill = async'),
 )
 
 console.log('\n=== 37-49, 41. THE HAPPY PATH, END TO END ===')
@@ -1199,9 +1202,15 @@ check('  no helper was placed under api/',
     .filter((file) => !/export (async )?function (GET|POST|PUT|PATCH|DELETE)\(/
       .test(readFileSync(file, 'utf8')))
     .map((file) => file.replace(`${root}/`, '')), [])
-check('  the claim endpoint exports POST only',
+/**
+ * Phase D2.1 added PATCH to this Function for the contiguous refill — the
+ * same question asked twice ("which numbers does this device own?") rather
+ * than a second endpoint, because every file under `api/` costs a deployment
+ * Function. GET, PUT and DELETE still have no business here.
+ */
+check('  the claim endpoint exports POST and PATCH only',
   [...read('api/device-badge-claim.ts').matchAll(/export (?:async )?function ([A-Z]+)\(/g)]
-    .map((match) => match[1]), ['POST'])
+    .map((match) => match[1]).sort(), ['PATCH', 'POST'])
 
 check('47. no unauthenticated rate-limit rule was added for the claim',
   /device-badge-claim/.test(read('docs/VERCEL_FIREWALL.md').replace(
@@ -1224,19 +1233,23 @@ check('  adoption still has exactly one caller in the panel',
 check('  and the claim exactly one',
   [...panelSource.matchAll(/claimCentralBadgeRange\(/g)].length, 1)
 /**
- * Named one by one rather than counted. Phase D1 added a third mutating
- * handler, `converge`, which carries the same guard — and a bare count would
- * have been satisfied by any three occurrences anywhere, including three in
- * one handler while another had none.
+ * Named one by one rather than counted. D1 added `converge` and D2.1 added
+ * `refill` and `finishExtension`, each carrying the same guard — and a bare
+ * count would have been satisfied by any five occurrences anywhere,
+ * including five in one handler while another had none.
  */
-check('  each mutating handler is guarded by an authenticated state', [
-  'const adopt = async', 'const claim = async', 'const converge = async',
-].map((handler) => {
-  const body = panelSource.slice(panelSource.indexOf(handler))
-  return /^[\s\S]{0,220}state\.phase !== 'authenticated'/.test(body)
-}), [true, true, true])
+const MUTATING_HANDLERS = [
+  'const adopt = async', 'const claim = async', 'const refill = async',
+  'const finishExtension = async', 'const converge = async',
+]
+check('  each mutating handler is guarded by an authenticated state',
+  MUTATING_HANDLERS.map((handler) => {
+    const body = panelSource.slice(panelSource.indexOf(handler))
+    return /^[\s\S]{0,220}state\.phase !== 'authenticated'/.test(body)
+  }), MUTATING_HANDLERS.map(() => true))
 check('    and nothing else in the panel claims that guard',
-  [...panelSource.matchAll(/state\.phase !== 'authenticated'/g)].length, 3)
+  [...panelSource.matchAll(/state\.phase !== 'authenticated'/g)].length,
+  MUTATING_HANDLERS.length)
 check('  the offline branches reach neither',
   /'last-verified'[\s\S]{0,700}(adoptCentralBadgeRange|claimCentralBadgeRange)/
     .test(panelSource), false)
