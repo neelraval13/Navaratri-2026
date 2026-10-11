@@ -5,22 +5,22 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  hasActivePrizeFilters,
+  hasActiveAttendeeFilters,
   parseAgeBounds,
-  type PrizeFilterState,
-  type PrizeGenderFilter,
-} from '@/prizes/prize-filters'
+  type AttendeeFilterState,
+  type AttendeeGenderFilter,
+} from '@/attendees/attendee-filters'
 import { cn } from '@/lib/utils'
 
 interface AttendeeFiltersProps {
-  state: PrizeFilterState
+  state: AttendeeFilterState
   resultCount: number
   totalCount: number
-  onChange: (state: PrizeFilterState) => void
+  onChange: (state: AttendeeFilterState) => void
   onClear: () => void
 }
 
-const GENDER_OPTIONS: { value: PrizeGenderFilter; label: string }[] = [
+const GENDER_OPTIONS: { value: AttendeeGenderFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'male', label: 'Male' },
   { value: 'female', label: 'Female' },
@@ -34,10 +34,16 @@ const GENDER_OPTIONS: { value: PrizeGenderFilter; label: string }[] = [
  * the normalised ones registration already stores, so there is no third
  * spelling of gender anywhere.
  *
+ * ONE COMPONENT, TWO SCREENS. The prize desk and the read-only directory at
+ * `/attendees` present the same four controls over the same roster, so this
+ * is shared rather than copied — and its element ids name attendees rather
+ * than whichever module needed it first.
+ *
  * It filters ALL REGISTERED ATTENDEES, winners included. There is no "hide
  * attendees who already have a prize" control and none may be added: since
  * Phase P1.1 a previous prize disqualifies nobody, so a filter that removed
- * them would hide people a volunteer is looking for.
+ * them would hide people a volunteer is looking for. The directory has no
+ * notion of a prize at all.
  *
  * An unusable age window says so and filters NOTHING. Quietly returning an
  * empty list for `min 20, max 5` would read as "nobody matched", which is the
@@ -56,7 +62,7 @@ const AttendeeFilters: React.FC<AttendeeFiltersProps> = ({
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-card p-4">
       <div className="space-y-1.5">
-        <Label htmlFor="prize-search">
+        <Label htmlFor="attendee-search">
           Search
         </Label>
 
@@ -64,7 +70,7 @@ const AttendeeFilters: React.FC<AttendeeFiltersProps> = ({
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 
           <Input
-            id="prize-search"
+            id="attendee-search"
             type="text"
             inputMode="search"
             autoComplete="off"
@@ -80,20 +86,20 @@ const AttendeeFilters: React.FC<AttendeeFiltersProps> = ({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor="prize-min-age">
+          <Label htmlFor="attendee-min-age">
             Age
           </Label>
 
           <div className="flex items-center gap-2">
             <Input
-              id="prize-min-age"
+              id="attendee-min-age"
               type="text"
               inputMode="numeric"
               autoComplete="off"
               placeholder="Min"
               className="h-11"
               aria-invalid={ageError !== null}
-              aria-describedby={ageError === null ? undefined : 'prize-age-error'}
+              aria-describedby={ageError === null ? undefined : 'attendee-age-error'}
               value={state.minAge}
               onChange={(event) => {
                 onChange({ ...state, minAge: event.target.value })
@@ -105,14 +111,14 @@ const AttendeeFilters: React.FC<AttendeeFiltersProps> = ({
             </span>
 
             <Input
-              id="prize-max-age"
+              id="attendee-max-age"
               type="text"
               inputMode="numeric"
               autoComplete="off"
               placeholder="Max"
               className="h-11"
               aria-invalid={ageError !== null}
-              aria-describedby={ageError === null ? undefined : 'prize-age-error'}
+              aria-describedby={ageError === null ? undefined : 'attendee-age-error'}
               value={state.maxAge}
               onChange={(event) => {
                 onChange({ ...state, maxAge: event.target.value })
@@ -151,7 +157,7 @@ const AttendeeFilters: React.FC<AttendeeFiltersProps> = ({
 
       {ageError === null ? null : (
         <p
-          id="prize-age-error"
+          id="attendee-age-error"
           className="text-sm text-destructive"
         >
           {ageError}
@@ -165,7 +171,7 @@ const AttendeeFilters: React.FC<AttendeeFiltersProps> = ({
             : `${String(resultCount)} of ${String(totalCount)} attendees`}
         </p>
 
-        {hasActivePrizeFilters(state) ? (
+        {hasActiveAttendeeFilters(state) ? (
           <Button
             type="button"
             variant="ghost"

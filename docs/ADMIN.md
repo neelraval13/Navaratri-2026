@@ -134,7 +134,18 @@ there is no `deviceType` — one device may serve several modules.
 | Attribute | Authorizes |
 |---|---|
 | `registration` | The whole registration desk, badge issuance included |
-| `prizes` | Future Prize functionality |
+| `prizes` | `/prizes` — awarding prizes and reviewing what has been given |
+| `attendees` | `/attendees` — the read-only attendee directory |
+
+**The three are INDEPENDENT.** Ticking `prizes` does not grant Attendees and
+ticking `registration` does not either. The prize desk shows its own attendee
+roster because identifying the badge in somebody's hand is part of awarding a
+prize; browsing the whole register is a separate thing to be trusted with, so
+it is separately granted.
+
+A device may hold **`attendees` alone** — that is a complete and useful
+device, and Admin must not push an operator towards adding `registration` or
+`prizes` to make it work. It needs no badge range either.
 
 **Registration includes physical badge issuance.** In the current event
 workflow a device issues the badge as the last step of registering an

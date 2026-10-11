@@ -535,9 +535,9 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // RE-SCOPED BY PHASE P1, which added one. D1 still added none, and the
 // assertion below is D1's own concern: nothing new writes a local identity.
-check('46. the Function inventory is nine', budget.actual.length, 9)
-check('  with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('46. the Function inventory is ten', budget.actual.length, 10)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 52. DOCUMENTATION ===')

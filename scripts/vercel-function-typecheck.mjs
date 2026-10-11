@@ -64,6 +64,8 @@ export const EXPECTED_FUNCTIONS = [
   'admin-device-password',
   'admin-devices',
   'admin-events',
+  // Phase A1's read-only attendee directory. GET only; everything else 405s.
+  'attendees',
   'device-auth',
   'device-badge-claim',
   'prizes',

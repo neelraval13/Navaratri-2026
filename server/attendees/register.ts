@@ -1,4 +1,8 @@
-import type { PrizeAttendee, PrizeGender } from '../../src/shared/prize-contract.js'
+import {
+  ATTENDEE_MAX_AGE,
+  type AttendeeGender,
+  type EventAttendee,
+} from '../../src/shared/attendee-contract.js'
 import type { SyncEnvironment } from '../sync/environment.js'
 import { createSheetsAccess } from '../sync/google-sheets.js'
 import {
@@ -11,18 +15,25 @@ import {
 } from '../sync/sheet-contract.js'
 
 /**
- * THE PRIZE ROSTER — the attendees this event has actually registered.
+ * THE ATTENDEE REGISTER — the attendees this event has actually registered.
+ *
+ * THE ONE READER, for every module that needs them. Phase P1 wrote it for the
+ * prize desk; Phase A1 added the read-only directory at `/attendees` and
+ * moved it here rather than writing a second one. A second Badge Register
+ * parser is a second opinion about which columns exist, how an age is read,
+ * how gender is normalised and which rows are usable — and the two would
+ * drift the first time somebody hand-edited a cell.
  *
  * It comes from the SAME Badge Register that production registrations already
  * sync into, because that is where attendee data lives. There is deliberately
  * no central attendee table to read instead: Postgres holds no PII, and
- * adding a shadow copy for the convenience of one screen is how two sources
- * of truth start disagreeing.
+ * adding a shadow copy for the convenience of a screen is how two sources of
+ * truth start disagreeing.
  *
  * STRICTLY READ-ONLY. This module performs no `batchUpdate`, creates no tab,
  * writes no header and repairs no layout. A missing or unrecognised tab is
  * refused, never initialised — initialising a Sheet is the sync endpoint's
- * job, gated by the release interlock, and a prize desk is not the place to
+ * job, gated by the release interlock, and an event desk is not the place to
  * discover that the ledger has the wrong shape.
  *
  * IT PROJECTS FOUR FIELDS. Badge number, name, age and gender reach the
@@ -31,16 +42,16 @@ import {
  * the Sheet later cannot ride along either.
  */
 
-export type PrizeRosterResult =
-  | { ok: true; attendees: PrizeAttendee[] }
+export type AttendeeRegisterResult =
+  | { ok: true; attendees: EventAttendee[] }
   /**
-   * The roster could not be established. The caller must FAIL CLOSED: no
-   * award may be recorded against a register nobody could read, because the
-   * badge's existence is exactly what the read was for.
+   * The register could not be established. Every caller must FAIL CLOSED. An
+   * EMPTY register and an UNREADABLE one are different facts: the first means
+   * nobody has registered yet, the second means this module cannot say, and
+   * presenting the second as the first would show a volunteer an empty event
+   * and let a prize be recorded against a badge nobody could confirm.
    */
   | { ok: false; reason: 'unreadable' | 'sheet-shape-conflict' }
-
-const MAX_AGE = 120
 
 const readText = (row: readonly unknown[], index: number): string => {
   const value = row[index]
@@ -72,17 +83,19 @@ const readAge = (row: readonly unknown[]): number | null => {
   const value = row[BADGE_REGISTER_COLUMNS.age]
   const parsed = typeof value === 'number' ? value : Number(readText(row, BADGE_REGISTER_COLUMNS.age))
 
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_AGE ? parsed : null
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= ATTENDEE_MAX_AGE
+    ? parsed
+    : null
 }
 
 /**
  * Back to the value registration already stores.
  *
  * The Sheet carries the display labels `Male` and `Female`; the application's
- * own normalised values are `male` and `female`, and the prize filters use
- * those so there is never a third spelling of gender in the codebase.
+ * own normalised values are `male` and `female`, and every attendee filter
+ * uses those, so there is never a third spelling of gender in the codebase.
  */
-const readGender = (row: readonly unknown[]): PrizeGender | null => {
+const readGender = (row: readonly unknown[]): AttendeeGender | null => {
   const label = readText(row, BADGE_REGISTER_COLUMNS.gender).toLowerCase()
 
   if (label === 'male') {
@@ -101,7 +114,7 @@ const readGender = (row: readonly unknown[]): PrizeGender | null => {
  * hand-edited cell must not close the prize desk. The skip is visible — that
  * badge simply will not appear as eligible — and the count is logged.
  */
-const toAttendee = (row: readonly unknown[]): PrizeAttendee | null => {
+const toAttendee = (row: readonly unknown[]): EventAttendee | null => {
   if (readText(row, BADGE_REGISTER_COLUMNS.registrationId) === '') {
     return null
   }
@@ -119,7 +132,7 @@ const toAttendee = (row: readonly unknown[]): PrizeAttendee | null => {
 }
 
 /**
- * Reads the Badge Register and projects the prize-visible attendee fields.
+ * Reads the Badge Register and projects the four attendee-visible fields.
  *
  * Sorted by badge number ascending, which is the response contract and the
  * order an operator scans a stack of badges in.
@@ -129,9 +142,9 @@ const toAttendee = (row: readonly unknown[]): PrizeAttendee | null => {
  * award anything", and conflating the two would let a prize be recorded
  * against a badge nobody could confirm exists.
  */
-export const readPrizeRoster = async (
+export const readAttendeeRegister = async (
   environment: SyncEnvironment,
-): Promise<PrizeRosterResult> => {
+): Promise<AttendeeRegisterResult> => {
   const sheets = createSheetsAccess(environment)
 
   let values: unknown[][]
@@ -152,7 +165,7 @@ export const readPrizeRoster = async (
      * can quote the request, and the request names the spreadsheet. The
      * operation is enough to act on.
      */
-    console.error('Navaratri prizes: the Badge Register could not be read.')
+    console.error('Navaratri attendees: the Badge Register could not be read.')
 
     return { ok: false, reason: 'unreadable' }
   }
@@ -172,14 +185,14 @@ export const readPrizeRoster = async (
    */
   if (shape !== 'matching' && shape !== 'legacy') {
     console.error(
-      `Navaratri prizes: "${BADGE_REGISTER_TITLE}" does not have the expected layout (${shape}).`,
+      `Navaratri attendees: "${BADGE_REGISTER_TITLE}" does not have the expected layout (${shape}).`,
     )
 
     return { ok: false, reason: 'sheet-shape-conflict' }
   }
 
   const seen = new Set<number>()
-  const attendees: PrizeAttendee[] = []
+  const attendees: EventAttendee[] = []
   let skipped = 0
 
   for (const row of values.slice(1)) {
@@ -211,7 +224,7 @@ export const readPrizeRoster = async (
 
   if (skipped > 0) {
     console.error(
-      `Navaratri prizes: ${String(skipped)} Badge Register row(s) were not usable and were skipped.`,
+      `Navaratri attendees: ${String(skipped)} Badge Register row(s) were not usable and were skipped.`,
     )
   }
 

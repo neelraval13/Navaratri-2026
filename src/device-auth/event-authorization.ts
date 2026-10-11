@@ -93,7 +93,7 @@ export const grantFromOfflineClaims = (
   expiresAt: claims.exp,
 })
 
-export type EventModule = 'home' | 'registration' | 'prizes'
+export type EventModule = 'home' | 'registration' | 'prizes' | 'attendees'
 
 /**
  * Device authority is absent or insufficient, but nothing is WRONG.
@@ -338,7 +338,8 @@ const localRangeOf = (
  *   6. does the device have the module's permission
  *
  * Steps 5 and 6 are per module. Home needs only a permission of some kind,
- * Prizes needs `prizes` and no badge state at all, and Registration needs
+ * Prizes needs `prizes` and no badge state at all, Attendees needs
+ * `attendees` and no badge state at all, and Registration needs
  * `registration` plus badge ownership that agrees with central.
  *
  * The badge-safety checks run BEFORE the permission check, so a browser whose
@@ -427,6 +428,25 @@ export const authorizeEventModule = (
    */
   if (module === 'prizes') {
     return grant.attributes.includes('prizes')
+      ? { outcome: 'authorized', source: grant.source }
+      : { outcome: 'unavailable', gap: 'not-permitted' }
+  }
+
+  /**
+   * THE ATTENDEE DIRECTORY NEEDS NO BADGES EITHER, for the same reason and
+   * one more: it changes nothing at all. Reading the register consumes no
+   * badge number, advances no counter and writes nowhere, so
+   * `checkBadgeOwnership` is deliberately not consulted — running it would
+   * close a read-only viewer because a REGISTRATION desk's ledger disagreed
+   * about physical badges the viewer was never given.
+   *
+   * `attendees` is required ON ITS OWN. Neither `registration` nor `prizes`
+   * is accepted in its place: the prize desk lists attendees as part of
+   * awarding a prize, while the standalone directory is a separate thing to
+   * be trusted with and is separately granted.
+   */
+  if (module === 'attendees') {
+    return grant.attributes.includes('attendees')
       ? { outcome: 'authorized', source: grant.source }
       : { outcome: 'unavailable', gap: 'not-permitted' }
   }

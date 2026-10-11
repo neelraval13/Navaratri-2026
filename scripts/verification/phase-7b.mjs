@@ -332,11 +332,11 @@ const dbTouching = HEADER_COMPONENTS.filter((file) =>
     readFileSync(join(root, file), 'utf8')))
 check('no header component reads the database', dbTouching, [])
 /**
- * RE-SCOPED BY PHASE P1, which added `/prizes` as a fourth consumer.
+ * RE-SCOPED BY PHASE A1, which added `/attendees` as a fifth consumer.
  *
  * The inventory is pinned so a component cannot start reading the database
- * from OUTSIDE the gate unnoticed, and the entry earns its place below: the
- * assertion that follows proves the prizes route renders inside the one
+ * from OUTSIDE the gate unnoticed, and each entry earns its place below: the
+ * assertions that follow prove both event pages render inside the one
  * `<EventAppGate>`, which is `<DatabaseGate>`. A name added to this list
  * without that proof would be a name added to a list.
  */
@@ -344,14 +344,16 @@ check('  every useEventConfig consumer is inside DatabaseGate',
   spawnSync('grep', ['-rl', 'useEventConfig', join(root, 'src/components'), join(root, 'src/pages')], { encoding: 'utf8' })
     .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort(),
   ['components/device/device-label.tsx', 'components/registration/registration-form.tsx',
-   'pages/home-page.tsx', 'pages/prizes-page.tsx'].sort())
-check('    and the prizes page is one of the gated event routes',
+   'pages/attendees-page.tsx', 'pages/home-page.tsx', 'pages/prizes-page.tsx'].sort())
+check('    and both are gated event routes inside the one DatabaseGate',
   [/<EventAccessGate module="prizes">[\s\S]{0,120}<PrizesPage \/>/.test(shell),
+   /<EventAccessGate module="attendees">[\s\S]{0,140}<AttendeesPage \/>/.test(shell),
    /<DatabaseGate>/.test(stripComments(readFileSync(join(root, 'src/components/event-app-gate.tsx'), 'utf8')))],
-  [true, true])
-check('    and it reports no badge state, which a prize desk does not have',
-  /DeviceReadiness|DeviceLabel|isBadgeDistributionConfigured/
-    .test(stripComments(readFileSync(join(root, 'src/pages/prizes-page.tsx'), 'utf8'))), false)
+  [true, true, true])
+check('    and neither reports badge state, which neither device has',
+  ['src/pages/prizes-page.tsx', 'src/pages/attendees-page.tsx']
+    .filter((file) => /DeviceReadiness|DeviceLabel|isBadgeDistributionConfigured/
+      .test(stripComments(readFileSync(join(root, file), 'utf8')))), [])
 
 console.log('\n=== DIALOG PRIMITIVE AUDIT ===')
 const dialogSource = readFileSync(join(root, 'src/components/ui/dialog.tsx'), 'utf8')

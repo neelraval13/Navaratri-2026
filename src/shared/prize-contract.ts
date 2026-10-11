@@ -19,21 +19,22 @@
  * operational gain.
  */
 
-/** The gender values registration already stores. No third spelling. */
-export type PrizeGender = 'male' | 'female'
+import type { AttendeeGender, EventAttendee } from './attendee-contract.js'
 
 /**
- * Exactly what the prize screen may know about an attendee.
+ * The attendee shape, from the ONE module that owns it.
  *
- * Projected field by field from the Badge Register, never spread, so a column
- * appended to the Sheet later cannot ride along into a prize response.
+ * Phase A1 added a second attendee-reading module — the read-only directory
+ * at `/attendees` — so the shape, the gender normalisation, the age bound and
+ * the runtime parser moved to `src/shared/attendee-contract.ts`. These names
+ * are kept as aliases because they are the words the prize module speaks in,
+ * and renaming them across Production-live code would be churn for nothing.
+ *
+ * They are ALIASES, not copies. There is exactly one definition of what a
+ * module may know about an attendee.
  */
-export interface PrizeAttendee {
-  badgeNumber: number
-  name: string
-  age: number
-  gender: PrizeGender
-}
+export type PrizeGender = AttendeeGender
+export type PrizeAttendee = EventAttendee
 
 /** Who handed the prize over. A device, never a person. */
 export interface PrizeAwardDevice {

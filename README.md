@@ -15,12 +15,14 @@ One origin, real pathnames, one storage namespace:
 |---|---|
 | `/` | Home — event operations launcher |
 | `/badge-registration` | Attendee badge workflow |
+| `/attendees` | Read-only attendee directory |
 | `/prizes` | Prize distribution |
 | `/device-registration` | Provision and inspect this physical device |
 
 Dandiya is shown on Home as **Coming soon** and is inert — there is no route
 behind it yet. Prizes is a real module as of Phase P1, with repeat winners and
-a fixed prize catalog as of Phase P1.1.
+a fixed prize catalog as of Phase P1.1. The attendee directory is real as of
+Phase A1.
 
 Routing is presentation only. Changing the pathname creates no second database
 or storage namespace: IndexedDB, the trusted-device marker, the operator
@@ -54,11 +56,14 @@ not by an operational rule. `/admin` does not sit behind event access.
 Admin manages **devices, not attendees**, and is online-only: registry data is
 never cached in IndexedDB.
 
-Device capabilities are `registration` and `prizes`. **Registration includes
-physical badge issuance** — issuing is the last step of registering an
-attendee, so it is one permission, not two. The badge range stays separate
-data: `registration` says a device may run the workflow, `badge_assignments`
-says which physical numbers it owns.
+Device capabilities are `registration`, `prizes` and `attendees`, and the
+three are **independent**: `prizes` does not grant the attendee directory and
+`registration` does not either. A device may hold `attendees` alone.
+
+**Registration includes physical badge issuance** — issuing is the last step
+of registering an attendee, so it is one permission, not two. The badge range
+stays separate data: `registration` says a device may run the workflow,
+`badge_assignments` says which physical numbers it owns.
 
 Admin can also provision the credentials a device will eventually sign in
 with: a login name plus a device password, stored as a `node:crypto` scrypt
@@ -159,6 +164,7 @@ wins whenever the server answers.
 /                      a device grant for this event, on a converged browser
 /badge-registration    the same, plus Registration and agreeing badge state
 /prizes                the same, plus Prizes — and no badge state at all
+/attendees             the same, plus Attendees — read-only, no badge state
 /device-registration   retired — redirects to /device-login
 ```
 
@@ -199,8 +205,8 @@ session, no unlock screen and no **Lock Device** control: `/api/operator-login`,
 `/api/operator-session` and `/api/operator-logout` were deleted, along with
 `server/auth/`, `src/auth/` and `src/components/operator/`. The Function
 budget fell from 11 to **8 of 12**. Phase P1 then spent one slot on
-`api/prizes.ts`, so it now stands at **9 of 12**. Phase P1.1 added no
-Function.
+`api/prizes.ts` and Phase A1 one on `api/attendees.ts`, so it now stands at
+**10 of 12**. Phase P1.1 added no Function.
 
 Event operations are authorized by a **central device grant** — a live
 session, or a cryptographically verified offline lease — and by nothing else.
@@ -345,6 +351,48 @@ env VERCEL_ENV=development node scripts/seed-prizes-development.mjs --cleanup --
 It cannot seed Production: `--confirm`, `VERCEL_ENV=development`,
 `SYNC_ALLOWED_VERCEL_ENV=development` and the real release interlock must all
 agree. See **[docs/PRIZES.md](docs/PRIZES.md)**.
+
+## Phase A1 — read-only attendee directory
+
+`/attendees` lists everyone registered for the event for a device holding the
+**`attendees`** attribute. It needs no `registration`, no `prizes`, no badge
+range and no badge binding.
+
+**It changes nothing.** `GET /api/attendees` is the only operation — `POST`,
+`PUT`, `PATCH` and `DELETE` answer `405` with `Allow: GET`. The endpoint opens
+no database client, imports no writer and reads no body; the browser module
+sends only GET; the attendee card takes one prop and has no handler, button or
+form. There is no mutation API for this feature.
+
+**The three capabilities are independent.** `prizes` does not grant the
+directory and `registration` does not either. The prize desk lists attendees
+because identifying the badge in somebody's hand is part of awarding a prize;
+browsing the whole register is separately granted.
+
+**The privacy boundary is unchanged**, and the reader is shared.
+`server/attendees/register.ts` is the one Badge Register parser outside
+`server/sync/`, used by `/api/attendees` and `/api/prizes` alike, and it
+projects four fields:
+
+```json
+{ "badgeNumber": 9005, "name": "Meera", "age": 11, "gender": "female" }
+```
+
+The phone column and the WhatsApp link are never read. No attendees table, no
+second spreadsheet, no local copy.
+
+**Online only.** Offline, `/attendees` says *"Attendees requires an internet
+connection."* and shows no list at all — not a cached one and not a stale one.
+No IndexedDB cache, no polling, no heartbeat.
+
+**An empty register and an unreadable one are different screens.** `200` with
+no attendees renders `Attendees (0)` and "No attendees have been registered
+yet"; a Sheet that cannot be read is a `503` and an error with Try again.
+
+Search by badge or name, an age window with either bound optional, and gender
+— the **same** filter functions the prize desk uses, so the two screens cannot
+disagree about which query finds somebody. A1 needed **no migration**. See
+**[docs/ATTENDEES.md](docs/ATTENDEES.md)**.
 
 ## Central database (Phase 9A — foundation only)
 
@@ -585,6 +633,8 @@ Three documents cover event-device setup:
   record of which range belongs to which device, plus the reserve-range policy
 - **[docs/DEVICE_PROVISIONING.md](docs/DEVICE_PROVISIONING.md)** — the
   per-device workflow, including the offline test
+- **[docs/ATTENDEES.md](docs/ATTENDEES.md)** — the read-only attendee
+  directory, its permission model and the shared Badge Register reader
 - **[docs/PRIZES.md](docs/PRIZES.md)** — the prize module, its privacy
   boundary, and the Development fixture procedure
 - **[docs/VERCEL_FIREWALL.md](docs/VERCEL_FIREWALL.md)** — the device and

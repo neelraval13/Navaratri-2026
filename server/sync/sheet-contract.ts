@@ -84,7 +84,7 @@ export const BADGE_REGISTER_COLUMNS = {
    * `phone` and the WhatsApp column at index 3 are deliberately NOT among
    * them: the prize desk identifies an attendee by the badge in their hand,
    * and a contact number would be personal data copied somewhere new for no
-   * operational gain. See server/prizes/roster.ts.
+   * operational gain. See server/attendees/register.ts.
    */
   name: 1,
   phone: 2,

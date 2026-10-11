@@ -228,7 +228,15 @@ const domainJiti = createJiti(import.meta.url, {
   interopDefault: true,
 })
 const authz = await domainJiti.import(`${root}/src/device-auth/event-authorization.ts`)
-const filters = await domainJiti.import(`${root}/src/prizes/prize-filters.ts`)
+/**
+ * RE-POINTED BY PHASE A1, which moved the attendee filters to
+ * `src/attendees/attendee-filters.ts` so the read-only directory could share
+ * them. The assertions below are UNCHANGED, and they now prove the shared
+ * implementation does what the prize desk needs — which is the point of
+ * sharing it.
+ */
+const filters = await domainJiti.import(`${root}/src/attendees/attendee-filters.ts`)
+const prizeFilters = await domainJiti.import(`${root}/src/prizes/prize-filters.ts`)
 
 /** A converged browser with NO badge state at all: the prize-desk shape. */
 const PRIZE_CONFIG = {
@@ -414,7 +422,7 @@ seedSheet()
 body = await roster()
 const ROSTER = body.attendees
 const filtered = (over) =>
-  badgesIn(filters.filterAttendees(ROSTER, { ...filters.EMPTY_PRIZE_FILTERS, ...over }))
+  badgesIn(filters.filterAttendees(ROSTER, { ...filters.EMPTY_ATTENDEE_FILTERS, ...over }))
 
 /** #9005 holds three prizes and #9002 one, in the seeded ledger above. */
 check('5. searching `9005` finds the attendee who has already won three',
@@ -436,8 +444,8 @@ check('  an empty bound is NOT zero, and min above max filters nothing',
    filters.parseAgeBounds({ minAge: '20', maxAge: '5' }).ok],
   [[9001, 9002, 9003, 9004, 9005], [9001, 9002, 9003, 9004, 9005], false])
 check('  and Clear filters restores everything',
-  [filters.hasActivePrizeFilters({ ...filters.EMPTY_PRIZE_FILTERS, search: 'x' }),
-   filters.hasActivePrizeFilters(filters.EMPTY_PRIZE_FILTERS), filtered({})],
+  [filters.hasActiveAttendeeFilters({ ...filters.EMPTY_ATTENDEE_FILTERS, search: 'x' }),
+   filters.hasActiveAttendeeFilters(filters.EMPTY_ATTENDEE_FILTERS), filtered({})],
   [true, false, [9001, 9002, 9003, 9004, 9005]])
 /**
  * NOT VACUOUS. The filter is never handed the award history, so there is no
@@ -445,8 +453,11 @@ check('  and Clear filters restores everything',
  * case above, and the one that keeps being true when a filter is added.
  */
 check('  the filter is never even given the award history',
-  /export const filterAttendees = \(\s*attendees: readonly PrizeAttendee\[\],\s*state: PrizeFilterState,\s*\)/
-    .test(read('src/prizes/prize-filters.ts')), true)
+  [/export const filterAttendees = \(\s*attendees: readonly EventAttendee\[\],\s*state: AttendeeFilterState,\s*\)/
+    .test(read('src/attendees/attendee-filters.ts')),
+   // And the prize module keeps only award logic, so there is one of each.
+   /filterAttendees|parseAgeBounds/.test(read('src/prizes/prize-filters.ts')),
+   typeof prizeFilters.previousAwardsFor], [true, false, 'function'])
 
 /* ============================= 8-13. AWARDING, AGAIN AND AGAIN ========== */
 
@@ -641,7 +652,7 @@ check('  and the register is read BEFORE anything is written',
   (() => {
     const source = stripComments(read('api/prizes.ts'))
     const postSource = source.slice(source.indexOf('export async function POST('))
-    return [postSource.indexOf('readPrizeRoster(') < postSource.indexOf('recordPrizeAward('),
+    return [postSource.indexOf('readAttendeeRegister(') < postSource.indexOf('recordPrizeAward('),
       postSource.includes("blocked: 'badge-not-registered'")]
   })(), [true, true])
 /**
@@ -890,8 +901,8 @@ check('every attendee card offers Give Prize, whatever they have already won',
   })(), [true, true, false, true, false])
 check('  the attendee filters count ATTENDEES, not eligibility',
   await (async () => {
-    const html = await renderUi('src/components/prizes/attendee-filters.tsx', {
-      state: filters.EMPTY_PRIZE_FILTERS, resultCount: 45, totalCount: 45,
+    const html = await renderUi('src/components/attendees/attendee-filters.tsx', {
+      state: filters.EMPTY_ATTENDEE_FILTERS, resultCount: 45, totalCount: 45,
       onChange: noop, onClear: noop,
     })
     return [html.includes('45 attendees'), /eligible/i.test(html)]
@@ -1042,6 +1053,7 @@ check('  stores unchanged',
     .map((entry) => entry.trim().replace(':', '')), ['registrations', 'config', 'outbox'])
 check('  and no prize state is kept locally at all',
   ['src/prizes/prize-api.ts', 'src/prizes/prize-filters.ts',
+   'src/attendees/attendee-filters.ts', 'src/attendees/attendee-api.ts',
    'src/components/prizes/prize-desk.tsx', 'src/pages/prizes-page.tsx',
    'src/components/prizes/prize-chooser.tsx',
    'src/components/prizes/previous-awards-warning.tsx']
@@ -1070,12 +1082,16 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_FUNCTION_LIMIT)}` +
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
-check('31. the Function inventory is still exactly nine', budget.actual, [
+// RE-SCOPED BY PHASE A1, which spent one slot on `api/attendees.ts`. What
+// P1 needs is that PRIZES is still exactly one Function, which the two
+// assertions below prove directly.
+check('31. the Function inventory is exactly ten', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
+  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
+  'sync-registration',
 ])
-check('  with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('  and prizes is ONE Function, dispatched by method',
   [[...stripComments(read('api/prizes.ts')).matchAll(/export async function ([A-Z]+)\(/g)]
     .map((match) => match[1]).sort(),
@@ -1172,7 +1188,7 @@ check('  an explicit Refresh still re-reads from the server',
   [/onClick=\{refresh\}/.test(desk), /setReadAttempt\(\(previous\) => previous \+ 1\)/.test(desk)],
   [true, true])
 check('  active filters survive a successful award',
-  !/setFilters\(EMPTY_PRIZE_FILTERS\)[\s\S]{0,300}status: 'awarded'/.test(desk) &&
+  !/setFilters\(EMPTY_ATTENDEE_FILTERS\)[\s\S]{0,300}status: 'awarded'/.test(desk) &&
   /filters this volunteer/.test(read('src/components/prizes/prize-desk.tsx')), true)
 check('history offers no undo, delete or edit',
   /Undo|Delete|Remove|Edit/.test(stripComments(read('src/components/prizes/award-history.tsx'))),

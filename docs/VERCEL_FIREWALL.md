@@ -101,6 +101,7 @@ So:
 | `/api/sync-registration` | Already requires a valid device session, and a device returning from offline legitimately drains a queue in a burst. Rate-limiting it would stall recovery exactly when it matters. |
 | `/api/device-badge-claim` | Authenticated, and the database is what protects it. See below. |
 | `/api/prizes` | Authenticated device traffic. See below. |
+| `/api/attendees` | Authenticated device traffic, and read-only. See below. |
 
 ### Why the claim endpoint gets no rule
 
@@ -124,11 +125,25 @@ without a device session carrying the current `prizes` attribute.
 
 `GET` is a roster read that a prize desk performs on opening the page, on
 reconnect and on every explicit Refresh — ordinary, bursty, and harmless.
-`POST` is protected by `UNIQUE(event_id, badge_number)`, which no amount of
-repetition can get past: a second award for the same badge is refused by
-Postgres whether it arrives once or a hundred times.
 
-A rule here would throttle a volunteer pressing Refresh and protect nothing.
+`POST` appends one award per request, and since **Phase P1.1** repeat prizes
+are legal, so there is no uniqueness constraint standing behind it any more.
+What bounds it instead is that every award requires a live device session with
+the current `prizes` attribute, and that the prize name must be one of eight
+allow-listed values — a flood from a real prize desk would produce real award
+rows a human can see and remove, not an exploit. An IP-keyed rule would not
+help with that and would throttle a volunteer pressing Refresh.
+
+### Why the attendee directory gets no rule
+
+`GET /api/attendees` is authenticated device traffic too, refused without a
+device session carrying the current `attendees` attribute, and it is
+**read-only**: every other method answers `405`.
+
+It is read on opening the page, on reconnect and on every explicit Refresh,
+exactly like the prize roster. Rate-limiting it would close a read-only viewer
+and protect nothing — there is no credential to guess at it and nothing it can
+change.
 
 ---
 

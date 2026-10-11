@@ -120,7 +120,12 @@ const REQUIRED_FILES = [
   'src/shared/prize-contract.ts',
   'server/prizes/awards.ts',
   'server/prizes/eligibility.ts',
-  'server/prizes/roster.ts',
+  /**
+   * The ONE Badge Register reader. Phase A1 moved it out of `server/prizes/`
+   * because the directory needs the same projection, and two readers would be
+   * two opinions about which columns an attendee has.
+   */
+  'server/attendees/register.ts',
   'server/prizes/requests.ts',
   'src/prizes/prize-api.ts',
   'src/prizes/prize-filters.ts',
@@ -129,7 +134,15 @@ const REQUIRED_FILES = [
   'src/components/prizes/prize-chooser.tsx',
   'src/components/prizes/previous-awards-warning.tsx',
   'src/components/prizes/attendee-card.tsx',
-  'src/components/prizes/attendee-filters.tsx',
+  // Phase A1: the read-only directory, and the shared pieces both modules use.
+  'src/shared/attendee-contract.ts',
+  'src/attendees/attendee-api.ts',
+  'src/attendees/attendee-filters.ts',
+  'src/components/attendees/attendee-filters.tsx',
+  'src/components/attendees/attendee-card.tsx',
+  'src/components/attendees/attendee-directory.tsx',
+  'src/pages/attendees-page.tsx',
+  'api/attendees.ts',
   'docs/PRIZES.md',
   'scripts/seed-prizes-development.mjs',
   'tsconfig.server.json',
@@ -1245,6 +1258,8 @@ const EXPECTED_FUNCTIONS = [
   'admin-device-password.ts',
   'admin-devices.ts',
   'admin-events.ts',
+  // Phase A1. GET only; every other method answers 405 with Allow: GET.
+  'attendees.ts',
   'device-auth.ts',
   'device-badge-claim.ts',
   // Phase P1. GET lists the eligible roster and the history; POST awards.
@@ -2654,14 +2669,15 @@ addCheck(
 )
 
 /**
- * RE-SCOPED BY PHASE P1, which spent one slot on `api/prizes.ts`. Nine of
- * twelve, three spare. The headroom is pinned rather than merely bounded so
- * it cannot be consumed quietly: the Hobby limit is enforced at DEPLOY time,
- * after the build has already succeeded, so nothing else would report it.
+ * RE-SCOPED BY PHASE A1, which spent one slot on `api/attendees.ts` beside
+ * P1's `api/prizes.ts`. Ten of twelve, two spare. The headroom is pinned
+ * rather than merely bounded so it cannot be consumed quietly: the Hobby
+ * limit is enforced at DEPLOY time, after the build has already succeeded, so
+ * nothing else would report it.
  */
-if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 3) {
+if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 2) {
   budgetProblems.push(
-    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 3`,
+    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 2`,
   )
 }
 
@@ -2872,13 +2888,13 @@ const ATTENDEE_PII_FIELDS = [
 
 const schemaSource = readText(join(ROOT, 'server/db/schema.ts'))
 const prizeWriter = readText(join(ROOT, 'server/prizes/awards.ts'))
-const prizeRoster = readText(join(ROOT, 'server/prizes/roster.ts'))
+const prizeRoster = readText(join(ROOT, 'server/attendees/register.ts'))
 const prizeRequests = readText(join(ROOT, 'server/prizes/requests.ts'))
 const prizeEndpoint = readText(join(ROOT, 'api/prizes.ts'))
 const prizeContract = readText(join(ROOT, 'src/shared/prize-contract.ts'))
 const prizeApi = readText(join(ROOT, 'src/prizes/prize-api.ts'))
 const prizeEligibility = readText(join(ROOT, 'server/prizes/eligibility.ts'))
-const prizeFilters = readText(join(ROOT, 'src/prizes/prize-filters.ts'))
+const prizeFilters = readText(join(ROOT, 'src/attendees/attendee-filters.ts'))
 const prizeChooser = readText(join(ROOT, 'src/components/prizes/prize-chooser.tsx'))
 const prizeDialog = readText(join(ROOT, 'src/components/prizes/award-prize-dialog.tsx'))
 const prizeWarning = readText(
@@ -3067,8 +3083,8 @@ if (
      * calls let a canary that deleted the refusal through: the roster was
      * still read first, it just no longer decided anything.
      */
-    if (post.indexOf('readPrizeRoster(') === -1 ||
-        post.indexOf('readPrizeRoster(') > post.indexOf('recordPrizeAward(')) {
+    if (post.indexOf('readAttendeeRegister(') === -1 ||
+        post.indexOf('readAttendeeRegister(') > post.indexOf('recordPrizeAward(')) {
       prizeProblems.push('the award endpoint writes before confirming the badge is registered')
     }
 
@@ -3123,16 +3139,19 @@ if (
 
   /**
    * THE ROSTER PROJECTS FOUR FIELDS. The phone column and the WhatsApp link
-   * are not merely unstored — they are never read.
+   * are not merely unstored — they are never read. Phase A1 moved this reader
+   * to `server/attendees/register.ts` so the directory shares it; the guard
+   * follows the implementation rather than the old path, because a guard
+   * pointed at a file nobody uses verifies nothing.
    */
   const roster = stripComments(prizeRoster)
 
   if (/COLUMNS\.phone|whatsapp/i.test(roster)) {
-    prizeProblems.push('server/prizes/roster.ts reads the phone or WhatsApp column')
+    prizeProblems.push('server/attendees/register.ts reads the phone or WhatsApp column')
   }
 
   if (!/\.values\.get\(/.test(roster) || /batchUpdate|addSheet/.test(roster)) {
-    prizeProblems.push('server/prizes/roster.ts is not strictly read-only on the Sheet')
+    prizeProblems.push('server/attendees/register.ts is not strictly read-only on the Sheet')
   }
 
   for (const field of ['phone', 'whatsapp', 'paymentMethod', 'amount']) {
@@ -3240,7 +3259,7 @@ if (
    * never handed the award history, so no filter can be made to hide a winner
    * without changing what it is given.
    */
-  if (!/export const filterAttendees = \(\s*attendees: readonly PrizeAttendee\[\],\s*state: PrizeFilterState,\s*\)/
+  if (!/export const filterAttendees = \(\s*attendees: readonly EventAttendee\[\],\s*state: AttendeeFilterState,\s*\)/
     .test(prizeFilters)) {
     prizeProblems.push('filterAttendees no longer takes only the roster and the filters')
   }
@@ -3374,6 +3393,337 @@ addCheck(
   'prize-ledger',
   'The prize ledger holds no attendee PII, and repeat prizes stay possible',
   prizeProblems,
+)
+
+// --- K2. the attendee directory reads and changes nothing -----------------
+/**
+ * PHASE A1 ADDED A SECOND READER OF ATTENDEE DATA, AND NO WRITER.
+ *
+ * `/attendees` is a read-only directory for a device holding the new
+ * `attendees` attribute. Two things could go wrong with it, and both would be
+ * quiet:
+ *
+ *   1. IT COULD GROW A MUTATION. A directory is the obvious place to add
+ *      "fix this name", and the moment it can write, a read-only viewer
+ *      handed to a volunteer stops being one.
+ *   2. IT COULD SHOW MORE THAN IT MAY. The Badge Register holds a phone
+ *      number and a WhatsApp link; this module must not read them, and the
+ *      same projection serves the prize desk, so a field added for one screen
+ *      would appear on both.
+ *
+ * A third guard is about PERMISSION: the three attributes are independent, so
+ * `prizes` must not open the directory and `registration` must not either.
+ */
+const directoryProblems = []
+
+const attendeeEndpoint = readText(join(ROOT, 'api/attendees.ts'))
+const attendeeContract = readText(join(ROOT, 'src/shared/attendee-contract.ts'))
+const attendeeRegister = readText(join(ROOT, 'server/attendees/register.ts'))
+const attendeeApi = readText(join(ROOT, 'src/attendees/attendee-api.ts'))
+const attendeeCard = readText(join(ROOT, 'src/components/attendees/attendee-card.tsx'))
+const attendeeDirectory = readText(
+  join(ROOT, 'src/components/attendees/attendee-directory.tsx'),
+)
+const attributeSource = readText(join(ROOT, 'src/shared/device-attributes.ts'))
+const authorizationSource = readText(join(ROOT, 'src/device-auth/event-authorization.ts'))
+
+if (
+  attendeeEndpoint === null || attendeeContract === null || attendeeRegister === null ||
+  attendeeApi === null || attendeeCard === null || attendeeDirectory === null ||
+  attributeSource === null || authorizationSource === null
+) {
+  directoryProblems.push('an attendee directory module is missing')
+} else {
+  /** The allow-list the Admin form renders and the server validates against. */
+  if (!/DEVICE_ATTRIBUTES = \['registration', 'prizes', 'attendees'\] as const/
+    .test(attributeSource)) {
+    directoryProblems.push('the device attribute allow-list is not the expected three')
+  }
+
+  for (const name of ['DEVICE_ATTRIBUTE_LABELS', 'DEVICE_ATTRIBUTE_DESCRIPTIONS']) {
+    const block = attributeSource.slice(attributeSource.indexOf(`const ${name}`))
+
+    if (!block.slice(0, block.indexOf('}')).includes('attendees:')) {
+      directoryProblems.push(`${name} has no entry for attendees`)
+    }
+  }
+
+  /**
+   * THE ATTRIBUTES ARE INDEPENDENT. The directory branch must test its own
+   * attribute and nothing else — accepting `prizes` there would hand every
+   * prize desk a browsable copy of the whole register, which is a separate
+   * thing to be trusted with.
+   */
+  const branch = authorizationSource.slice(
+    authorizationSource.indexOf("if (module === 'attendees')"),
+  )
+  const decision = branch.slice(0, branch.indexOf('}'))
+
+  if (decision === '' || !/grant\.attributes\.includes\('attendees'\)/.test(decision)) {
+    directoryProblems.push('the attendees route does not require the attendees attribute')
+  }
+
+  if (/'prizes'|'registration'/.test(decision)) {
+    directoryProblems.push('the attendees route accepts another module\u2019s attribute')
+  }
+
+  /**
+   * THE REFUSAL ITSELF, not a mention of the constant.
+   *
+   * A canary that neutered the check — `if (false && !device.attributes…)` —
+   * sailed past a guard that only looked for the constant's name, which is
+   * the same mistake a Phase P1.1 canary found: proving a string appears
+   * proves nothing about what is enforced. So the condition, the typed
+   * refusal and its status are all required, and the check must come BEFORE
+   * the register is read.
+   */
+  const attendeeGet = stripComments(attendeeEndpoint)
+    .slice(stripComments(attendeeEndpoint).indexOf('export async function GET('))
+
+  if (!/if \(!device\.attributes\.includes\(ATTENDEE_DIRECTORY_REQUIRED_ATTRIBUTE\)\) \{/
+    .test(attendeeGet)) {
+    directoryProblems.push('GET /api/attendees does not require the attendees attribute')
+  }
+
+  if (!attendeeGet.includes("blocked: 'attendees-required'") || !/403/.test(attendeeGet)) {
+    directoryProblems.push('GET /api/attendees does not refuse an ungranted device with 403')
+  }
+
+  if (attendeeGet.indexOf('ATTENDEE_DIRECTORY_REQUIRED_ATTRIBUTE') >
+      attendeeGet.indexOf('readAttendeeRegister(')) {
+    directoryProblems.push('GET /api/attendees reads the register before checking permission')
+  }
+
+  if (/PRIZE_REQUIRED_ATTRIBUTE|BADGE_RANGE_REQUIRED_ATTRIBUTE/.test(attendeeEndpoint)) {
+    directoryProblems.push('the attendees endpoint consults another module\u2019s attribute')
+  }
+
+  /**
+   * READ-ONLY, AND STRUCTURALLY SO. `GET` is the only method with a body of
+   * work; the other four exist precisely so the refusal is deliberate and
+   * testable rather than whatever the platform decides for an unexported one.
+   */
+  const methods = [...attendeeEndpoint.matchAll(/export (?:async )?function ([A-Z]+)\(/g)]
+    .map((match) => match[1])
+    .sort()
+    .join(',')
+
+  if (methods !== 'DELETE,GET,PATCH,POST,PUT') {
+    directoryProblems.push(`api/attendees.ts exports ${methods} rather than GET plus four refusals`)
+  }
+
+  const endpointCode = stripComments(attendeeEndpoint)
+
+  for (const [name, start] of [
+    ['POST', endpointCode.indexOf('export function POST(')],
+    ['PUT', endpointCode.indexOf('export function PUT(')],
+    ['PATCH', endpointCode.indexOf('export function PATCH(')],
+    ['DELETE', endpointCode.indexOf('export function DELETE(')],
+  ]) {
+    const body = start === -1 ? '' : endpointCode.slice(start, endpointCode.indexOf('}', start))
+
+    if (!body.includes('methodNotAllowed()')) {
+      directoryProblems.push(`api/attendees.ts ${name} does not refuse with 405`)
+    }
+  }
+
+  if (!/status: 405/.test(endpointCode) || !/allow: 'GET'/.test(endpointCode)) {
+    directoryProblems.push('api/attendees.ts does not answer 405 with an Allow header')
+  }
+
+  /**
+   * It must not be ABLE to write. No database client, no ledger writer, no
+   * body reader, no Sheet mutation — a directory that reads a body is a
+   * directory somebody is about to let write.
+   */
+  for (const capability of [
+    'getDatabase', 'db.insert', 'db.update', 'db.delete', 'readDeviceBody',
+    'batchUpdate', 'prizeAwards', 'recordPrizeAward', 'drizzle',
+  ]) {
+    if (endpointCode.includes(capability)) {
+      directoryProblems.push(`api/attendees.ts can mutate: ${capability}`)
+    }
+  }
+
+  if (/admin-auth|adminSession|readAdminSessionCookie/.test(endpointCode)) {
+    directoryProblems.push('the attendees endpoint reaches into the Admin realm')
+  }
+
+  /**
+   * AN UNREADABLE REGISTER IS NOT AN EMPTY ONE, and the guard reads the
+   * BRANCH rather than the file: a canary that answered a failed read with
+   * `{ attendees: [] }` left `register-unavailable` and `503` elsewhere in
+   * the file untouched, so a whole-file match passed it.
+   *
+   * Whoever reads "No attendees have been registered yet" has to be able to
+   * believe it.
+   */
+  const failedRead = attendeeGet.indexOf('register.ok === false')
+  const failedReadBranch = failedRead === -1
+    ? ''
+    : attendeeGet.slice(failedRead, attendeeGet.indexOf('}\n', failedRead))
+
+  if (!/register-unavailable/.test(failedReadBranch) || !/503/.test(failedReadBranch)) {
+    directoryProblems.push('api/attendees.ts does not fail closed on an unreadable register')
+  }
+
+  if (/attendees: \[\]/.test(failedReadBranch)) {
+    directoryProblems.push('api/attendees.ts answers an unreadable register with an empty list')
+  }
+
+  // And the interlock failure fails closed the same way.
+  if (!/register-unavailable/.test(attendeeGet) || !/503/.test(attendeeGet)) {
+    directoryProblems.push('api/attendees.ts has no service-unavailable answer at all')
+  }
+
+  if (!attendeeDirectory.includes('No attendees have been registered yet.')) {
+    directoryProblems.push('the directory has no empty-register state')
+  }
+
+  /**
+   * ONE BADGE REGISTER PARSER. A second one is a second opinion about which
+   * columns exist, how an age is read and which rows are usable, and the two
+   * would drift the first time somebody hand-edited a cell.
+   */
+  const registerReaders = []
+
+  for (const directory of ['api', 'server', 'src']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      if (/BADGE_REGISTER_COLUMNS/.test(stripComments(readText(path) ?? ''))) {
+        registerReaders.push(rel(path))
+      }
+    }
+  }
+
+  const allowedReaders = [
+    'server/attendees/register.ts',
+    'server/sync/sheet-contract.ts',
+    'server/sync/sync-registration.ts',
+    'server/sync/requests.ts',
+  ]
+
+  for (const path of registerReaders) {
+    if (!allowedReaders.includes(path)) {
+      directoryProblems.push(`${path} parses the Badge Register itself`)
+    }
+  }
+
+  if (!registerReaders.includes('server/attendees/register.ts')) {
+    directoryProblems.push('server/attendees/register.ts no longer reads the Badge Register')
+  }
+
+  /** And both modules go through it, rather than each through its own. */
+  for (const path of ['api/attendees.ts', 'api/prizes.ts']) {
+    if (!/readAttendeeRegister/.test(readText(join(ROOT, path)) ?? '')) {
+      directoryProblems.push(`${path} does not use the shared Badge Register reader`)
+    }
+  }
+
+  /** The four fields, and no attendee contact or payment detail anywhere. */
+  for (const field of ['phone', 'whatsapp', 'wa.me', 'payment', 'amount', 'upi']) {
+    if (stripComments(attendeeContract).toLowerCase().includes(field)) {
+      directoryProblems.push(`the shared attendee contract mentions ${field}`)
+    }
+
+    if (endpointCode.toLowerCase().includes(field)) {
+      directoryProblems.push(`api/attendees.ts mentions ${field}`)
+    }
+  }
+
+  if (!/badgeNumber: number[\s\S]{0,120}name: string[\s\S]{0,120}age: number[\s\S]{0,120}gender: AttendeeGender/
+    .test(attendeeContract)) {
+    directoryProblems.push('the shared attendee shape is not the expected four fields')
+  }
+
+  /**
+   * THE CARD HAS NO ACTION. One prop in, nothing to call: a directory card
+   * that took a handler is a directory card one line away from a mutation.
+   */
+  for (const capability of ['onClick', 'onSubmit', 'Button', 'disabled', '<form']) {
+    if (stripComments(attendeeCard).includes(capability)) {
+      directoryProblems.push(`the attendee card offers a control: ${capability}`)
+    }
+  }
+
+  /**
+   * ONLINE ONLY. No cache, no queue, no poll, and no stale roster: a
+   * directory presenting an old register as current would tell a volunteer
+   * somebody is registered who is not.
+   */
+  for (const target of [
+    'src/attendees', 'src/components/attendees', 'src/pages/attendees-page.tsx',
+  ]) {
+    const resolved = join(ROOT, target)
+
+    if (!exists(resolved)) {
+      directoryProblems.push(`missing: ${target}`)
+
+      continue
+    }
+
+    for (const path of statSync(resolved).isDirectory() ? walk(resolved) : [resolved]) {
+      const code = stripComments(readText(path) ?? '')
+
+      if (/@\/db\/database|from 'dexie'|outbox|localStorage|sessionStorage|caches\./.test(code)) {
+        directoryProblems.push(`${rel(path)} keeps attendee state locally`)
+      }
+
+      if (/setInterval/.test(code)) {
+        directoryProblems.push(`${rel(path)} polls on an interval`)
+      }
+
+      if (/method: '(POST|PUT|PATCH|DELETE)'/.test(code)) {
+        directoryProblems.push(`${rel(path)} sends a mutation`)
+      }
+
+      /**
+       * `setTimeout` is allowed in exactly ONE place and for exactly one
+       * reason: aborting a request that never answers.
+       */
+      const timers = [...code.matchAll(/setTimeout\(/g)].length
+      const isRequestTimeout = rel(path) === 'src/attendees/attendee-api.ts' &&
+        timers === 1 && /controller\.abort\(\)/.test(code)
+
+      if (timers > 0 && !isRequestTimeout) {
+        directoryProblems.push(`${rel(path)} uses a timer that is not the request timeout`)
+      }
+    }
+  }
+
+  if (!/ATTENDEE_MESSAGES.offline|Attendees requires an internet connection/
+    .test(attendeeDirectory)) {
+    directoryProblems.push('the directory does not say it needs connectivity')
+  }
+
+  if (!attendeeApi.includes('Attendees requires an internet connection.')) {
+    directoryProblems.push('the offline copy is not the agreed sentence')
+  }
+
+  /** A1 adds no migration. `device_attributes` is already extensible text. */
+  if (exists(join(ROOT, 'drizzle', '0005_attendees.sql')) ||
+      readdirSync(join(ROOT, 'drizzle')).some((file) => file.startsWith('0005'))) {
+    directoryProblems.push('A1 added a migration, and it needs none')
+  }
+
+  /**
+   * AUTHENTICATED DEVICE TRAFFIC GETS NO FIREWALL RULE. A rule on it would
+   * throttle a viewer's ordinary reads while protecting nothing: there is no
+   * credential to guess at an endpoint that refuses everything without a
+   * device session cookie.
+   */
+  if (/\*\*Condition — Path\*\* \| `\/api\/attendees`/.test(firewallDoc)) {
+    directoryProblems.push('docs/VERCEL_FIREWALL.md rate-limits the authenticated directory')
+  }
+}
+
+addCheck(
+  'attendee-directory',
+  'The attendee directory reads the one register, changes nothing, and needs its own attribute',
+  directoryProblems,
 )
 
 // --- L. db:check knows about every migrated table -------------------------

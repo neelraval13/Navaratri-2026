@@ -1,4 +1,4 @@
-import { ArrowRight, IdCard, Music, Trophy } from 'lucide-react'
+import { ArrowRight, IdCard, Music, Trophy, Users } from 'lucide-react'
 import type * as React from 'react'
 import { Link } from 'wouter'
 
@@ -126,11 +126,16 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
  *
  * ATTRIBUTE-AWARE. Home renders only for a device that holds at least one
  * capability, and each card reflects whether THIS device holds the one its
- * module needs. The card is still not the security boundary — every module
- * authorizes itself at its own route, and `/prizes` and `/badge-registration`
- * each refuse a device that lacks the attribute whatever Home drew. What this
- * avoids is inviting a prize volunteer into a screen that will turn them
- * away.
+ * module needs. The attributes are INDEPENDENT: `prizes` does not offer
+ * Attendees and `registration` does not either, because the prize desk lists
+ * attendees as part of awarding a prize while the standalone directory is
+ * separately granted.
+ *
+ * The card is still not the security boundary — every module authorizes
+ * itself at its own route, and `/badge-registration`, `/prizes` and
+ * `/attendees` each refuse a device that lacks their attribute whatever Home
+ * drew. What this avoids is inviting a volunteer into a screen that will turn
+ * them away.
  *
  * The grant comes from the ONE provider that already owns the session check.
  * Home performs no request of its own, and an absent grant simply means
@@ -196,10 +201,10 @@ const HomePage: React.FC = () => {
         />
 
         <ModuleCard
-          icon={<Music className="size-5" />}
-          title="Dandiya"
-          description="Dandiya operations for the event."
-          access={{ kind: 'coming-soon' }}
+          icon={<Users className="size-5" />}
+          title="Attendees"
+          description="Read-only directory of everyone registered for the event."
+          access={moduleAccess('attendees', ROUTES.attendees)}
         />
 
         <ModuleCard
@@ -207,6 +212,13 @@ const HomePage: React.FC = () => {
           title="Prizes"
           description="Award prizes to registered attendees and review what has been given."
           access={moduleAccess('prizes', ROUTES.prizes)}
+        />
+
+        <ModuleCard
+          icon={<Music className="size-5" />}
+          title="Dandiya"
+          description="Dandiya operations for the event."
+          access={{ kind: 'coming-soon' }}
         />
       </div>
 

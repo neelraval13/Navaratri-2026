@@ -3,7 +3,7 @@ import { authorizeDeviceRequest } from '../server/device-auth/authorize.js'
 import { deviceJson, readDeviceBody } from '../server/device-auth/http.js'
 import { composePrizeRoster } from '../server/prizes/eligibility.js'
 import { readPrizeAwards, recordPrizeAward } from '../server/prizes/awards.js'
-import { readPrizeRoster } from '../server/prizes/roster.js'
+import { readAttendeeRegister } from '../server/attendees/register.js'
 import { parsePrizeAwardInput } from '../server/prizes/requests.js'
 import {
   SYNC_DISABLED_LOG_MESSAGES,
@@ -24,6 +24,8 @@ import {
  * IT STRADDLES THE PRIVACY BOUNDARY DELIBERATELY, AND KEEPS IT.
  *
  *   Google Sheets  the attendees — badge, name, age, gender, read per request
+ *                  through the ONE Badge Register reader `/api/attendees`
+ *                  also uses
  *   Postgres       the prize ledger — badge, prize, device, time, and nothing
  *                  about the person
  *
@@ -145,7 +147,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    const roster = await readPrizeRoster(access.environment)
+    const roster = await readAttendeeRegister(access.environment)
 
     if (roster.ok === false) {
       return deviceJson(
@@ -212,7 +214,7 @@ export async function POST(request: Request): Promise<Response> {
      * writes NOTHING — the register is the only thing that can confirm the
      * badge, so failing closed is the only honest answer.
      */
-    const roster = await readPrizeRoster(access.environment)
+    const roster = await readAttendeeRegister(access.environment)
 
     if (roster.ok === false) {
       return deviceJson(

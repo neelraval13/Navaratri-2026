@@ -102,35 +102,41 @@ check('Home no longer advertises local device registration',
  * Device Sign-In links. What must never appear is a link behind a card the
  * desk cannot use.
  *
- * NOTE FOR PHASE P1: Prizes is now a real module, but Home became
- * ATTRIBUTE-AWARE in the same phase, and `authorized()` here grants
- * `registration` only — so this expectation is unchanged, and it now proves
- * something stronger than it did before. The prizes-granted case is covered
- * in `verify:p1`.
+ * NOTE FOR PHASES P1 AND A1: Prizes and Attendees are now real modules, but
+ * Home became ATTRIBUTE-AWARE in P1, and `authorized()` here grants
+ * `registration` only — so this expectation is unchanged, and it proves
+ * something stronger than it did before. The granted cases are covered in
+ * `verify:p1` and `verify:a1`.
  */
 check('Home links only to real destinations', homeHrefs.sort(),
   ['/admin', '/badge-registration', '/device-login'])
-check('coming-soon cards do NOT navigate',
-  homeHrefs.filter((href) => /dandiya|prize/i.test(href)), [])
+check('inert cards do NOT navigate',
+  homeHrefs.filter((href) => /dandiya|prize|attendee/i.test(href)), [])
 check('  Admin is a subtle link, not a module card',
   /<a[^>]*href="\/admin"[^>]*>\s*Admin\s*<\/a>/.test(home.html), true)
 /**
  * The marker and the inert container go together: a badge on something
- * clickable, or a silent dead card, would each pass a bare count. Two inert
- * cards for two DIFFERENT reasons — Dandiya is unbuilt, Prizes is not granted
- * to this device — and the labels say which.
+ * clickable, or a silent dead card, would each pass a bare count.
+ *
+ * RE-SCOPED BY PHASE A1, which added the Attendees card. This device holds
+ * `registration` only, so THREE cards are inert for two DIFFERENT reasons —
+ * Dandiya is unbuilt, while Attendees and Prizes are simply not granted here
+ * — and the labels say which.
  */
 check('  they are marked and inert',
   [(home.html.match(/Coming soon/g) ?? []).length,
    (home.html.match(/Not on this device/g) ?? []).length,
-   (home.html.match(/aria-disabled="true"/g) ?? []).length], [1, 1, 2])
+   (home.html.match(/aria-disabled="true"/g) ?? []).length], [1, 2, 3])
 check('  every module card that links has a page behind it',
   [...home.html.matchAll(/href="(\/[a-z-]*)"[^>]*class="[^"]*group\/module/g)]
     .map((match) => match[1]).sort(), ['/badge-registration'])
 check('  no fake module routes exist',
   [existsSync(join(root, 'src/pages/dandiya-page.tsx')),
    existsSync(join(root, 'src/pages/prizes-page.tsx')),
-   /<PrizesPage \/>/.test(read('src/components/app-router.tsx'))], [false, true, true])
+   existsSync(join(root, 'src/pages/attendees-page.tsx')),
+   /<PrizesPage \/>/.test(read('src/components/app-router.tsx')),
+   /<AttendeesPage \/>/.test(read('src/components/app-router.tsx'))],
+  [false, true, true, true, true])
 check('Home shows static device status only',
   [home.html.includes('Registration Desk A'), home.html.includes('Central device'),
    /remaining|Pending sync|Next badge/i.test(home.html)], [true, true, false])
@@ -152,12 +158,15 @@ check('router uses real pathnames, not hash URLs', /hashLocation|useHashLocation
 console.log('\n=== 10. API IS NEVER SWALLOWED BY THE SPA REWRITE ===')
 const vercelConfig = JSON.parse(read('vercel.json'))
 const rewriteSources = vercelConfig.rewrites.map((r) => r.source)
-// RE-SCOPED BY PHASE P1: `/prizes` is a new SPA route and needs its own
-// explicit rewrite. Still an exact inventory, so a catch-all cannot creep in.
+// RE-SCOPED BY PHASE A1: `/attendees` is a new SPA route and needs its own
+// explicit rewrite, as `/prizes` did in P1. Still an exact inventory, so a
+// catch-all cannot creep in and start swallowing `/api/`.
 check('rewrites are explicit, not a catch-all', rewriteSources.sort(),
-  ['/admin', '/badge-registration', '/device-login', '/device-registration', '/prizes'])
+  ['/admin', '/attendees', '/badge-registration', '/device-login',
+   '/device-registration', '/prizes'])
 check('  no wildcard or regex source', rewriteSources.some((s) => /[*:()]/.test(s)), false)
-for (const api of ['/api/device-auth', '/api/admin-auth', '/api/device-badge-claim', '/api/sync-registration'])
+for (const api of ['/api/device-auth', '/api/admin-auth', '/api/device-badge-claim',
+  '/api/sync-registration', '/api/prizes', '/api/attendees'])
   check(`  ${api} is not matched`, rewriteSources.includes(api), false)
 check('  every rewrite destination is the SPA shell',
   vercelConfig.rewrites.every((r) => r.destination === '/index.html'), true)

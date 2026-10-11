@@ -558,12 +558,13 @@ const budget = functionChecker.checkFunctionBudget()
  * claim — that the refill added NO Function, because `PATCH` joined the
  * existing claim endpoint — is unchanged and still asserted below.
  */
-check('23. the Function inventory is exactly nine', budget.actual, [
+check('23. the Function inventory is exactly ten', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
+  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
+  'sync-registration',
 ])
-check('  with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('  and the refill added no Function of its own',
   [budget.problems,
    readdirSync(join(root, 'api')).filter((file) => /refill|extend|badge-range/.test(file))],

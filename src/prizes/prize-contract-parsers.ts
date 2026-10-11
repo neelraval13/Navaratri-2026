@@ -1,9 +1,5 @@
-import type {
-  PrizeAttendee,
-  PrizeAward,
-  PrizeGender,
-  PrizeRosterResponse,
-} from '@/shared/prize-contract'
+import { parseAttendeeList, parseEventAttendee } from '@/shared/attendee-contract'
+import type { PrizeAttendee, PrizeAward, PrizeRosterResponse } from '@/shared/prize-contract'
 
 /**
  * Runtime validation of the prize responses.
@@ -13,9 +9,12 @@ import type {
  * verified and an unrecognised shape FAILS CLOSED rather than becoming a card
  * on screen.
  *
- * Projected FIELD BY FIELD, never spread. If the server ever starts returning
- * an attendee's phone number — the one thing this contract deliberately
- * excludes — it would not reach local state by accident.
+ * THE ATTENDEE HALF IS NOT HERE. Phase A1 added a second attendee-reading
+ * module, so attendee validation lives once in
+ * `src/shared/attendee-contract.ts` and both modules call it — a second copy
+ * would be a second opinion about which fields are allowed on screen. What
+ * remains here is what only prizes has: an award, and the roster response
+ * that pairs attendees with award history.
  */
 
 const UUID_PATTERN =
@@ -33,41 +32,9 @@ const isNonEmpty = (value: unknown): value is string =>
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0
 
-const isAge = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 120
-
-/** Exactly the two values registration stores. No third spelling arrives. */
-const parseGender = (value: unknown): PrizeGender | null => {
-  if (value === 'male' || value === 'female') {
-    return value
-  }
-
-  return null
-}
-
-export const parsePrizeAttendee = (value: unknown): PrizeAttendee | null => {
-  if (!isRecord(value)) {
-    return null
-  }
-
-  const gender = parseGender(value.gender)
-
-  if (
-    !isPositiveInteger(value.badgeNumber) ||
-    !isNonEmpty(value.name) ||
-    !isAge(value.age) ||
-    gender === null
-  ) {
-    return null
-  }
-
-  return {
-    badgeNumber: value.badgeNumber,
-    name: value.name,
-    age: value.age,
-    gender,
-  }
-}
+/** The shared attendee parser, under the name the prize module uses. */
+export const parsePrizeAttendee = (value: unknown): PrizeAttendee | null =>
+  parseEventAttendee(value)
 
 /**
  * One history row. `attendee` is legitimately `null` — the Sheet row may be
@@ -125,26 +92,21 @@ export const parsePrizeAward = (value: unknown): PrizeAward | null => {
 export const parsePrizeRosterResponse = (
   body: unknown,
 ): PrizeRosterResponse | null => {
-  if (!isRecord(body) || !Array.isArray(body.attendees) || !Array.isArray(body.awards)) {
+  if (!isRecord(body) || !Array.isArray(body.awards)) {
     return null
   }
 
-  const attendees: PrizeAttendee[] = []
+  const attendees = parseAttendeeList(body.attendees)
+
+  if (attendees === null) {
+    return null
+  }
+
   const awards: PrizeAward[] = []
 
   // Accumulated rather than mapped-and-cast: a cast would assert the result
   // of the check instead of using it, which is the mistake this file exists
   // to avoid.
-  for (const entry of body.attendees) {
-    const attendee = parsePrizeAttendee(entry)
-
-    if (attendee === null) {
-      return null
-    }
-
-    attendees.push(attendee)
-  }
-
   for (const entry of body.awards) {
     const award = parsePrizeAward(entry)
 

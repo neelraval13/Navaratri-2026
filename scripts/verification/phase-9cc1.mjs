@@ -107,7 +107,7 @@ const routesModule = await createJiti(import.meta.url, {
  */
 check('  and the event route pattern no longer contains it',
   [/device-registration/.test(/EVENT_ROUTE_PATTERN = (.*)/.exec(read('src/app/routes.ts'))?.[1] ?? ''),
-   ['/', '/badge-registration', '/prizes'].every((path) =>
+   ['/', '/badge-registration', '/prizes', '/attendees'].every((path) =>
      routesModule.EVENT_ROUTE_PATTERN.test(path)),
    ['/device-registration', '/device-login', '/admin', '/nope'].some((path) =>
      routesModule.EVENT_ROUTE_PATTERN.test(path))],
@@ -117,11 +117,13 @@ const vercel = JSON.parse(read('vercel.json'))
 const sources = vercel.rewrites.map((rule) => rule.source)
 check('vercel.json rewrites /device-login to the SPA',
   vercel.rewrites.find((rule) => rule.source === '/device-login')?.destination, '/index.html')
-// RE-SCOPED BY PHASE P1: `/prizes` is a new SPA route with its own explicit
-// rewrite. Still an exact inventory — a catch-all would swallow /api.
+// RE-SCOPED BY PHASE A1: `/attendees` is a new SPA route with its own
+// explicit rewrite, as `/prizes` was in P1. Still an exact inventory — a
+// catch-all would swallow /api.
 check('  the existing rewrites are kept',
   sources.sort(),
-  ['/admin', '/badge-registration', '/device-login', '/device-registration', '/prizes'])
+  ['/admin', '/attendees', '/badge-registration', '/device-login',
+   '/device-registration', '/prizes'])
 check('  no rewrite is a wildcard that could swallow /api',
   sources.filter((source) => /[*:()]/.test(source)), [])
 check('  and none targets /api', sources.filter((source) => source.startsWith('/api')), [])

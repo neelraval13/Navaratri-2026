@@ -382,8 +382,11 @@ check('  because a blank one would be ambiguous',
     read('src/components/admin/device-form-fields.tsx')), true)
 check('  and an existing password is never loaded',
   /password: '',\n  confirmPassword: '',/.test(read('src/components/admin/device-dialog.tsx')), true)
-check('  the attribute checkboxes still render',
-  checkboxes(editForm).filter((entry) => entry.id.includes('-attribute-')).length, 2)
+// RE-SCOPED BY PHASE A1: a third capability, so a third checkbox. 9C-A's own
+// concern is that Edit Device still renders the attribute controls at all —
+// the credential work must not have displaced them.
+check('  the attribute checkboxes still render, one per capability',
+  checkboxes(editForm).filter((entry) => entry.id.includes('-attribute-')).length, 3)
 
 console.log('  -- client-side refusal before the request --')
 const deviceDialogSource = stripComments(read('src/components/admin/device-dialog.tsx'))
@@ -462,8 +465,12 @@ check('badge allocation stays local',
    /server\/db|drizzle/.test(read('src/db/registrations.ts'))], [true, false])
 check('  and central Postgres holds no badge counter',
   /next_badge|nextBadge/.test(stripComments(read('server/db/schema.ts'))), false)
-check('the attribute allow-list is unchanged',
-  /DEVICE_ATTRIBUTES = \['registration', 'prizes'\]/.test(read('src/shared/device-attributes.ts')), true)
+// RE-SCOPED BY PHASE A1, which added `attendees`. What 9C-A needs is that
+// provisioning a credential changed no capability, which the exact list below
+// still proves.
+check('the attribute allow-list is the expected three',
+  /DEVICE_ATTRIBUTES = \['registration', 'prizes', 'attendees'\]/
+    .test(read('src/shared/device-attributes.ts')), true)
 check('Save Device is still ONE atomic operation',
   [(registrySource.slice(registrySource.indexOf('export const updateDeviceConfiguration'),
     registrySource.indexOf('export const setDevicePassword')).match(/db\.batch\(/g) ?? []).length,

@@ -238,11 +238,19 @@ for (const [label, over] of [['blank name', { name: ' ' }], ['bad login shape', 
   check(`  rejected: ${label}`, dev(over).ok, false)
 check('  enabled defaults true', dev({}).value.enabled, true)
 
-check('the allow-list is exactly the two capabilities',
-  [...attributes.DEVICE_ATTRIBUTES], ['registration', 'prizes'])
+// RE-SCOPED BY PHASE A1, which added the read-only attendee directory as a
+// third INDEPENDENT capability. Still an exact list: the database stores plain
+// text, so this allow-list is the only thing standing between Admin and an
+// arbitrary string, and a value added without a decision is a value nothing
+// authorizes.
+check('the allow-list is exactly the three capabilities',
+  [...attributes.DEVICE_ATTRIBUTES], ['registration', 'prizes', 'attendees'])
 check('  each is labelled',
   attributes.DEVICE_ATTRIBUTES.map((a) => attributes.DEVICE_ATTRIBUTE_LABELS[a]),
-  ['Registration', 'Prizes'])
+  ['Registration', 'Prizes', 'Attendees'])
+check('  and each is described',
+  attributes.DEVICE_ATTRIBUTES
+    .filter((a) => (attributes.DEVICE_ATTRIBUTE_DESCRIPTIONS[a] ?? '').trim() === ''), [])
 check('  badge issuance is NOT a separate capability',
   [...attributes.DEVICE_ATTRIBUTES].some((a) => /badge|distribut|issue/i.test(a)), false)
 check('  and registration is described as including it',
@@ -266,8 +274,13 @@ check('  the old badge_distribution value is now unknown text and REFUSED',
   attributes.parseAttributeSet(['registration', 'badge' + '_distribution']).ok, false)
 check('  registration alone is fine', attributes.parseAttributeSet(['registration']).ok, true)
 check('  prizes alone is fine', attributes.parseAttributeSet(['prizes']).ok, true)
+// A1: a viewer device may hold `attendees` and nothing else, and that is a
+// complete and useful device rather than a half-configured one.
+check('  attendees alone is fine', attributes.parseAttributeSet(['attendees']).ok, true)
 check('  every valid combination passes',
-  [[], ['registration'], ['prizes'], ['registration', 'prizes']]
+  [[], ['registration'], ['prizes'], ['attendees'], ['registration', 'prizes'],
+   ['registration', 'attendees'], ['prizes', 'attendees'],
+   ['registration', 'prizes', 'attendees']]
     .every((set) => attributes.parseAttributeSet(set).ok), true)
 
 const edit = (body) => validation.parseDeviceConfigurationInput(body)
@@ -917,7 +930,8 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
 for (const [index, name] of budget.actual.entries()) console.log(`    ${String(index + 1).padStart(2)}  ${name}`)
 
 /**
- * RE-SCOPED BY PHASE P1, which spent one slot on `api/prizes.ts`.
+ * RE-SCOPED BY PHASE A1, which spent one slot on `api/attendees.ts` beside
+ * P1's `api/prizes.ts`.
  *
  * 9B's own concern is unchanged and is asserted separately below: the Admin
  * realm is five Functions and consolidated three of its own into one. The
@@ -925,14 +939,15 @@ for (const [index, name] of budget.actual.entries()) console.log(`    ${String(i
  * decision, and the headroom stays pinned because the Hobby limit is enforced
  * at DEPLOY time, after a green build.
  */
-check('the inventory is exactly the expected nine', budget.actual, [
+check('the inventory is exactly the expected ten', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
+  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
+  'sync-registration',
 ])
 check('  which is within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('  and the Admin realm is still exactly five of them',
   budget.actual.filter((name) => name.startsWith('admin-')).length, 5)
 check('  and nothing unexpected', budget.problems, [])

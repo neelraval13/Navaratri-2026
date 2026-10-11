@@ -1145,19 +1145,23 @@ check('the claim surface lives in the existing Local Badge Setup section',
   [/Local Badge Setup/.test(setupSource),
    /no-central-assignment'[\s\S]{0,200}<BadgeRangeClaim/.test(setupSource)], [true, true])
 /**
- * RE-SCOPED BY PHASE P1, which added `/prizes`.
+ * RE-SCOPED BY PHASES P1 AND A1, which added `/prizes` and `/attendees`.
  *
  * What C2B was protecting is that the SELF-CLAIM added no route — the claim
  * lives inside the existing Device Sign-In page — and that is asserted
  * directly below instead of through a route count that every later module
  * would have to edit.
  */
-check('  and no new route was added',
-  ['/', '/badge-registration', '/device-registration', '/device-login', '/admin']
-    .every((route) => read('src/app/routes.ts').includes(`'${route}'`)) &&
-  [...read('src/app/routes.ts').matchAll(/'\/[a-z-]*'/g)].map((m) => m[0]).sort(),
-  ["'/'", "'/admin'", "'/badge-registration'", "'/device-login'",
-   "'/device-registration'", "'/prizes'"])
+check('  and the claim still added no route of its own',
+  [['/', '/badge-registration', '/device-registration', '/device-login', '/admin']
+    .every((route) => read('src/app/routes.ts').includes(`'${route}'`)),
+   [...read('src/app/routes.ts').matchAll(/'\/[a-z-]*'/g)].map((m) => m[0]).sort(),
+   // No claim route anywhere: it is a section of Device Sign-In.
+   /claim|badge-range/.test(read('src/app/routes.ts'))],
+  [true,
+   ["'/'", "'/admin'", "'/attendees'", "'/badge-registration'", "'/device-login'",
+    "'/device-registration'", "'/prizes'"],
+   false])
 check('    and none of them is a claim route',
   [...read('src/app/routes.ts').matchAll(/'\/[a-z-]*'/g)]
     .map((match) => match[0])
@@ -1213,15 +1217,16 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // RE-SCOPED BY PHASE P1, which added `prizes`. C2B's own entry remains, and
 // the assertions below still pin it by name.
-check('46. the Function inventory is exactly nine', budget.actual.length, 9)
-check('  with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('46. the Function inventory is exactly ten', budget.actual.length, 10)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('  the C2B entry is still device-badge-claim',
   budget.actual.includes('device-badge-claim'), true)
 check('  and every Function that should remain does',
   budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
+  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
+  'sync-registration',
 ])
 check('  and nothing unexpected', budget.problems, [])
 check('  no helper was placed under api/',

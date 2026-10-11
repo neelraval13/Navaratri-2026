@@ -548,12 +548,13 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
  * claim — that it FREED three slots by deleting the operator realm rather
  * than consolidating it — is unchanged and still asserted below.
  */
-check('71. the Function inventory is exactly nine', budget.actual, [
+check('71. the Function inventory is exactly ten', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
+  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
+  'sync-registration',
 ])
-check('72. with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('72. with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('73. and no Function was introduced to replace the operator realm',
   [budget.problems,
    readdirSync(join(root, 'api')).filter((file) => /^operator-/.test(file))], [[], []])

@@ -559,9 +559,9 @@ const budget = functionChecker.checkFunctionBudget()
  * added none, and the assertion that follows is C2A's real concern — the only
  * device endpoint that touches a badge range is the C2B self-claim.
  */
-check('the Function inventory is exactly nine', budget.actual.length, 9)
-check('  with three slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('the Function inventory is exactly ten', budget.actual.length, 10)
+check('  with two slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
 check('  and the prize Function touches no badge range',
   /badgeAssignments|badge_assignments|rangeStart|rangeEnd/
     .test(read('api/prizes.ts')), false)

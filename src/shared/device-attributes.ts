@@ -8,13 +8,14 @@
  * Framework-free: the browser renders the checkboxes from this list and the
  * server validates against the same one, so the two cannot drift.
  */
-export const DEVICE_ATTRIBUTES = ['registration', 'prizes'] as const
+export const DEVICE_ATTRIBUTES = ['registration', 'prizes', 'attendees'] as const
 
 export type DeviceAttribute = (typeof DEVICE_ATTRIBUTES)[number]
 
 export const DEVICE_ATTRIBUTE_LABELS: Record<DeviceAttribute, string> = {
   registration: 'Registration',
   prizes: 'Prizes',
+  attendees: 'Attendees',
 }
 
 /**
@@ -31,6 +32,7 @@ export const DEVICE_ATTRIBUTE_DESCRIPTIONS: Record<DeviceAttribute, string> = {
   registration:
     'Full registration desk: attendee entry, payment and issuing physical badges.',
   prizes: 'May use Prize functionality.',
+  attendees: 'Read-only attendee directory. Views registrations; changes nothing.',
 }
 
 /**
@@ -47,6 +49,21 @@ export const DEVICE_ATTRIBUTE_DESCRIPTIONS: Record<DeviceAttribute, string> = {
 export const BADGE_RANGE_REQUIRED_ATTRIBUTE: DeviceAttribute = 'registration'
 
 /**
+ * EVERY ATTRIBUTE IS INDEPENDENT, and the three must stay that way.
+ *
+ * `prizes` does NOT imply `attendees` and `registration` does not either. The
+ * prize desk shows its own attendee roster because identifying the badge in
+ * somebody's hand is part of awarding a prize; the standalone DIRECTORY —
+ * every registered attendee, browsable and searchable by anyone holding the
+ * tablet — is a separate thing to be trusted with, so it is separately
+ * granted. A device may hold `attendees` alone, and that is a complete and
+ * useful device.
+ *
+ * Implying one from another would also make the Admin checkboxes lie: an
+ * operator unticking Attendees would expect the directory to close.
+ */
+
+/**
  * The attribute the Prizes module requires.
  *
  * Shared for exactly the reason the badge one is: the route gate, the prize
@@ -56,6 +73,17 @@ export const BADGE_RANGE_REQUIRED_ATTRIBUTE: DeviceAttribute = 'registration'
  * central badge binding, because awarding a prize consumes no badge number.
  */
 export const PRIZE_REQUIRED_ATTRIBUTE: DeviceAttribute = 'prizes'
+
+/**
+ * The attribute the read-only Attendee Directory requires.
+ *
+ * Shared for the same reason the other two are: the route gate, the page and
+ * `GET /api/attendees` all ask the same question, and the endpoint is the one
+ * that decides. A device holding only `attendees` is a complete viewer — it
+ * needs no `registration`, no `prizes`, no badge range and no central badge
+ * binding, because reading a register consumes and changes nothing.
+ */
+export const ATTENDEE_DIRECTORY_REQUIRED_ATTRIBUTE: DeviceAttribute = 'attendees'
 
 export const isDeviceAttribute = (value: unknown): value is DeviceAttribute => {
   return (

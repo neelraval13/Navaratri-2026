@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'wouter'
 
 import { ROUTES } from '@/app/routes'
+import AttendeeFilters from '@/components/attendees/attendee-filters'
 import AttendeeCard from '@/components/prizes/attendee-card'
-import AttendeeFilters from '@/components/prizes/attendee-filters'
 import AwardHistory from '@/components/prizes/award-history'
 import AwardPrizeDialog from '@/components/prizes/award-prize-dialog'
 import PrizeNotice, { type PrizeNoticeState } from '@/components/prizes/prize-notice'
@@ -13,13 +13,13 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { useNetworkStatus } from '@/hooks/use-network-status'
 import { formatBadgeNumber } from '@/lib/badge'
 import { cn } from '@/lib/utils'
-import { awardPrize, fetchPrizeRoster, PRIZE_MESSAGES } from '@/prizes/prize-api'
 import {
-  EMPTY_PRIZE_FILTERS,
+  EMPTY_ATTENDEE_FILTERS,
   filterAttendees,
-  previousAwardsFor,
-  type PrizeFilterState,
-} from '@/prizes/prize-filters'
+  type AttendeeFilterState,
+} from '@/attendees/attendee-filters'
+import { awardPrize, fetchPrizeRoster, PRIZE_MESSAGES } from '@/prizes/prize-api'
+import { previousAwardsFor } from '@/prizes/prize-filters'
 import type { PrizeAttendee, PrizeAward } from '@/shared/prize-contract'
 
 type RosterState =
@@ -64,7 +64,7 @@ const PrizeDesk: React.FC = () => {
 
   const [roster, setRoster] = useState<RosterState>({ status: 'loading' })
   const [tab, setTab] = useState<PrizeTab>('attendees')
-  const [filters, setFilters] = useState<PrizeFilterState>(EMPTY_PRIZE_FILTERS)
+  const [filters, setFilters] = useState<AttendeeFilterState>(EMPTY_ATTENDEE_FILTERS)
   const [historySearch, setHistorySearch] = useState('')
   const [selected, setSelected] = useState<PrizeAttendee | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -328,7 +328,7 @@ const PrizeDesk: React.FC = () => {
             totalCount={roster.attendees.length}
             onChange={setFilters}
             onClear={() => {
-              setFilters(EMPTY_PRIZE_FILTERS)
+              setFilters(EMPTY_ATTENDEE_FILTERS)
             }}
           />
 

@@ -5,6 +5,7 @@ import { EVENT_ROUTE_PATTERN, ROUTES } from '@/app/routes'
 import EventAccessGate from '@/components/event-access/event-access-gate'
 import EventAppGate from '@/components/event-app-gate'
 import AdminPage from '@/pages/admin-page'
+import AttendeesPage from '@/pages/attendees-page'
 import BadgeRegistrationPage from '@/pages/badge-registration-page'
 import DeviceLoginPage from '@/pages/device-login-page'
 import HomePage from '@/pages/home-page'
@@ -26,6 +27,8 @@ import PrizesPage from '@/pages/prizes-page'
  *                          badge range that agrees with central
  *   /prizes                the same, plus Prizes authority — and deliberately
  *                          NO badge range, because a prize consumes no badge
+ *   /attendees             the same, plus Attendees authority — a read-only
+ *                          directory, so no badge range and no mutation
  *
  * `/device-registration` is RETIRED. Phase D2 removed the local provisioning
  * workflow, so the path survives only for old bookmarks and redirects to
@@ -68,6 +71,12 @@ const AppRouter: React.FC = () => {
             <Route path={ROUTES.badgeRegistration}>
               <EventAccessGate module="registration">
                 <BadgeRegistrationPage />
+              </EventAccessGate>
+            </Route>
+
+            <Route path={ROUTES.attendees}>
+              <EventAccessGate module="attendees">
+                <AttendeesPage />
               </EventAccessGate>
             </Route>
 

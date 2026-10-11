@@ -1358,10 +1358,18 @@ There is NO badge-range edit, replace, release, transfer, extend or reset in
 Admin. Only the first assignment. Changing a range while devices operate
 offline is how two attendees get the same badge.
 
-Device attributes are `registration` and `prizes`. The database stores TEXT
-for future extensibility, but the application owns the allow-list and free
-text is refused. Since Phase P1 `prizes` is a real capability: it opens
-`/prizes` and `/api/prizes`, and it requires no badge range.
+Device attributes are `registration`, `prizes` and `attendees`. The database
+stores TEXT for future extensibility, but the application owns the allow-list
+and free text is refused. Since Phase P1 `prizes` is a real capability: it
+opens `/prizes` and `/api/prizes`, and it requires no badge range. Since
+Phase A1 `attendees` is too: it opens `/attendees` and `/api/attendees`, and
+it requires no badge range either.
+
+THE THREE ARE INDEPENDENT. `prizes` does NOT imply `attendees` and
+`registration` does not either, and no implication may be added. A device may
+hold `attendees` ALONE and be complete. Adding one would also make the Admin
+checkboxes lie: an operator unticking Attendees would expect the directory to
+close.
 
 `registration` IS the whole registration-desk workflow, physical badge
 issuance included: attendee entry, hold and resume, payment, owning a
@@ -1769,6 +1777,7 @@ ROUTE POLICY DIFFERS PER MODULE:
 /                      a device grant, on a converged browser
 /badge-registration    the same, plus Registration and agreeing badge state
 /prizes                the same, plus Prizes — and NO badge state at all
+/attendees             the same, plus Attendees — NO badge state, NO mutation
 /device-registration   RETIRED — a redirect to /device-login
 ```
 
@@ -1953,6 +1962,7 @@ screen.
 - `/` is Home, the module launcher
 - `/badge-registration` owns the attendee badge workflow
 - `/prizes` owns prize distribution
+- `/attendees` is the READ-ONLY attendee directory
 - `/device-registration` owns physical device provisioning and readiness
 
 Routing is presentation work. An internal route must NEVER create a new
@@ -2222,6 +2232,7 @@ the retired realm.
 /                      a device grant for this event, on a CONVERGED browser
 /badge-registration    the same, plus Registration and agreeing badge state
 /prizes                the same, plus Prizes — no range, no binding needed
+/attendees             the same, plus Attendees — read-only, no range needed
 /device-registration   RETIRED — a redirect to /device-login, nothing more
 ```
 
@@ -2410,17 +2421,20 @@ the build has already succeeded, at "Deploying outputs…". No build step
 reports it, so the budget is a durable check, not something a green build
 proves.
 
-Current inventory: **9 of 12, three slots of headroom.**
+Current inventory: **10 of 12, two slots of headroom.**
 
 ```
 admin-auth · admin-badge-assignment · admin-device-password · admin-devices
-admin-events · device-auth · device-badge-claim · prizes · sync-registration
+admin-events · attendees · device-auth · device-badge-claim · prizes
+sync-registration
 ```
 
 Phase D2 freed three slots by DELETING the operator realm, not by
 consolidating it. Those three names must never reappear under `api/`. Phase P1
 then spent one on `prizes`, which serves the whole prize module through two
-method exports rather than three endpoints.
+method exports rather than three endpoints, and Phase A1 spent one on
+`attendees`, which serves the directory through a single GET — its other four
+method exports exist only to answer 405.
 
 A shared helper NEVER belongs under `api/` — it costs a deployment Function
 for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
@@ -2428,7 +2442,7 @@ on an `api/` file that exports no HTTP method, on any file outside the
 expected inventory, and on a headroom other than the one this checkpoint
 expects, so headroom cannot be consumed quietly.
 
-The four spare slots are headroom, not permission to start the next phase.
+The two spare slots are headroom, not permission to start the next phase.
 
 ### Auth Realms Are Consolidated By HTTP Method
 
@@ -2448,8 +2462,8 @@ as the SPA index.
 
 Admin and Device stay SEPARATE Functions and must never merge into one
 `api/auth.ts`: different secrets, different cookies, different signing
-contexts, different rate limits, different threat surfaces. The budget sits at
-8 of 12 without merging them, so there is no reason to.
+contexts, different rate limits, different threat surfaces. The budget has
+room without merging them, so there is no reason to.
 
 Operator Access had three separate Functions. Phase D2 DELETED them rather
 than consolidating them, which is why the budget fell to 8 and not to 9.
@@ -2758,6 +2772,71 @@ unless `--confirm` is passed, `VERCEL_ENV` is exactly `development`,
 `SYNC_ALLOWED_VERCEL_ENV` is exactly `development`, and the real interlock
 agrees. It is idempotent, its cleanup blanks only its own rows in place, and
 it never deletes a row. See `docs/PRIZES.md`.
+
+## Attendee Directory
+
+`/attendees` is a READ-ONLY directory of everyone registered for the event,
+for a device holding the `attendees` attribute. Added in Phase A1.
+
+IT CHANGES NOTHING, and that is structural rather than a convention.
+`GET /api/attendees` is the only operation; `POST`, `PUT`, `PATCH` and
+`DELETE` answer 405 with `Allow: GET`, exported deliberately so the refusal
+is this application's and is testable. The endpoint opens NO database client,
+imports no writer, reads no body and performs no Sheet mutation. The browser
+module sends only GET and has no body. The attendee card takes ONE prop and
+has no handler, no button and no form. There is no mutation API for this
+feature and none may be added — correcting an attendee is the registration
+desk's job.
+
+IT READS THE SAME BADGE REGISTER AS `/api/prizes`, THROUGH THE SAME READER.
+`server/attendees/register.ts` is the ONE Badge Register parser outside
+`server/sync/`, and both Functions go through `readAttendeeRegister`. A second
+parser would be a second opinion about which columns exist, how an age is
+read, how gender is normalised and which rows are usable, and the two would
+drift the first time somebody hand-edited a cell. `release:check` pins the
+count.
+
+THE PROJECTION IS FOUR FIELDS — badge number, name, age, gender — defined once
+in `src/shared/attendee-contract.ts` and shared by both modules; the prize
+module's `PrizeAttendee` and `PrizeGender` are ALIASES of those types, not
+copies. The phone column and the WhatsApp link are never read into a
+variable, and the row is never spread. There is no attendees table in
+Postgres, no second spreadsheet and no local copy: Postgres has held no
+attendee PII since Phase 9A.
+
+AUTHORIZATION IS `attendees` AND NOTHING ELSE. It needs no `registration`, no
+`prizes`, no central badge range and no `centralBadgeRangeBinding`, so
+`authorizeEventModule('attendees', …)` does NOT consult `checkBadgeOwnership`
+— running it would close a read-only viewer because a REGISTRATION desk's
+ledger disagreed about physical badges the viewer was never given. Everything
+above that still applies: a device grant for this event, an enrollment that
+agrees with it, and a CONVERGED local identity. An Admin cookie authorizes
+nothing here.
+
+ONLINE ONLY, and the screen says so: *"Attendees requires an internet
+connection."* While offline there is NO LIST AT ALL — not a cached one, not a
+stale one. No IndexedDB cache, no offline roster, no service-worker copy of
+attendee data, no polling and no heartbeat. A stale directory presented as
+current would tell a volunteer somebody is registered who is not, or hide
+somebody who is. The only timer aborts a request that never answers.
+
+AN EMPTY REGISTER AND AN UNREADABLE ONE ARE DIFFERENT STATES, on both sides
+of the wire. `200 { attendees: [] }` renders `Attendees (0)` and "No attendees
+have been registered yet"; a Sheet that cannot be read is `503`
+`register-unavailable` and an error with Try again. An unreadable register is
+never answered with `[]` and never with a partial list — whoever reads that
+empty-state sentence has to be able to believe it.
+
+FILTERING IS CLIENT-SIDE over one fetch, through
+`src/attendees/attendee-filters.ts` — the SAME search, age window and gender
+filter the prize desk uses, so the two screens cannot disagree about which
+query finds somebody. An invalid age window reports its message and filters
+NOTHING, because quietly returning an empty list would read as "nobody is
+registered".
+
+A1 NEEDED NO MIGRATION. `device_attributes.attribute` is already text and the
+application owns the allow-list, so `attendees` is a new allowed string and
+nothing else. See `docs/ATTENDEES.md`.
 
 ### Google Sheets Client
 

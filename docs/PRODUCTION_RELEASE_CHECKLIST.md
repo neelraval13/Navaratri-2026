@@ -284,6 +284,32 @@ That makes a mistaken award the cost of the rule: correcting one is a
 deliberate database operation by a human, because the product offers no undo,
 delete or edit, on purpose.
 
+### Attendee directory (Phase A1)
+
+`/attendees` is a READ-ONLY directory for a device holding the `attendees`
+attribute. It reads the SAME Badge Register the prize desk reads, through the
+same reader, and projects four fields: badge, name, age, gender. It writes
+nothing, anywhere.
+
+It needs **no migration** — `device_attributes.attribute` is already text.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.67 | Every viewer device has a central Device with `attendees`, a provisioned password, and NO badge range | ☐ |
+| 3.68 | Confirmed `attendees` was NOT added to a registration or prize device by habit — it is a separate grant, and it exposes every attendee name to whoever holds that tablet | ☐ |
+| 3.69 | Confirmed a `registration`-only and a `prizes`-only device are both refused at `/attendees` | ☐ |
+| 3.70 | Each viewer's browser is CONVERGED — its local identity is the central Device's — or `/attendees` will refuse it | ☐ |
+| 3.71 | Sync writes are enabled and the Badge Register is the live production ledger, so the directory is real | ☐ |
+| 3.72 | `/api/attendees` has NO firewall rule, and nobody has added one | ☐ |
+| 3.73 | Whoever holds a viewer tablet knows the directory is read-only and that correcting an attendee is the registration desk's job | ☐ |
+| 3.74 | The venue has connectivity wherever a viewer is used, and whoever holds it knows `/attendees` shows nothing without it | ☐ |
+
+**An empty directory and an unreachable one look different, on purpose.**
+`Attendees (0)` with "No attendees have been registered yet" is a fact about
+the event; a register that could not be read is an error with Try again. If
+somebody reports an empty directory during the event, that is a registration
+or sync question, not a directory one.
+
 ### Device identity convergence (Phase D1)
 
 A browser converges its local device identity onto the central one. **Phase
