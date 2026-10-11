@@ -511,9 +511,22 @@ check('37. no attendee data reaches Postgres',
     .test(stripComments(read('server/badge-assignments/reserve.ts'))), false)
 check('  and the schema still has no attendee table',
   /attendee|registrations|holds/i.test(stripComments(read('server/db/schema.ts'))), false)
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and the prize migration does not touch badge assignments',
+  PRIZE_MIGRATIONS.some((file) => /badge_assignments|range_start|range_end/i.test(read(`drizzle/${file}`))),
+  false)
 
 /* ------------------------------------------------------------------ client */
 
@@ -1131,11 +1144,24 @@ const setupSource = read('src/components/device-auth/local-badge-setup.tsx')
 check('the claim surface lives in the existing Local Badge Setup section',
   [/Local Badge Setup/.test(setupSource),
    /no-central-assignment'[\s\S]{0,200}<BadgeRangeClaim/.test(setupSource)], [true, true])
+/**
+ * RE-SCOPED BY PHASE P1, which added `/prizes`.
+ *
+ * What C2B was protecting is that the SELF-CLAIM added no route — the claim
+ * lives inside the existing Device Sign-In page — and that is asserted
+ * directly below instead of through a route count that every later module
+ * would have to edit.
+ */
 check('  and no new route was added',
   ['/', '/badge-registration', '/device-registration', '/device-login', '/admin']
     .every((route) => read('src/app/routes.ts').includes(`'${route}'`)) &&
   [...read('src/app/routes.ts').matchAll(/'\/[a-z-]*'/g)].map((m) => m[0]).sort(),
-  ["'/'", "'/admin'", "'/badge-registration'", "'/device-login'", "'/device-registration'"])
+  ["'/'", "'/admin'", "'/badge-registration'", "'/device-login'",
+   "'/device-registration'", "'/prizes'"])
+check('    and none of them is a claim route',
+  [...read('src/app/routes.ts').matchAll(/'\/[a-z-]*'/g)]
+    .map((match) => match[0])
+    .filter((route) => /claim|range|badge-claim|refill/.test(route)), [])
 check('33. a fresh desk gets Badge Range Setup with two inputs',
   [/Badge Range Setup/.test(claimUi), /claim-range-start/.test(claimUi),
    /claim-range-end/.test(claimUi), /Range start/.test(claimUi), /Range end/.test(claimUi)],
@@ -1185,17 +1211,18 @@ check('  and the claim is one deliberate action, not two',
 console.log('\n=== 46-51. BOUNDARIES ===')
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-// Phase D2 deleted the three Operator Functions; C2B's own entry remains.
-check('46. the Function inventory is exactly eight', budget.actual.length, 8)
-check('  with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+// RE-SCOPED BY PHASE P1, which added `prizes`. C2B's own entry remains, and
+// the assertions below still pin it by name.
+check('46. the Function inventory is exactly nine', budget.actual.length, 9)
+check('  with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
 check('  the C2B entry is still device-badge-claim',
   budget.actual.includes('device-badge-claim'), true)
 check('  and every Function that should remain does',
   budget.actual, [
-    'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-    'admin-events', 'device-auth', 'device-badge-claim', 'sync-registration',
-  ])
+  'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
+  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
+])
 check('  and nothing unexpected', budget.problems, [])
 check('  no helper was placed under api/',
   functionChecker.functionEntrypoints()
@@ -1212,9 +1239,20 @@ check('  the claim endpoint exports POST and PATCH only',
   [...read('api/device-badge-claim.ts').matchAll(/export (?:async )?function ([A-Z]+)\(/g)]
     .map((match) => match[1]).sort(), ['PATCH', 'POST'])
 
+/**
+ * RE-SCOPED BY PHASE P1, which rewrote the firewall document to the rule that
+ * is actually deployed and moved the explanation under a new heading.
+ *
+ * Stripping a section by its heading was a proxy for the invariant, and a
+ * fragile one. The invariant is asserted directly instead: the claim endpoint
+ * appears ONLY as prose and in the do-not-rate-limit table, never as a RULE —
+ * a rule is a `Condition — Path` row, and there must be none for it.
+ */
 check('47. no unauthenticated rate-limit rule was added for the claim',
-  /device-badge-claim/.test(read('docs/VERCEL_FIREWALL.md').replace(
-    /## Why the claim endpoint[\s\S]*?(?=\n## |$)/, '')), false)
+  [/\*\*Condition — Path\*\* \| `\/api\/device-badge-claim`/.test(read('docs/VERCEL_FIREWALL.md')),
+   /gets no rule/.test(read('docs/VERCEL_FIREWALL.md')),
+   /\| `\/api\/device-badge-claim` \|/.test(read('docs/VERCEL_FIREWALL.md'))],
+  [false, true, true])
 check('  and the device login rule is unchanged',
   [/\/api\/device-auth/.test(read('docs/VERCEL_FIREWALL.md')),
    /### The method matters/.test(read('docs/VERCEL_FIREWALL.md'))], [true, true])

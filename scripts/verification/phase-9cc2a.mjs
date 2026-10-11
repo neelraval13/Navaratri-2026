@@ -554,11 +554,17 @@ check('  and there it can only ever refuse',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-// C2B added exactly one Function; C2A's own guarantees below are unchanged.
-// Phase D2 deleted the three Operator Functions; C2A added none.
-check('the Function inventory is exactly eight', budget.actual.length, 8)
-check('  with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+/**
+ * RE-SCOPED BY PHASE P1: nine Functions, one of them `prizes`. C2A still
+ * added none, and the assertion that follows is C2A's real concern — the only
+ * device endpoint that touches a badge range is the C2B self-claim.
+ */
+check('the Function inventory is exactly nine', budget.actual.length, 9)
+check('  with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('  and the prize Function touches no badge range',
+  /badgeAssignments|badge_assignments|rangeStart|rangeEnd/
+    .test(read('api/prizes.ts')), false)
 check('  and nothing unexpected', budget.problems, [])
 check('the only device range endpoint is the C2B self-claim',
   ['device-badge-assignment.ts', 'device-claim-range.ts', 'device-range.ts',
@@ -584,9 +590,22 @@ check('exactly one module inserts a central badge assignment',
 check('  and Admin reserves through it',
   /reserveBadgeRange\(/.test(stripComments(read('server/admin/registry.ts'))), true)
 
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and the prize migration does not touch the badge-range binding',
+  PRIZE_MIGRATIONS.some((file) => /binding|next_badge|adopt/i.test(read(`drizzle/${file}`))),
+  false)
 check('  and no server file knows about the binding',
   /centralBadgeRangeBinding/.test(
     walk(join(root, 'server')).map((file) => readFileSync(file, 'utf8')).join('\n')), false)

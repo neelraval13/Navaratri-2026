@@ -287,6 +287,12 @@ check('41. no product UI can mint a local config.deviceId',
      .test(stripComments(readFileSync(file, 'utf8'))))
      .map((file) => file.replace(`${root}/src/`, '')).sort()],
   [[], ['db/registrations.ts']])
+/**
+ * UNCHANGED BY PHASE P1. Prizes became a real module, but Home became
+ * attribute-aware in the same phase and this grant holds `registration` only,
+ * so the links are the same. What D2 asserts is untouched:
+ * `/device-registration` is advertised nowhere.
+ */
 check('42. navigation does not advertise Device Registration',
   [...new Set(hrefsIn(renderRoute('/', CONFIG).html))].sort(),
   ['/admin', '/badge-registration', '/device-login'])
@@ -295,8 +301,18 @@ check('43. the old route points users to Device Sign-In',
     .test(router.replace(/\s+/g, ' ')), true)
 check('  and its path still resolves to the SPA, so a bookmark is not a 404',
   JSON.parse(read('vercel.json')).rewrites.some((rule) => rule.source === '/device-registration'), true)
+/** The REAL pattern, not a copy: the module decides what matches. */
+const eventRoutes = await jiti.import(`${root}/src/app/routes.ts`)
+/**
+ * RE-SCOPED BY PHASE P1, which added `/prizes` to the event pattern. The
+ * literal was a proxy; the invariant is asserted against the REAL pattern, so
+ * the next module can join it without weakening what D2 proves.
+ */
 check('  the event route pattern no longer includes it',
-  /\^\\\/\(\?:badge-registration\)\?\$/.test(read('src/app/routes.ts')), true)
+  [eventRoutes.EVENT_ROUTE_PATTERN.test('/device-registration'),
+   ['/', '/badge-registration', '/prizes']
+     .every((path) => eventRoutes.EVENT_ROUTE_PATTERN.test(path))],
+  [false, true])
 
 console.log('  -- the route policy, rendered for real --')
 clearDeviceGrant()
@@ -501,9 +517,22 @@ check('68. IndexedDB version unchanged (1)', /DATABASE_VERSION = 1/.test(dexie),
 check('  and exactly three stores',
   ((/\.stores\(\{([\s\S]*?)\}\)/.exec(dexie)?.[1] ?? '').match(/^\s*(\w+):/gm) ?? [])
     .map((entry) => entry.trim().replace(':', '')), ['registrations', 'config', 'outbox'])
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('69. no Postgres migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and the prize migration does not touch the retired operator realm',
+  PRIZE_MIGRATIONS.some((file) => /operator|access_code/i.test(read(`drizzle/${file}`))),
+  false)
 const sheet = read('server/sync/sheet-contract.ts')
 check('70. the Sheet contract is unchanged',
   [/A1:N/.test(sheet), /A1:M/.test(sheet), /Device ID', 'Device Name'/.test(sheet)],
@@ -514,12 +543,17 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_FUNCTION_LIMIT)}` +
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
-check('71. the Function inventory is exactly eight', budget.actual, [
+/**
+ * RE-SCOPED BY PHASE P1, which spent one slot on `api/prizes.ts`. D2's own
+ * claim — that it FREED three slots by deleting the operator realm rather
+ * than consolidating it — is unchanged and still asserted below.
+ */
+check('71. the Function inventory is exactly nine', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'sync-registration',
+  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
 ])
-check('72. with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+check('72. with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
 check('73. and no Function was introduced to replace the operator realm',
   [budget.problems,
    readdirSync(join(root, 'api')).filter((file) => /^operator-/.test(file))], [[], []])

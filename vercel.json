@@ -6,6 +6,10 @@
       "destination": "/index.html"
     },
     {
+      "source": "/prizes",
+      "destination": "/index.html"
+    },
+    {
       "source": "/device-registration",
       "destination": "/index.html"
     },

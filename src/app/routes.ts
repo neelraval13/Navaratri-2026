@@ -10,6 +10,12 @@ export const ROUTES = {
   home: '/',
   badgeRegistration: '/badge-registration',
   /**
+   * Prize distribution. An event module like Badge Registration, authorized
+   * by the same central device authority but by a DIFFERENT attribute, and
+   * requiring no badge range at all.
+   */
+  prizes: '/prizes',
+  /**
    * RETIRED by Phase D2 and kept only so an old bookmark still lands
    * somewhere useful. It redirects to Device Sign-In and owns no workflow:
    * there is no local device registration any more.
@@ -38,5 +44,10 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES]
  * deliberately absent: none of them is an event module, and none may mount
  * the registration workflow or ask for event authority. Unknown paths are
  * absent too, so Not Found is reachable without any of it.
+ *
+ * `/prizes` IS here. It is an event module on the same origin, so it shares
+ * the one database gate, the one authorization provider and the one
+ * SyncManager — a prize desk that also registers attendees must not restart
+ * the sync processor by walking between the two screens.
  */
-export const EVENT_ROUTE_PATTERN = /^\/(?:badge-registration)?$/
+export const EVENT_ROUTE_PATTERN = /^\/(?:badge-registration|prizes)?$/

@@ -814,9 +814,22 @@ check('  and never accepts the offline lease',
     .test(stripComments(read('api/sync-registration.ts'))), false)
 
 console.log('\n=== 42. NO SCHEMA CHANGE ===')
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('NO new migration',
   readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and no prize migration touches the device session realm',
+  PRIZE_MIGRATIONS.some((file) => /session|token|cookie/i.test(read(`drizzle/${file}`))),
+  false)
 check('  the schema file is untouched by this phase',
   /device_sessions|refresh_token|access_token|CREATE TABLE/i.test(stripComments(read('server/db/schema.ts'))), false)
 check('  the device realm adds no table',

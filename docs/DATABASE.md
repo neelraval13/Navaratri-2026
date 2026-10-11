@@ -204,10 +204,44 @@ DATABASE_URL=<development branch> pnpm db:check
 
 Apply to a **development branch first**, always.
 
-`pnpm db:check` verifies the connection, the four tables and the three
-guarantees above. It only ever runs SELECTs — it creates nothing, seeds
-nothing, migrates nothing, updates nothing and deletes nothing. With
-`DATABASE_URL` absent it fails clearly without printing it.
+`pnpm db:check` verifies the connection, **every migrated table** and the
+guarantees each one depends on. It only ever runs SELECTs against the Postgres
+catalog and `information_schema` — it creates nothing, seeds nothing, migrates
+nothing, updates nothing and deletes nothing. With `DATABASE_URL` absent it
+fails clearly without printing it.
+
+**A migration `db:check` has never heard of is a migration nobody will notice
+is missing.** When a migration adds a table, add it here too: `release:check`
+now fails if a `CREATE TABLE` in `drizzle/` is absent from
+`EXPECTED_TABLES`, because otherwise the script would report a perfectly
+healthy database that was missing the whole new table — and an operator
+running it before the event would believe it.
+
+The prize guarantees are verified by **definition**, not by name: each one's
+rendered `pg_get_constraintdef` must state the kind, the columns and any
+reference. A constraint with the right name and the wrong columns would
+satisfy a name lookup while guaranteeing nothing. The prize column set is
+compared for **equality**, so a column being ADDED — an `attendee_name` for
+the convenience of one screen — fails the check: central Postgres holds no
+attendee PII.
+
+**One prize check proves an ABSENCE.** `0004_repeat_prize_awards.sql` dropped
+P1's `UNIQUE(event_id, badge_number)` because repeat winners became the event
+rule, so `db:check` reports
+
+```
+PASS  repeated prize awards are allowed
+```
+
+and fails if the database still carries uniqueness over `badge_number` in any
+form — a UNIQUE constraint, a primary key or a bare unique index. It looks for
+the **shape** rather than the dropped constraint's name, because a replacement
+on `(event_id, badge_number, prize_name)` would be a new name and the same
+broken rule. A database that still carries one refuses a second legitimate
+prize, and a volunteer would meet that at the table rather than at release
+time. `release:check` additionally fails if `db:check` ever starts *expecting*
+a constraint a migration dropped: a correctly migrated database would then
+fail the check, and the operator's fix would be to put the constraint back.
 
 Some statements need raw SQL that Drizzle's DSL cannot express — the exclusion
 constraint, the extension and the triggers. Those live in a hand-written,
@@ -221,11 +255,21 @@ journaled migration (`0001_range_guards_and_touch.sql`) generated with
 | `0000_central_foundation.sql` | The four tables |
 | `0001_range_guards_and_touch.sql` | `btree_gist`, the overlap exclusion constraint, the `set_updated_at` triggers |
 | `0002_device_credentials.sql` | `devices.password_hash`, `devices.session_version` and its `>= 1` check |
+| `0003_prize_awards.sql` | `prize_awards` — the prize ledger, its `UNIQUE(event_id, badge_number)`, three checks, both foreign keys and the same-event composite key |
+| `0004_repeat_prize_awards.sql` | Removes that `UNIQUE`, so one attendee may receive several prizes. Nothing replaces it |
 
 `0002` is **additive only**: two `ADD COLUMN`s and two `ADD CONSTRAINT`s. It
 drops nothing, deletes nothing and rewrites no row. Every existing device keeps
 its data and comes out with `password_hash = NULL` — unprovisioned, which is
 the correct starting state — and `session_version = 1`.
+
+`0004` is the one migration that **removes** something, and it removes only a
+constraint — no table, no column, no row. It exists as its own file because
+`0003` had already been applied to Development: a migration that has run
+anywhere is history, and editing it would leave that database carrying a
+constraint no file in the repository describes. An environment that has never
+seen the prize phases applies `0003` then `0004` and arrives at the same
+place.
 
 ---
 
@@ -238,9 +282,19 @@ allocation stays local.
 
 ## Development constraint smoke test
 
-`db:check` proves the constraints **exist**. This proves they actually
-**reject** bad writes — an exclusion constraint with the right name but the
-wrong predicate would pass the first check and fail this one.
+`db:check` proves the constraints **exist** and have the right shape. This
+proves they actually **reject** bad writes — an exclusion constraint with the
+right name and predicate could still have been created `NOT VALID`, and only a
+write finds that out.
+
+It currently covers the **badge** constraints. The prize ledger has no
+behavioural smoke test, and since Phase P1.1 there is less for one to do: the
+ledger's remaining constraints are its name bounds and its foreign keys, and
+the interesting property is now an ABSENCE — that a second award for one badge
+**succeeds** — which `db:check` establishes from the catalog without a write.
+`verify:p1` exercises the insert against a stand-in Postgres that enforces the
+constraints that remain. A prize smoke test would still belong here, beside
+the badge one, under the same `ALLOW_DB_SMOKE_WRITES` interlock.
 
 > ### NEVER run this against Production.
 > It writes rows. Point it only at a disposable **Development** branch.

@@ -15,17 +15,19 @@ One origin, real pathnames, one storage namespace:
 |---|---|
 | `/` | Home — event operations launcher |
 | `/badge-registration` | Attendee badge workflow |
+| `/prizes` | Prize distribution |
 | `/device-registration` | Provision and inspect this physical device |
 
-Dandiya and Prizes are shown on Home as **Coming soon** and are inert — there
-are no routes behind them yet.
+Dandiya is shown on Home as **Coming soon** and is inert — there is no route
+behind it yet. Prizes is a real module as of Phase P1, with repeat winners and
+a fixed prize catalog as of Phase P1.1.
 
 Routing is presentation only. Changing the pathname creates no second database
 or storage namespace: IndexedDB, the trusted-device marker, the operator
 session cookie, the service worker, the device identity, the badge range,
 registrations and the outbox all belong to the origin, not the path.
 
-`vercel.json` carries **explicit** rewrites for the two non-root routes, so a
+`vercel.json` carries **explicit** rewrites for every non-root route, so a
 direct visit or refresh works while `/api/*` can never be captured by the SPA
 fallback. The service worker's navigation fallback serves the cached shell for
 deep links offline, with `/api/` denylisted.
@@ -156,6 +158,7 @@ wins whenever the server answers.
 ```
 /                      a device grant for this event, on a converged browser
 /badge-registration    the same, plus Registration and agreeing badge state
+/prizes                the same, plus Prizes — and no badge state at all
 /device-registration   retired — redirects to /device-login
 ```
 
@@ -195,7 +198,9 @@ requires a queued row's device id to match the current central device.
 session, no unlock screen and no **Lock Device** control: `/api/operator-login`,
 `/api/operator-session` and `/api/operator-logout` were deleted, along with
 `server/auth/`, `src/auth/` and `src/components/operator/`. The Function
-budget fell from 11 to **8 of 12**.
+budget fell from 11 to **8 of 12**. Phase P1 then spent one slot on
+`api/prizes.ts`, so it now stands at **9 of 12**. Phase P1.1 added no
+Function.
 
 Event operations are authorized by a **central device grant** — a live
 session, or a cryptographically verified offline lease — and by nothing else.
@@ -270,6 +275,76 @@ offers **Add More Badges**. Hold Registration stays available throughout.
 
 **Still deliberately absent:** a heartbeat, arbitrary multi-range ownership,
 and any way to release, shrink or transfer a central badge range.
+
+## Phase P1 / P1.1 — prize distribution
+
+`/prizes` lets a device holding the **`prizes`** attribute award prizes to
+registered attendees, and shows the permanent history. It needs no
+`registration`, no badge range and no badge binding: awarding a prize consumes
+no badge number.
+
+The **privacy boundary is unchanged**. Google Sheets holds the attendees;
+Postgres holds only the ledger — event, badge number, prize name, awarding
+device, timestamp. No name, phone, age, gender, WhatsApp link or payment is
+stored centrally, and the phone number and WhatsApp link are never even read:
+the prize desk identifies an attendee by the badge in their hand. The screen's
+name beside each badge is read from the Badge Register per request and joined
+into the response.
+
+**Repeat winners are allowed, since Phase P1.1.** An attendee may win Best
+Dance and Best Dress, the same prize twice, or several prizes over the
+evening. `0004_repeat_prize_awards.sql` drops P1's
+`UNIQUE(event_id, badge_number)` and nothing replaces it, so the ledger is
+never consulted before an insert and two desks awarding the same badge at the
+same moment both succeed.
+
+Previous prizes are **information**: opening Give Prize for a badge that
+already has awards shows a warning naming each one with its time and awarding
+device, the button reads **Award Another Prize**, and nothing is disabled.
+Every registered attendee stays in the **Attendees** tab after every award and
+stays findable by search and by the filters; the **Awards** tab counts
+records, so one badge may appear several times.
+
+**New awards come from a fixed catalog of eight**, owned by
+`src/shared/prize-contract.ts` and enforced by the API:
+
+```
+Best Dance - Boy    Best Dance - Girl    Best Dance - Male    Best Dance - Female
+Best Dress - Boy    Best Dress - Girl    Best Dress - Male    Best Dress - Female
+```
+
+The chooser highlights the division the attendee's age and gender suggest —
+under 18 gives Boy/Girl, 18 and over Male/Female — as a hint only: all eight
+stay selectable and the server never consults it. A free-text name from a P1
+row stays displayable in history; only new awards are restricted.
+
+**Online only.** Offline, `/prizes` says *"Prizes requires an internet
+connection."* and exposes no award control at all. There is no offline queue,
+no optimistic award, no local prize state, no polling and no heartbeat — two
+disconnected prize desks must never be able to award the same badge.
+Registration can be offline-first because each desk owns a disjoint range of
+physical badges; prizes have no such partition.
+
+**Prize history is append-only.** No undo, no delete, no edit — in the product
+or in Admin. A prize that has been handed over has been handed over.
+
+Filtering is client-side over one roster fetch: search by badge or name, an age
+window with either bound optional, and gender. A few hundred attendees do not
+need a query per keystroke. The filters never see the award history, so no
+filter can hide somebody who has already won.
+
+Development fixtures — badges `#9001-#9030`, names `Prize Test 01`…`30` — go
+into the **Development** Badge Register:
+
+```bash
+env VERCEL_ENV=development node scripts/seed-prizes-development.mjs --dry-run
+env VERCEL_ENV=development node scripts/seed-prizes-development.mjs --confirm
+env VERCEL_ENV=development node scripts/seed-prizes-development.mjs --cleanup --confirm
+```
+
+It cannot seed Production: `--confirm`, `VERCEL_ENV=development`,
+`SYNC_ALLOWED_VERCEL_ENV=development` and the real release interlock must all
+agree. See **[docs/PRIZES.md](docs/PRIZES.md)**.
 
 ## Central database (Phase 9A — foundation only)
 
@@ -510,6 +585,8 @@ Three documents cover event-device setup:
   record of which range belongs to which device, plus the reserve-range policy
 - **[docs/DEVICE_PROVISIONING.md](docs/DEVICE_PROVISIONING.md)** — the
   per-device workflow, including the offline test
+- **[docs/PRIZES.md](docs/PRIZES.md)** — the prize module, its privacy
+  boundary, and the Development fixture procedure
 - **[docs/VERCEL_FIREWALL.md](docs/VERCEL_FIREWALL.md)** — the device and
   admin sign-in rate-limit rules
 

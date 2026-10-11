@@ -93,15 +93,35 @@ check('the event routes are gated by the device, with no operator gate left',
 check('  and /device-registration accepts no grant at all',
   /ROUTES\.deviceRegistration[\s\S]{0,200}EventAccessGate/
     .test(stripComments(read('src/components/app-router.tsx'))), false)
+/** The REAL pattern, not a copy of it: the module decides what matches. */
+const routesModule = await createJiti(import.meta.url, {
+  alias: { '@': `${root}/src` }, interopDefault: true,
+}).import(`${root}/src/app/routes.ts`)
+/**
+ * RE-SCOPED BY PHASE P1, which added `/prizes` to the event pattern.
+ *
+ * The literal pattern was a proxy for the invariant; the invariant is asserted
+ * directly now, so the next event module can be added without weakening it:
+ * `/device-registration` is NOT an event route, and every path that IS one is
+ * a module the router actually gates.
+ */
 check('  and the event route pattern no longer contains it',
-  /\^\\\/\(\?:badge-registration\)\?\$/.test(read('src/app/routes.ts')), true)
+  [/device-registration/.test(/EVENT_ROUTE_PATTERN = (.*)/.exec(read('src/app/routes.ts'))?.[1] ?? ''),
+   ['/', '/badge-registration', '/prizes'].every((path) =>
+     routesModule.EVENT_ROUTE_PATTERN.test(path)),
+   ['/device-registration', '/device-login', '/admin', '/nope'].some((path) =>
+     routesModule.EVENT_ROUTE_PATTERN.test(path))],
+  [false, true, false])
 
 const vercel = JSON.parse(read('vercel.json'))
 const sources = vercel.rewrites.map((rule) => rule.source)
 check('vercel.json rewrites /device-login to the SPA',
   vercel.rewrites.find((rule) => rule.source === '/device-login')?.destination, '/index.html')
+// RE-SCOPED BY PHASE P1: `/prizes` is a new SPA route with its own explicit
+// rewrite. Still an exact inventory — a catch-all would swallow /api.
 check('  the existing rewrites are kept',
-  sources.sort(), ['/admin', '/badge-registration', '/device-login', '/device-registration'])
+  sources.sort(),
+  ['/admin', '/badge-registration', '/device-login', '/device-registration', '/prizes'])
 check('  no rewrite is a wildcard that could swallow /api',
   sources.filter((source) => /[*:()]/.test(source)), [])
 check('  and none targets /api', sources.filter((source) => source.startsWith('/api')), [])
@@ -680,9 +700,22 @@ check('Admin auth is unchanged',
 check('badge allocation stays local',
   [/nextBadge/.test(read('src/db/registrations.ts')),
    /device-auth|central/.test(read('src/db/registrations.ts'))], [true, false])
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('NO new migration',
   readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and the prize migration does not touch the central enrollment',
+  PRIZE_MIGRATIONS.some((file) => /enrollment|centralDevice|config/i.test(read(`drizzle/${file}`))),
+  false)
 check('  and no server file changed for this phase',
   /centralDeviceEnrollment/.test(
     walkSource(join(root, 'server')).map((file) => readFileSync(file, 'utf8')).join('\n')), false)

@@ -93,7 +93,7 @@ export const grantFromOfflineClaims = (
   expiresAt: claims.exp,
 })
 
-export type EventModule = 'home' | 'registration'
+export type EventModule = 'home' | 'registration' | 'prizes'
 
 /**
  * Device authority is absent or insufficient, but nothing is WRONG.
@@ -337,6 +337,10 @@ const localRangeOf = (
  *   5. do central and local badge ownership agree         (blocked on conflict)
  *   6. does the device have the module's permission
  *
+ * Steps 5 and 6 are per module. Home needs only a permission of some kind,
+ * Prizes needs `prizes` and no badge state at all, and Registration needs
+ * `registration` plus badge ownership that agrees with central.
+ *
  * The badge-safety checks run BEFORE the permission check, so a browser whose
  * local badge state disagrees with central is blocked even when the device
  * could not have registered anyway — the conflict is about the physical
@@ -403,6 +407,26 @@ export const authorizeEventModule = (
      * it; each module authorizes itself.
      */
     return grant.attributes.length > 0
+      ? { outcome: 'authorized', source: grant.source }
+      : { outcome: 'unavailable', gap: 'not-permitted' }
+  }
+
+  /**
+   * PRIZES NEEDS NO BADGES. A prize desk owns no badge range, holds no
+   * central binding and advances no counter — awarding a prize consumes no
+   * badge number — so `checkBadgeOwnership` is deliberately not consulted
+   * here. Running it would block a prizes-only device on `binding-missing`
+   * for a range it was never meant to have, and would close the prize desk
+   * because a REGISTRATION desk's ledger disagreed about something prizes
+   * cannot affect.
+   *
+   * What it still requires is everything above: authority for this event, an
+   * enrollment that agrees with it, and this browser's identity being the
+   * signed-in device's. The module's own permission is the last question, and
+   * `registration` is never accepted in its place.
+   */
+  if (module === 'prizes') {
+    return grant.attributes.includes('prizes')
       ? { outcome: 'authorized', source: grant.source }
       : { outcome: 'unavailable', gap: 'not-permitted' }
   }

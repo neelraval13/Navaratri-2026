@@ -254,7 +254,8 @@ console.log(`  ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_
 
 check('the deployment stays within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  at exactly eight Functions', budget.actual.length, 8)
+// RE-SCOPED BY PHASE P1: `api/prizes.ts` is the ninth.
+check('  at exactly nine Functions', budget.actual.length, 9)
 check('  with no unexpected entrypoint', budget.problems, [])
 check('the six consolidated Functions are GONE, not wrappers',
   ['admin-login', 'admin-session', 'admin-logout',
@@ -353,9 +354,37 @@ check('  the explicit form is used instead',
     total + (entry.code.match(/\.ok === (true|false)/g) ?? []).length, 0) > 40, true)
 
 console.log('\n=== NOTHING ELSE MOVED ===')
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('no migration was added',
   readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/**
+ * 0003 `ALTER TABLE "prize_awards"`s its own new table to attach the foreign
+ * keys, which is how Drizzle emits them, and 0004 drops a constraint from
+ * that same new table. What must never appear is either against a table an
+ * earlier phase owns.
+ *
+ * RE-SCOPED BY PHASE P1.1, which made a `DROP CONSTRAINT` legitimate for the
+ * first time. It is permitted ONLY on `prize_awards`, and dropping a TABLE or
+ * a COLUMN stays forbidden outright: relaxing a constraint on a table added
+ * two migrations ago destroys nothing, while either of those would.
+ */
+const prizeMigrations = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+  .map((file) => read(`drizzle/${file}`))
+check('  and no prize migration touches a table an earlier phase owns',
+  [prizeMigrations.some((sql) =>
+    /(ALTER|DROP) TABLE "(events|devices|device_attributes|badge_assignments)"/.test(sql)),
+   prizeMigrations.some((sql) => /DROP (TABLE|COLUMN)/.test(sql)),
+   prizeMigrations.flatMap((sql) => [...sql.matchAll(/ALTER TABLE "([a-z_]+)" DROP/g)])
+     .map((match) => match[1])],
+  [false, false, ['prize_awards']])
 check('IndexedDB version unchanged (1)',
   /DATABASE_VERSION = 1/.test(read('src/db/database.ts')), true)
 check('  stores unchanged',

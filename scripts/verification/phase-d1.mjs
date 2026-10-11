@@ -500,9 +500,28 @@ check('  stores unchanged',
   ((/\.stores\(\{([\s\S]*?)\}\)/.exec(read('src/db/database.ts'))?.[1] ?? '')
     .match(/^\s*(\w+):/gm) ?? []).map((entry) => entry.trim().replace(':', '')),
   ['registrations', 'config', 'outbox'])
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('38. NO central migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/**
+ * `awarded_by_device_id` is a FOREIGN KEY to the central device, which is the
+ * right thing for a ledger to record. What D1 protects is that central
+ * Postgres never stores this browser's LOCAL identity or its convergence
+ * state — convergence is `config.deviceId === device.id` and nothing else.
+ */
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and the prize migration records no local identity or convergence state',
+  PRIZE_MIGRATIONS.some((file) => /converg|local_device|device_uuid|"identity"/i.test(read(`drizzle/${file}`))),
+  false)
 check('  and no server file knows about convergence',
   /device-identity-convergence|converge/i
     .test(walk(join(root, 'server')).map((file) => readFileSync(file, 'utf8')).join('\n')), false)
@@ -514,10 +533,11 @@ check('40. nextBadge is still local only',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-// D1 added no Function; Phase D2 removed the three Operator ones.
-check('46. the Function inventory is eight', budget.actual.length, 8)
-check('  with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+// RE-SCOPED BY PHASE P1, which added one. D1 still added none, and the
+// assertion below is D1's own concern: nothing new writes a local identity.
+check('46. the Function inventory is nine', budget.actual.length, 9)
+check('  with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 52. DOCUMENTATION ===')

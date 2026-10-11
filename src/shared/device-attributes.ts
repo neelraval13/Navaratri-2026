@@ -46,6 +46,17 @@ export const DEVICE_ATTRIBUTE_DESCRIPTIONS: Record<DeviceAttribute, string> = {
  */
 export const BADGE_RANGE_REQUIRED_ATTRIBUTE: DeviceAttribute = 'registration'
 
+/**
+ * The attribute the Prizes module requires.
+ *
+ * Shared for exactly the reason the badge one is: the route gate, the prize
+ * page and `GET`/`POST /api/prizes` all ask the same question, and the
+ * endpoint is the one that decides. A device holding only `prizes` is a
+ * complete prize desk — it needs no `registration`, no badge range and no
+ * central badge binding, because awarding a prize consumes no badge number.
+ */
+export const PRIZE_REQUIRED_ATTRIBUTE: DeviceAttribute = 'prizes'
+
 export const isDeviceAttribute = (value: unknown): value is DeviceAttribute => {
   return (
     typeof value === 'string' &&

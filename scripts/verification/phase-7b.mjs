@@ -331,11 +331,27 @@ const dbTouching = HEADER_COMPONENTS.filter((file) =>
   /useEventConfig|@\/db\/(database|event-config|readiness|device|registrations|outbox)/.test(
     readFileSync(join(root, file), 'utf8')))
 check('no header component reads the database', dbTouching, [])
+/**
+ * RE-SCOPED BY PHASE P1, which added `/prizes` as a fourth consumer.
+ *
+ * The inventory is pinned so a component cannot start reading the database
+ * from OUTSIDE the gate unnoticed, and the entry earns its place below: the
+ * assertion that follows proves the prizes route renders inside the one
+ * `<EventAppGate>`, which is `<DatabaseGate>`. A name added to this list
+ * without that proof would be a name added to a list.
+ */
 check('  every useEventConfig consumer is inside DatabaseGate',
   spawnSync('grep', ['-rl', 'useEventConfig', join(root, 'src/components'), join(root, 'src/pages')], { encoding: 'utf8' })
     .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort(),
   ['components/device/device-label.tsx', 'components/registration/registration-form.tsx',
-   'pages/home-page.tsx'].sort())
+   'pages/home-page.tsx', 'pages/prizes-page.tsx'].sort())
+check('    and the prizes page is one of the gated event routes',
+  [/<EventAccessGate module="prizes">[\s\S]{0,120}<PrizesPage \/>/.test(shell),
+   /<DatabaseGate>/.test(stripComments(readFileSync(join(root, 'src/components/event-app-gate.tsx'), 'utf8')))],
+  [true, true])
+check('    and it reports no badge state, which a prize desk does not have',
+  /DeviceReadiness|DeviceLabel|isBadgeDistributionConfigured/
+    .test(stripComments(readFileSync(join(root, 'src/pages/prizes-page.tsx'), 'utf8'))), false)
 
 console.log('\n=== DIALOG PRIMITIVE AUDIT ===')
 const dialogSource = readFileSync(join(root, 'src/components/ui/dialog.tsx'), 'utf8')

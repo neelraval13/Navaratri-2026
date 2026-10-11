@@ -65,16 +65,18 @@ real deployment, then is disabled manually.
 | 3.5 | `EVENT_SESSION_SECRET` **deleted** from all three environments — nothing reads it | ☐ |
 | 3.6 | `/api/sync-registration` returns `unauthorized` without a device session, verified on the deployment | ☐ |
 | 3.6a | `/api/operator-login`, `/api/operator-session` and `/api/operator-logout` all 404 on the deployment | ☐ |
-| 3.7 | Device and Admin sign-in rate limits configured per `docs/VERCEL_FIREWALL.md`; any surviving operator-login rule deleted | ☐ |
+| 3.7 | The **one combined** sign-in rate-limit rule configured per `docs/VERCEL_FIREWALL.md` — `POST /api/admin-auth` **OR** `POST /api/device-auth`, 10 requests / 60 s / IP, fixed window; any surviving operator-login rule deleted | ☐ |
 | 3.8 | `EVENT_ADMIN_ACCESS_CODE` set (8 char minimum; use a longer passphrase) | ☐ |
 | 3.9 | `EVENT_ADMIN_SESSION_SECRET` set, 32+ chars, and a different value from `EVENT_DEVICE_SESSION_SECRET` (recommended; isolation is enforced cryptographically regardless) | ☐ |
-| 3.10 | Admin-login rate limit configured per `docs/VERCEL_FIREWALL.md` | ☐ |
+| 3.10 | The combined rule's condition confirmed to match `/api/admin-auth` as well as `/api/device-auth` — the live plan permits **one** rule, so Admin has no rule of its own | ☐ |
 | 3.11 | `/admin` verified to require its own sign-in, and a device session does not reach it | ☐ |
 | 3.12 | `0002_device_credentials.sql` reviewed and applied to Development first, then Production, by hand | ☐ |
+| 3.12a | `0003_prize_awards.sql` reviewed and applied the same way — Development first, Production by hand, never from a build | ☐ |
+| 3.12b | `0004_repeat_prize_awards.sql` applied **immediately after** 0003, same way. It removes the one-prize-per-badge constraint; P1.1 code awarding a repeat prize against a database that still has it fails with an unexpected error | ☐ |
 | 3.13 | Device passwords recorded wherever the organizer keeps operational secrets — they are never shown again | ☐ |
 | 3.14 | No device password provisioned on a shared or reused passphrase | ☐ |
 | 3.15 | `EVENT_DEVICE_SESSION_SECRET` set, 32+ chars, generated independently of the other two secrets | ☐ |
-| 3.16 | Device-login rate limit configured per `docs/VERCEL_FIREWALL.md`, **with the venue's NAT checked** | ☐ |
+| 3.16 | The combined rule's **shared 10/minute budget** checked against the venue's NAT: desks leaving through one address count as one client, so provisioning several tablets at once will exceed it. Provision before the event, raise the limit for the day, or disable the rule while provisioning | ☐ |
 | 3.17 | Both realms verified apart on the deployment: a device cookie reaches no Admin API, and an Admin cookie reaches no device API | ☐ |
 
 Rotating `EVENT_DEVICE_SESSION_SECRET` revokes every issued device session
@@ -240,6 +242,48 @@ last badge.
 Extending a range consumes reserve numbers, and nothing shrinks a central
 range afterwards.
 
+### Prize distribution (Phase P1)
+
+`/prizes` is an event module for a device holding the `prizes` attribute. It
+reads attendees from the SAME Badge Register that registrations sync into, and
+writes only an operational ledger to Postgres — badge, prize, device, time, and
+nothing about the person.
+
+It is **online only**, and it needs the sync interlock to be on: a prize desk
+reads the Sheet, so a deployment that may not write that ledger may not read it
+either.
+
+**Phase P1.1 changed the product rule: repeat winners are allowed.** An
+attendee may receive Best Dance and Best Dress, the same prize twice, or
+several over the evening. Previous prizes produce a warning on the award
+dialog and never block it, every registered attendee stays in the Attendees
+tab after every award, and new awards come from a fixed catalog of eight
+categories. **Both prize migrations must be applied**, 0003 then 0004.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.55 | `0003_prize_awards.sql` **and** `0004_repeat_prize_awards.sql` applied to Production by hand (3.12a, 3.12b), verified with `pnpm db:check` | ☐ |
+| 3.55a | `pnpm db:check` output includes `PASS  repeated prize awards are allowed`. If it FAILS, 0004 has not been applied and a second prize for one attendee will error | ☐ |
+| 3.56 | Every prize desk has a central Device with `prizes`, a provisioned password, and NO badge range | ☐ |
+| 3.57 | Confirmed a `registration`-only device is refused at `/prizes`, and a `prizes`-only device is refused at `/badge-registration` | ☐ |
+| 3.58 | Each prize desk's browser is CONVERGED — its local identity is the central Device's — or `/prizes` will refuse it | ☐ |
+| 3.59 | Sync writes are enabled and the Badge Register is the live production ledger, so the attendee list is real | ☐ |
+| 3.60 | **No fixture rows in Production.** `#9001-#9030` and any `Prize Test NN` name belong to Development only | ☐ |
+| 3.61 | `scripts/seed-prizes-development.mjs` never run against Production — it refuses, and nobody should be testing that | ☐ |
+| 3.62 | Whoever is on the floor knows a prize is PERMANENT: there is no undo, delete or edit in the product | ☐ |
+| 3.63 | The venue has connectivity at the prize table, and the volunteers know `/prizes` stops working without it | ☐ |
+| 3.64 | `/api/prizes` has NO firewall rule, and nobody has added one | ☐ |
+| 3.65 | Volunteers briefed that a repeat prize is ALLOWED and that the warning is information, not a refusal — the dialog says so, and the button reads **Award Another Prize** | ☐ |
+| 3.66 | Volunteers briefed that the prize list is the fixed eight categories, and that the highlighted **Suggested** option is only a hint from the attendee's age and gender | ☐ |
+
+**Nothing stops a repeat award, deliberately.** Two prize desks racing on the
+same badge both succeed, and both rows are true. The only protection left is
+against one UI action submitting twice, which the disabled controls handle.
+
+That makes a mistaken award the cost of the rule: correcting one is a
+deliberate database operation by a human, because the product offers no undo,
+delete or edit, on purpose.
+
 ### Device identity convergence (Phase D1)
 
 A browser converges its local device identity onto the central one. **Phase
@@ -268,9 +312,12 @@ A claim that succeeds centrally and fails locally leaves REAL central ownership
 in place; that is deliberate, so the ledger never disagrees with a human's
 belief about who holds the numbers. Resolve it before the desk opens.
 
-The login rate limit is a Vercel firewall rule configured by hand in the
+The sign-in rate limit is a Vercel firewall rule configured by hand in the
 Dashboard — no application code creates it, and `release:check` cannot verify
-it.
+it. The live plan permits **one** rule, so a single condition covers both
+`POST /api/admin-auth` and `POST /api/device-auth` at 10 requests per 60
+seconds per IP. The two endpoints therefore share one bucket; see
+`docs/VERCEL_FIREWALL.md` for why that matters on the morning of the event.
 
 Platform protection, in order of preference:
 

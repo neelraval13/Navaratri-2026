@@ -1,0 +1,26 @@
+-- REPEAT PRIZES ARE LEGAL — Phase P1.1.
+--
+-- P1 implemented one badge -> at most one prize, and
+-- UNIQUE(event_id, badge_number) was the authority for it. That is NO LONGER
+-- the event rule: an attendee may win Best Dance and Best Dress, may win the
+-- same prize again later, and may collect several prizes over the evening.
+--
+-- The constraint is therefore DROPPED and deliberately NOT REPLACED. Not by
+-- UNIQUE(event_id, badge_number, prize_name), not by one per category, and
+-- not by a unique index — each of those would refuse a second legitimate
+-- award, which is the thing the product now has to allow. Previous awards
+-- became INFORMATION: the prize desk warns and still lets another through.
+--
+-- `prize_awards` stays APPEND-ONLY, keeps its six columns, keeps both checks
+-- on the prize name, keeps the positive-badge check, keeps both foreign keys
+-- and keeps the same-event composite key. Nothing about the privacy boundary
+-- moves: no attendee name, phone, age or gender is stored centrally.
+--
+-- 0003 IS NOT EDITED. It has already been applied to Development, so this is
+-- appended instead. A database that has never seen P1 applies 0003 and then
+-- 0004 and arrives at the same place.
+--
+-- Migrations NEVER run automatically. A human runs `pnpm db:migrate`, one
+-- environment at a time. See docs/DATABASE.md.
+
+ALTER TABLE "prize_awards" DROP CONSTRAINT "prize_awards_event_id_badge_number_key";

@@ -84,17 +84,49 @@ check('  31 characters still fails closed',
   reason({ EVENT_ADMIN_SESSION_SECRET: 'y'.repeat(31) }), 'session-secret-too-short')
 check('  exactly 32 accepted', reason({ EVENT_ADMIN_SESSION_SECRET: 'y'.repeat(32) }), 'OK')
 check('  a short code leans on the edge rate limit, and the docs say so',
-  [/5 attempts per minute per IP|5 attempts \/ 60 seconds/i.test(read('docs/ADMIN.md')),
+  [/10 requests \/ 60 seconds \/ IP/i.test(read('docs/ADMIN.md')),
    /floor, not a recommendation/i.test(read('docs/ADMIN.md'))], [true, true])
-// The path consolidated to /api/admin-auth; the POLICY is unchanged, and the
-// rule must now also condition on the method, since one path serves three.
-check('  the admin login firewall policy is unchanged',
+/**
+ * RE-SCOPED BY PHASE P1 — a DOCUMENTATION CORRECTION, not a policy change.
+ *
+ * This suite pinned "Limit 5, Window 60 seconds" for Admin and counted TWO
+ * `POST`-only rules. Neither was ever deployed: the live Vercel plan permits
+ * exactly ONE custom rate-limit rule, and Production runs a single combined
+ * condition — `POST /api/admin-auth` OR `POST /api/device-auth`, 10 requests
+ * per 60 seconds per IP.
+ *
+ * An assertion that pins documentation to a configuration nobody has is worse
+ * than no assertion: it teaches an operator to tick a box for a rule that
+ * does not exist. So the facts asserted are the REAL ones, and the invariants
+ * that still matter — both endpoints covered, `POST` only, no removed path —
+ * are kept.
+ */
+check('  the admin login firewall policy is documented as DEPLOYED',
   [/\/api\/admin-auth/.test(read('docs/VERCEL_FIREWALL.md')),
-   /\| \*\*Limit\*\* \| 5 \|/.test(read('docs/VERCEL_FIREWALL.md')),
-   /\| \*\*Window\*\* \| 60 seconds \|/.test(read('docs/VERCEL_FIREWALL.md'))], [true, true, true])
-// Phase D2 retired the operator rule, leaving the two POSTs that still exist.
-check('  and it rate-limits POST only',
-  (read('docs/VERCEL_FIREWALL.md').match(/\| \*\*Condition — Method\*\* \| `POST` \|/g) ?? []).length, 2)
+   /\/api\/device-auth/.test(read('docs/VERCEL_FIREWALL.md')),
+   /\| \*\*Limit\*\* \| \*\*10 requests\*\* \|/.test(read('docs/VERCEL_FIREWALL.md')),
+   /\| \*\*Window\*\* \| \*\*60 seconds\*\* \|/.test(read('docs/VERCEL_FIREWALL.md')),
+   /permits (exactly )?ONE|permits \*\*ONE\*\*|permits \*\*one\*\*/i
+     .test(read('docs/VERCEL_FIREWALL.md'))],
+  [true, true, true, true, true])
+check('  as ONE combined rule, not two',
+  [(read('docs/VERCEL_FIREWALL.md').match(/\| \*\*Condition — Method\*\* \| `POST` \|/g) ?? []).length,
+   /Path `\/api\/admin-auth` \*\*OR\*\* Path `\/api\/device-auth`/
+     .test(read('docs/VERCEL_FIREWALL.md'))],
+  [1, true])
+check('  and it still rate-limits POST only, never GET or DELETE',
+  [/\| `GET` \| session introspection/.test(read('docs/VERCEL_FIREWALL.md')),
+   /\*\*Condition — Method\*\* \| `(GET|DELETE)`/.test(read('docs/VERCEL_FIREWALL.md'))],
+  [true, false])
+check('  every doc agrees on the deployed numbers',
+  ['docs/ADMIN.md', 'docs/PRODUCTION_RELEASE_CHECKLIST.md', 'AGENTS.md']
+    .filter((doc) => !/10 requests \/ 60 ?s|10 requests per 60|10 requests \/ 60 seconds/
+      .test(read(doc))), [])
+check('  and no stale 5-per-minute claim survives anywhere',
+  ['docs/ADMIN.md', 'docs/VERCEL_FIREWALL.md', 'docs/PRODUCTION_RELEASE_CHECKLIST.md',
+   'AGENTS.md', 'README.md']
+    .filter((doc) => /5 attempts per minute|\| \*\*Limit\*\* \| 5 \||30 \|\s*$/m.test(read(doc))),
+  [])
 check('  every doc states the same minimum',
   [/`EVENT_ADMIN_ACCESS_CODE` \(8\+\)/.test(read('README.md')),
    /minimum 8 characters/.test(read('docs/ADMIN.md')),
@@ -884,16 +916,25 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
 for (const [index, name] of budget.actual.entries()) console.log(`    ${String(index + 1).padStart(2)}  ${name}`)
 
-// Phase D2 DELETED the three Operator Functions. The Admin inventory is
-// unchanged, and the budget gained three slots rather than spending any.
-check('the inventory is exactly the expected eight', budget.actual, [
+/**
+ * RE-SCOPED BY PHASE P1, which spent one slot on `api/prizes.ts`.
+ *
+ * 9B's own concern is unchanged and is asserted separately below: the Admin
+ * realm is five Functions and consolidated three of its own into one. The
+ * inventory stays an exact list so a Function cannot appear without a
+ * decision, and the headroom stays pinned because the Hobby limit is enforced
+ * at DEPLOY time, after a green build.
+ */
+check('the inventory is exactly the expected nine', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'sync-registration',
+  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
 ])
 check('  which is within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+check('  with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
+check('  and the Admin realm is still exactly five of them',
+  budget.actual.filter((name) => name.startsWith('admin-')).length, 5)
 check('  and nothing unexpected', budget.problems, [])
 check('no api file is a helper rather than a Function',
   functionChecker.functionEntrypoints()
@@ -944,10 +985,19 @@ check('sync contract untouched by admin', /admin|drizzle|neon/i.test(read('src/s
 check('badge allocation remains local',
   [/nextBadge/.test(read('src/db/registrations.ts')), /server\/db|drizzle/.test(read('src/db/registrations.ts'))], [true, false])
 const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort()
-// Phase 9B needed no migration of its own; 0002 belongs to Phase 9C-A.
+/**
+ * Phase 9B needed no migration of its own. 0002 belongs to Phase 9C-A, and
+ * 0003 and 0004 to the prize phases, so they are excluded by name rather than
+ * by trimming the expectation — the point is that 9B contributed nothing, not
+ * that the directory has a particular length.
+ */
 check('9B added no migration',
-  migrations.filter((file) => !file.startsWith('0002_')),
+  migrations.filter((file) => !/^000[234]_/.test(file)),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
+check('  and no later migration touched an Admin table',
+  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+    .some((file) => /ALTER TABLE "(devices|device_attributes|events)"/.test(read(`drizzle/${file}`))),
+  false)
 const schemaSource = stripComments(read('server/db/schema.ts'))
 check('  no admin, session or token TABLE added',
   /CREATE TABLE|admin_users|device_sessions|refresh_tokens/i.test(schemaSource), false)

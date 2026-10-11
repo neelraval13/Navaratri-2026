@@ -56,6 +56,20 @@ const EXPLANATION: Record<BadgeSafetyConflict, string> = {
 const SETUP_REQUIRED: readonly BadgeSafetyConflict[] = ['binding-missing']
 
 /**
+ * The two conflicts that are about IDENTITY rather than badges.
+ *
+ * They are the only ones Home and Prizes can reach — neither module consults
+ * badge ownership — and they are not badge-uniqueness problems, so reporting
+ * them as "badge registration blocked to protect badge uniqueness" would send
+ * someone to count a stack of badges over a disagreement about which device
+ * this browser is. Registration can reach both these and the badge ones.
+ */
+const IDENTITY_CONFLICTS: readonly BadgeSafetyConflict[] = [
+  'enrollment-device-mismatch',
+  'enrollment-event-mismatch',
+]
+
+/**
  * The hard stop. Badge registration is closed and NOTHING here opens it.
  *
  * There is deliberately no Continue, no Override and no credential of any
@@ -67,87 +81,93 @@ const BadgeOwnershipBlock: React.FC<BadgeOwnershipBlockProps> = ({
   conflict,
   central,
   local,
-}) => SETUP_REQUIRED.includes(conflict) ? (
-  <Card>
-    <CardContent className="space-y-4">
-      <p className="flex items-center gap-2 font-heading text-xl font-semibold">
-        <MonitorSmartphone className="size-5 text-muted-foreground" />
-        Badge setup required
-      </p>
+}) => {
+  const isIdentity = IDENTITY_CONFLICTS.includes(conflict)
 
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        The central Device is verified, but this browser has not adopted its
-        assigned badge range
-        {central === null
-          ? ''
-          : ` (${formatBadgeRange(central.rangeStart, central.rangeEnd)})`}
-        . Confirm the physical badges are at this desk and adopt the range at
-        Device Sign-In.
-      </p>
+  return SETUP_REQUIRED.includes(conflict) ? (
+    <Card>
+      <CardContent className="space-y-4">
+        <p className="flex items-center gap-2 font-heading text-xl font-semibold">
+          <MonitorSmartphone className="size-5 text-muted-foreground" />
+          Badge setup required
+        </p>
 
-      <Link
-        href={ROUTES.deviceLogin}
-        className={buttonVariants({ className: 'h-12 w-full sm:w-auto sm:min-w-52' })}
-      >
-        Open Device Sign-In
-      </Link>
-    </CardContent>
-  </Card>
-) : (
-  <Card>
-    <CardContent className="space-y-5">
-      <p className="flex items-center gap-2 font-heading text-xl font-semibold text-destructive">
-        <ShieldAlert className="size-6" />
-        Badge registration blocked
-      </p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          The central Device is verified, but this browser has not adopted its
+          assigned badge range
+          {central === null
+            ? ''
+            : ` (${formatBadgeRange(central.rangeStart, central.rangeEnd)})`}
+          . Confirm the physical badges are at this desk and adopt the range at
+          Device Sign-In.
+        </p>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
-            Central assignment
-          </p>
-
-          <p className="mt-0.5 font-heading text-lg font-semibold">
-            {central === null
-              ? 'Not assigned'
-              : formatBadgeRange(central.rangeStart, central.rangeEnd)}
-          </p>
-        </div>
-
-        <div>
-          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
-            Local range
-          </p>
-
-          <p className="mt-0.5 font-heading text-lg font-semibold">
-            {local === null
-              ? 'Not configured'
-              : formatBadgeRange(local.rangeStart, local.rangeEnd)}
-          </p>
-        </div>
-      </div>
-
-      <p className="text-sm leading-relaxed">
-        {EXPLANATION[conflict]} Badge registration is blocked to protect badge
-        uniqueness.
-      </p>
-
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        There is no override for this. Two desks holding the same physical
-        badge numbers would hand the same badge to two people, and no
-        credential or sign-in changes that.
-      </p>
-
-      <div>
         <Link
           href={ROUTES.deviceLogin}
-          className={buttonVariants({ variant: 'outline' })}
+          className={buttonVariants({ className: 'h-12 w-full sm:w-auto sm:min-w-52' })}
         >
           Open Device Sign-In
         </Link>
-      </div>
-    </CardContent>
-  </Card>
-)
+      </CardContent>
+    </Card>
+  ) : (
+    <Card>
+      <CardContent className="space-y-5">
+        <p className="flex items-center gap-2 font-heading text-xl font-semibold text-destructive">
+          <ShieldAlert className="size-6" />
+          {isIdentity ? 'Device identity conflict' : 'Badge registration blocked'}
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
+              Central assignment
+            </p>
+
+            <p className="mt-0.5 font-heading text-lg font-semibold">
+              {central === null
+                ? 'Not assigned'
+                : formatBadgeRange(central.rangeStart, central.rangeEnd)}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
+              Local range
+            </p>
+
+            <p className="mt-0.5 font-heading text-lg font-semibold">
+              {local === null
+                ? 'Not configured'
+                : formatBadgeRange(local.rangeStart, local.rangeEnd)}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-sm leading-relaxed">
+          {EXPLANATION[conflict]}
+          {isIdentity
+            ? ' Event operations are blocked until this browser and central agree which device it is.'
+            : ' Badge registration is blocked to protect badge uniqueness.'}
+        </p>
+
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          {isIdentity
+            ? 'There is no override for this. Work recorded under the wrong device identity cannot be attributed afterwards, and no credential or sign-in changes that.'
+            : 'There is no override for this. Two desks holding the same physical badge numbers would hand the same badge to two people, and no credential or sign-in changes that.'}
+        </p>
+
+        <div>
+          <Link
+            href={ROUTES.deviceLogin}
+            className={buttonVariants({ variant: 'outline' })}
+          >
+            Open Device Sign-In
+          </Link>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default BadgeOwnershipBlock

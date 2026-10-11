@@ -116,6 +116,22 @@ const REQUIRED_FILES = [
   'src/db/central-badge-range.ts',
   'src/pages/device-login-page.tsx',
   'src/shared/event.ts',
+  'api/prizes.ts',
+  'src/shared/prize-contract.ts',
+  'server/prizes/awards.ts',
+  'server/prizes/eligibility.ts',
+  'server/prizes/roster.ts',
+  'server/prizes/requests.ts',
+  'src/prizes/prize-api.ts',
+  'src/prizes/prize-filters.ts',
+  'src/pages/prizes-page.tsx',
+  // Phase P1.1: the fixed catalog chooser and the previous-prize warning.
+  'src/components/prizes/prize-chooser.tsx',
+  'src/components/prizes/previous-awards-warning.tsx',
+  'src/components/prizes/attendee-card.tsx',
+  'src/components/prizes/attendee-filters.tsx',
+  'docs/PRIZES.md',
+  'scripts/seed-prizes-development.mjs',
   'tsconfig.server.json',
   'tsconfig.parity.json',
   'scripts/vercel-function-typecheck.mjs',
@@ -1231,6 +1247,8 @@ const EXPECTED_FUNCTIONS = [
   'admin-events.ts',
   'device-auth.ts',
   'device-badge-claim.ts',
+  // Phase P1. GET lists the eligible roster and the history; POST awards.
+  'prizes.ts',
   'sync-registration.ts',
 ]
 
@@ -1326,6 +1344,15 @@ if (firewallDoc === null) {
 
   if (/\| `\/api\/(admin|device)-login`/.test(firewallDoc)) {
     budgetProblems.push('docs/VERCEL_FIREWALL.md still rate-limits a removed path')
+  }
+
+  /**
+   * `/api/prizes` is authenticated device traffic, not a credential endpoint.
+   * A rule on it would throttle a prize desk's ordinary roster reads while
+   * protecting nothing a device session does not already protect.
+   */
+  if (/\*\*Condition — Path\*\* \| `\/api\/prizes`/.test(firewallDoc)) {
+    budgetProblems.push('docs/VERCEL_FIREWALL.md rate-limits the authenticated prize endpoint')
   }
 }
 
@@ -2626,9 +2653,15 @@ addCheck(
   eventAuthProblems,
 )
 
-if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 4) {
+/**
+ * RE-SCOPED BY PHASE P1, which spent one slot on `api/prizes.ts`. Nine of
+ * twelve, three spare. The headroom is pinned rather than merely bounded so
+ * it cannot be consumed quietly: the Hobby limit is enforced at DEPLOY time,
+ * after the build has already succeeded, so nothing else would report it.
+ */
+if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 3) {
   budgetProblems.push(
-    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 4`,
+    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 3`,
   )
 }
 
@@ -2778,6 +2811,16 @@ const EXPECTED_MIGRATIONS = [
   '0000_central_foundation.sql',
   '0001_range_guards_and_touch.sql',
   '0002_device_credentials.sql',
+  // Phase P1's prize ledger. Appended, never edited in place: a migration
+  // that has run anywhere is history.
+  '0003_prize_awards.sql',
+  /**
+   * Phase P1.1 drops P1's `UNIQUE(event_id, badge_number)` because repeat
+   * prizes became the event rule. 0003 was already applied to Development, so
+   * this is appended rather than edited into it — a database that has never
+   * seen P1 applies 0003 then 0004 and arrives at the same place.
+   */
+  '0004_repeat_prize_awards.sql',
 ]
 
 if (migrationFiles.join(', ') !== EXPECTED_MIGRATIONS.join(', ')) {
@@ -2800,6 +2843,753 @@ addCheck(
   'operator-realm-retired',
   'Operator Access is gone and the central device is the only event authority',
   retirementProblems,
+)
+
+// --- K. the prize ledger holds no attendee PII, and repeats stay legal ------
+/**
+ * PHASE P1 ADDED A CENTRAL LEDGER AND KEPT THE PRIVACY BOUNDARY. PHASE P1.1
+ * MADE REPEAT PRIZES LEGAL.
+ *
+ * Postgres records which badge received which prize, from which device, when.
+ * It records nothing about the person — the Google Sheet answers that, and the
+ * response joins the two per request.
+ *
+ * The guards below describe two kinds of regression. One is the privacy
+ * boundary eroding: an attendee column, an attendee field on the insert, a
+ * phone number read from the Sheet. The other is ONE-PRIZE-PER-ATTENDEE
+ * COMING BACK — as a constraint, as a precheck, as a conflict the API
+ * reports, or as an attendee quietly filtered out of the list once they have
+ * won something. P1's rule is now a bug, and it would be an easy one to
+ * reintroduce while tidying.
+ */
+const prizeProblems = []
+
+/** Attendee facts that must never become central columns or ledger fields. */
+const ATTENDEE_PII_FIELDS = [
+  'phone', 'whatsapp', 'wa.me', 'payment', 'paymentMethod', 'amount',
+  'normalizedName', 'upi',
+]
+
+const schemaSource = readText(join(ROOT, 'server/db/schema.ts'))
+const prizeWriter = readText(join(ROOT, 'server/prizes/awards.ts'))
+const prizeRoster = readText(join(ROOT, 'server/prizes/roster.ts'))
+const prizeRequests = readText(join(ROOT, 'server/prizes/requests.ts'))
+const prizeEndpoint = readText(join(ROOT, 'api/prizes.ts'))
+const prizeContract = readText(join(ROOT, 'src/shared/prize-contract.ts'))
+const prizeApi = readText(join(ROOT, 'src/prizes/prize-api.ts'))
+const prizeEligibility = readText(join(ROOT, 'server/prizes/eligibility.ts'))
+const prizeFilters = readText(join(ROOT, 'src/prizes/prize-filters.ts'))
+const prizeChooser = readText(join(ROOT, 'src/components/prizes/prize-chooser.tsx'))
+const prizeDialog = readText(join(ROOT, 'src/components/prizes/award-prize-dialog.tsx'))
+const prizeWarning = readText(
+  join(ROOT, 'src/components/prizes/previous-awards-warning.tsx'),
+)
+const prizeMigration0004 = readText(join(ROOT, 'drizzle/0004_repeat_prize_awards.sql'))
+
+if (
+  schemaSource === null || prizeWriter === null || prizeRoster === null ||
+  prizeRequests === null || prizeEndpoint === null || prizeContract === null ||
+  prizeApi === null || prizeEligibility === null || prizeFilters === null ||
+  prizeChooser === null || prizeDialog === null || prizeWarning === null ||
+  prizeMigration0004 === null
+) {
+  prizeProblems.push('a prize module is missing')
+} else {
+  /**
+   * THE TABLE DEFINITION ITSELF, sliced from `prizeAwards` to the end of its
+   * definition, so a column added later is audited rather than hidden behind
+   * the rest of the schema file.
+   */
+  const tableStart = schemaSource.indexOf('export const prizeAwards = pgTable(')
+  const tableEnd = schemaSource.indexOf('export type ', tableStart)
+  const table = tableStart === -1
+    ? ''
+    : stripComments(schemaSource.slice(tableStart, tableEnd === -1 ? undefined : tableEnd))
+
+  if (table === '') {
+    prizeProblems.push('server/db/schema.ts does not define prize_awards')
+  }
+
+  /**
+   * The COLUMN BLOCK only — `pgTable`'s second argument. The constraint list
+   * after it legitimately contains `name:` for a foreign-key name and the
+   * word `badge_number` in an index name, and auditing those would report a
+   * column that does not exist while teaching nobody anything.
+   */
+  const columnsStart = table.indexOf('{')
+  const columns = columnsStart === -1 ? '' : table.slice(columnsStart, table.indexOf('\n  },'))
+
+  if (table !== '' && columns === '') {
+    prizeProblems.push('the prize_awards column block could not be read')
+  }
+
+  /**
+   * PLAIN SUBSTRING, case-insensitively, after renaming the one legitimate
+   * "name" away. A word-boundary pattern looked careful and let
+   * `attendeeName` straight through, because the `N` is preceded by a letter
+   * — which is exactly the shape a column like that would be given.
+   */
+  const auditedColumns = columns.replace(/prizeName|prize_name/g, 'label').toLowerCase()
+
+  for (const field of [...ATTENDEE_PII_FIELDS, 'name', 'age', 'gender', 'attendee']) {
+    if (auditedColumns.includes(field.toLowerCase())) {
+      prizeProblems.push(`prize_awards declares an attendee column: ${field}`)
+    }
+  }
+
+  /**
+   * REPEAT PRIZES STAY LEGAL — the inverse of the guard P1 had here.
+   *
+   * Any uniqueness over the badge number refuses a second legitimate award,
+   * whichever columns it is spelled with, so the SHAPE is looked for rather
+   * than the old constraint's name: `(event_id, badge_number, prize_name)`
+   * would be a new name and the same broken rule. A unique index counts too —
+   * it enforces uniqueness with no constraint to find.
+   *
+   * The primary key on `id` is not uniqueness over an attendee and is not
+   * matched: it names no badge number.
+   */
+  for (const match of table.matchAll(/(unique|uniqueIndex)\(([\s\S]*?)\)\s*\.on\(([^)]*)\)/g)) {
+    if (/badgeNumber|badge_number/.test(match[3])) {
+      prizeProblems.push(
+        'prize_awards is unique over the badge number again, which refuses a repeat prize',
+      )
+    }
+  }
+
+  /**
+   * And 0004 must still be exactly what removed it — ONE statement, compared
+   * whole with its `--` commentary stripped. An appended statement in the
+   * migration that releases the constraint is the least-reviewed place
+   * anything could be added to the ledger.
+   */
+  const removal = prizeMigration0004
+    .replace(/^--.*$/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (
+    removal !==
+    'ALTER TABLE "prize_awards" DROP CONSTRAINT "prize_awards_event_id_badge_number_key";'
+  ) {
+    prizeProblems.push(`0004 is not the single constraint removal it should be: ${removal}`)
+  }
+
+  if (!/prize_awards_device_event_fk/.test(table)) {
+    prizeProblems.push('prize_awards does not enforce cross-event device integrity')
+  }
+
+  // Append-only: no undo, no delete, no edit, so no updated_at to maintain.
+  if (/updatedAt|updated_at/.test(table)) {
+    prizeProblems.push('prize_awards carries updated_at, which append-only history does not need')
+  }
+
+  /**
+   * ONE WRITER. A second inserter is a second place for someone to decide
+   * they know better than the UNIQUE constraint.
+   */
+  const prizeTableReaders = []
+
+  for (const directory of ['api', 'server', 'src']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      const code = stripComments(readText(path) ?? '')
+
+      if (/\bprizeAwards\b/.test(code)) {
+        prizeTableReaders.push(rel(path))
+      }
+    }
+  }
+
+  const allowedTableReaders = ['server/db/schema.ts', 'server/prizes/awards.ts']
+
+  for (const path of prizeTableReaders) {
+    if (!allowedTableReaders.includes(path)) {
+      prizeProblems.push(`${path} reaches the prize_awards table directly`)
+    }
+  }
+
+  for (const path of allowedTableReaders) {
+    if (!prizeTableReaders.includes(path)) {
+      prizeProblems.push(`${path} no longer names the prize_awards table`)
+    }
+  }
+
+  const writer = stripComments(prizeWriter)
+
+  if (!/\.insert\(prizeAwards\)/.test(writer)) {
+    prizeProblems.push('server/prizes/awards.ts does not insert through the one writer')
+  }
+
+  if (/\.update\(prizeAwards\)|\.delete\(prizeAwards\)/.test(writer)) {
+    prizeProblems.push('server/prizes/awards.ts mutates or deletes prize history')
+  }
+
+  /**
+   * A caller must not be able to date its own award, and the insert must not
+   * write an attendee. Case-INSENSITIVE, with the one legitimate `prizeName`
+   * renamed away first: a case-sensitive `name:` matched neither `prizeName:`
+   * nor `attendeeName:`, so it would have reported nothing either way.
+   */
+  const inserted = writer
+    .slice(writer.indexOf('.values({'), writer.indexOf('.returning()'))
+    .replace(/prizeName/g, 'label')
+    .toLowerCase()
+
+  for (const field of ['awardedat', 'name', 'age', 'gender', 'phone', 'attendee', 'amount']) {
+    if (inserted !== '' && inserted.includes(field)) {
+      prizeProblems.push(`the prize insert sets ${field}, which it must not`)
+    }
+  }
+
+  /**
+   * THE CONSTRAINT IS THE AUTHORITY, so the endpoint must not precheck it: a
+   * SELECT above the insert would only move the race.
+   */
+  const endpoint = stripComments(prizeEndpoint)
+  const postStart = endpoint.indexOf('export async function POST(')
+
+  if (postStart === -1) {
+    prizeProblems.push('api/prizes.ts exports no POST')
+  } else {
+    const post = endpoint.slice(postStart)
+
+    if (post.includes('readPrizeAwards(')) {
+      prizeProblems.push('the award endpoint prechecks the ledger instead of trusting the constraint')
+    }
+
+    /**
+     * The register confirms the badge BEFORE anything is written — and the
+     * confirmation must actually REFUSE. Checking only the order of the two
+     * calls let a canary that deleted the refusal through: the roster was
+     * still read first, it just no longer decided anything.
+     */
+    if (post.indexOf('readPrizeRoster(') === -1 ||
+        post.indexOf('readPrizeRoster(') > post.indexOf('recordPrizeAward(')) {
+      prizeProblems.push('the award endpoint writes before confirming the badge is registered')
+    }
+
+    if (!post.includes("blocked: 'badge-not-registered'")) {
+      prizeProblems.push('the award endpoint does not refuse a badge missing from the register')
+    }
+
+    if (!/PRIZE_REQUIRED_ATTRIBUTE/.test(post)) {
+      prizeProblems.push('the award endpoint does not require the prizes attribute')
+    }
+  }
+
+  const methods = [...endpoint.matchAll(/export async function ([A-Z]+)\(/g)]
+    .map((match) => match[1])
+    .sort()
+    .join(',')
+
+  if (methods !== 'GET,POST') {
+    prizeProblems.push(`api/prizes.ts exports ${methods} rather than exactly GET,POST`)
+  }
+
+  if (/admin-auth|adminSession|readAdminSessionCookie/.test(endpoint)) {
+    prizeProblems.push('the prize endpoint reaches into the Admin realm')
+  }
+
+  /**
+   * A SQLSTATE is diagnostic and belongs in the server log. Matched LINE BY
+   * LINE rather than by proximity: this codebase omits semicolons, so a
+   * "within the same statement" pattern runs to the end of the file and
+   * matches any response anywhere.
+   */
+  for (const line of endpoint.split('\n')) {
+    if (line.includes('SQLSTATE') && !line.includes('console.error')) {
+      prizeProblems.push('the prize endpoint moves a SQLSTATE outside the server log')
+    }
+  }
+
+  // A Postgres constraint name is never a wire value, and never a response.
+  if (/constraint/i.test(endpoint)) {
+    prizeProblems.push('the prize endpoint names a database constraint')
+  }
+
+  /** Every identity, timing and attendee field is refused, not ignored. */
+  for (const field of [
+    'eventId', 'eventSlug', 'deviceId', 'loginName', 'awardedAt', 'awardedBy',
+    'attendee', 'name', 'age', 'gender',
+  ]) {
+    if (!new RegExp(`'${field}'`).test(prizeRequests)) {
+      prizeProblems.push(`a prize award body may still carry ${field}`)
+    }
+  }
+
+  /**
+   * THE ROSTER PROJECTS FOUR FIELDS. The phone column and the WhatsApp link
+   * are not merely unstored — they are never read.
+   */
+  const roster = stripComments(prizeRoster)
+
+  if (/COLUMNS\.phone|whatsapp/i.test(roster)) {
+    prizeProblems.push('server/prizes/roster.ts reads the phone or WhatsApp column')
+  }
+
+  if (!/\.values\.get\(/.test(roster) || /batchUpdate|addSheet/.test(roster)) {
+    prizeProblems.push('server/prizes/roster.ts is not strictly read-only on the Sheet')
+  }
+
+  for (const field of ['phone', 'whatsapp', 'paymentMethod', 'amount']) {
+    if (new RegExp(`${field}\\s*[:?]`, 'i').test(stripComments(prizeContract))) {
+      prizeProblems.push(`the shared prize contract declares ${field}`)
+    }
+  }
+
+  /* ------------------------------------- P1.1: the fixed catalog, and repeats */
+
+  /**
+   * THE EIGHT PRIZES, pinned by their exact wire bytes.
+   *
+   * These strings are an allow-list the server enforces and the value
+   * Postgres stores, so a stray dash or a dropped space would refuse every
+   * award the chooser offers. Pinned here rather than counted, because a
+   * count would pass with eight wrong labels.
+   */
+  const PRIZE_LABELS = [
+    'Best Dance - Boy', 'Best Dance - Girl', 'Best Dance - Male', 'Best Dance - Female',
+    'Best Dress - Boy', 'Best Dress - Girl', 'Best Dress - Male', 'Best Dress - Female',
+  ]
+
+  const catalogEntries = [...prizeContract.matchAll(/label: '([^']+)'/g)].map((m) => m[1])
+
+  if (catalogEntries.join('|') !== PRIZE_LABELS.join('|')) {
+    prizeProblems.push(
+      `the prize catalog is not the agreed eight: ${catalogEntries.join(', ')}`,
+    )
+  }
+
+  /**
+   * And it is an ALLOW-LIST, not a length check. P1 took free text; a parser
+   * that still accepted any non-empty string would let one desk's `Best
+   * Dancee` into the ledger beside another's `Best Dance - Girl`, and nothing
+   * downstream could tell them apart.
+   */
+  const nameParser = stripComments(prizeContract)
+    .slice(stripComments(prizeContract).indexOf('export const parsePrizeName'))
+
+  if (!/PRIZE_NAMES\.includes\(/.test(nameParser)) {
+    prizeProblems.push('a new prize name is no longer checked against the catalog')
+  }
+
+  const labelCeiling = /PRIZE_NAME_MAX_LENGTH = (\d+)/.exec(prizeContract)?.[1] ?? '0'
+
+  for (const label of catalogEntries) {
+    if (label.length > Number(labelCeiling)) {
+      prizeProblems.push(`the catalog label "${label}" exceeds the stored length limit`)
+    }
+  }
+
+  // The SERVER reads the same policy, so the chooser and the endpoint cannot
+  // disagree about which eight values exist.
+  for (const [path, source] of [
+    ['server/prizes/requests.ts', prizeRequests],
+    ['src/components/prizes/award-prize-dialog.tsx', prizeDialog],
+  ]) {
+    if (!/parsePrizeName/.test(source)) {
+      prizeProblems.push(`${path} no longer validates against the shared prize policy`)
+    }
+  }
+
+  /**
+   * ONE-PRIZE-PER-ATTENDEE MUST NOT COME BACK as a refusal. The conflict, its
+   * public name and the 409 that carried it are all gone, and a tidy-up that
+   * reinstated any of them would start refusing legitimate repeat awards.
+   */
+  for (const [path, source] of [
+    ['api/prizes.ts', prizeEndpoint],
+    ['src/shared/prize-contract.ts', prizeContract],
+    ['src/prizes/prize-api.ts', prizeApi],
+    ['server/prizes/awards.ts', prizeWriter],
+  ]) {
+    // CODE, not commentary: these files explain in prose that the conflict was
+    // removed, and that explanation is the opposite of a regression.
+    if (/already-awarded|alreadyAwarded/.test(stripComments(source))) {
+      prizeProblems.push(`${path} still reports an already-awarded conflict`)
+    }
+  }
+
+  if (/status === 409|=== 409|, 409\)/.test(stripComments(prizeEndpoint) + stripComments(prizeApi))) {
+    prizeProblems.push('the prize API still has a 409 conflict path')
+  }
+
+  /**
+   * NOTHING REMOVES AN ATTENDEE FROM THE LIST. The composer passes the roster
+   * through, so the absence of a filter is the property — and it is checked as
+   * an absence, because a subtraction is one line to add back.
+   */
+  const composer = stripComments(prizeEligibility)
+
+  if (!/attendees: \[\.\.\.input\.attendees\]/.test(composer)) {
+    prizeProblems.push('server/prizes/eligibility.ts no longer returns the roster unchanged')
+  }
+
+  // The two shapes a subtraction takes. `awardedAt` and `awardedBy` are
+  // ordinary ledger fields and are not evidence of one.
+  if (/\.filter\(|new Set\(/.test(composer)) {
+    prizeProblems.push('server/prizes/eligibility.ts filters the attendee list again')
+  }
+
+  /**
+   * The client filter cannot do it either, and the SIGNATURE is why: it is
+   * never handed the award history, so no filter can be made to hide a winner
+   * without changing what it is given.
+   */
+  if (!/export const filterAttendees = \(\s*attendees: readonly PrizeAttendee\[\],\s*state: PrizeFilterState,\s*\)/
+    .test(prizeFilters)) {
+    prizeProblems.push('filterAttendees no longer takes only the roster and the filters')
+  }
+
+  /**
+   * THE DEMOGRAPHIC SUGGESTION IS NOT AUTHORIZATION. It highlights a button
+   * from the attendee's age and gender; the server must never consult it, or
+   * an award would start being refused for disagreeing with a hint — and the
+   * volunteer at the table knows things the Badge Register does not.
+   */
+  for (const directory of ['api', 'server']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      if (/suggestedPrizeDivision|PRIZE_ADULT_AGE/.test(readText(path) ?? '')) {
+        prizeProblems.push(`${rel(path)} treats the division suggestion as a rule`)
+      }
+    }
+  }
+
+  // The warning informs. It disables nothing and asks for no override.
+  if (/disabled|aria-disabled|approval|override/i.test(stripComments(prizeWarning))) {
+    prizeProblems.push('the previous-prize warning disables or gates the award')
+  }
+
+  /**
+   * And the submit button's own condition proves it: whether a prize may be
+   * awarded depends on a request being in flight and a prize being chosen,
+   * and on nothing about previous awards.
+   */
+  const submitGuard = /disabled=\{isSubmitting \|\| !chosen\.ok\}/.test(prizeDialog)
+
+  if (!submitGuard) {
+    prizeProblems.push('the award button is gated by something other than the chosen prize')
+  }
+
+  /**
+   * AND THE CARD NEVER WITHHOLDS THE BUTTON. Every attendee has Give Prize,
+   * whatever they have already won, so the only thing that may disable it is
+   * a request already in flight. A canary that gated it on the award count
+   * was caught by the rendered assertion in `verify:p1`; this is the cheap
+   * structural half, in the file that fails before anything is deployed.
+   */
+  const cardSource = readText(join(ROOT, 'src/components/prizes/attendee-card.tsx')) ?? ''
+
+  if (!/disabled=\{isBusy\}/.test(cardSource)) {
+    prizeProblems.push('the attendee card gates Give Prize on something other than the request')
+  }
+
+  /** The prize is CHOSEN, never typed: no free-text input is left anywhere. */
+  if (/<Input/.test(prizeDialog)) {
+    prizeProblems.push('the award dialog still offers a free-text prize field')
+  }
+
+  if (!/PRIZE_CATALOG/.test(prizeChooser) || /<Input/.test(prizeChooser)) {
+    prizeProblems.push('the prize chooser is not rendered from the shared catalog')
+  }
+
+  // The response names ATTENDEES. `eligible` was a subtraction and is gone.
+  if (
+    !/attendees: PrizeAttendee\[\]/.test(prizeContract) ||
+    /eligible/.test(stripComments(prizeContract))
+  ) {
+    prizeProblems.push('the prize roster response is not the full attendee list')
+  }
+
+  /**
+   * ONLINE ONLY. No local prize state, no queue, no timer. A prize that
+   * survived a failed request is exactly how two offline desks award the same
+   * badge.
+   */
+  for (const directory of ['src/prizes', 'src/components/prizes', 'src/pages/prizes-page.tsx']) {
+    const target = join(ROOT, directory)
+
+    if (!exists(target)) {
+      prizeProblems.push(`missing: ${directory}`)
+
+      continue
+    }
+
+    const paths = statSync(target).isDirectory() ? walk(target) : [target]
+
+    for (const path of paths) {
+      const code = stripComments(readText(path) ?? '')
+
+      if (/@\/db\/database|from 'dexie'|outbox|localStorage|sessionStorage/.test(code)) {
+        prizeProblems.push(`${rel(path)} keeps prize state locally`)
+      }
+
+      if (/setInterval/.test(code)) {
+        prizeProblems.push(`${rel(path)} polls on an interval`)
+      }
+
+      /**
+       * `setTimeout` is allowed in exactly ONE place and for exactly one
+       * reason: aborting a request that never answers. Anywhere else, or more
+       * than once, it is a retry — and a prize award that retries itself is
+       * how two desks award the same badge.
+       */
+      const timers = [...code.matchAll(/setTimeout\(/g)].length
+      const isRequestTimeout = rel(path) === 'src/prizes/prize-api.ts' &&
+        timers === 1 && /controller\.abort\(\)/.test(code)
+
+      if (timers > 0 && !isRequestTimeout) {
+        prizeProblems.push(`${rel(path)} uses a timer that is not the request timeout`)
+      }
+    }
+  }
+
+  if (/queue|retry|navigator\.onLine/.test(stripComments(prizeApi))) {
+    prizeProblems.push('src/prizes/prize-api.ts queues or retries an award')
+  }
+
+  /** The prize module changes no stored contract of any earlier phase. */
+  const dexieSource = readText(join(ROOT, 'src/db/database.ts'))
+
+  if (dexieSource === null || !/DATABASE_VERSION = 1\b/.test(dexieSource)) {
+    prizeProblems.push('the IndexedDB version is no longer pinned at 1')
+  }
+
+  for (const path of ['api/sync-registration.ts', 'api/device-auth.ts']) {
+    if (/prizes\//.test(readText(join(ROOT, path)) ?? '')) {
+      prizeProblems.push(`${path} now depends on the prize module`)
+    }
+  }
+}
+
+addCheck(
+  'prize-ledger',
+  'The prize ledger holds no attendee PII, and repeat prizes stay possible',
+  prizeProblems,
+)
+
+// --- L. db:check knows about every migrated table -------------------------
+/**
+ * A REAL RELEASE-PROCESS GAP, now a durable check.
+ *
+ * `pnpm db:check` is the only thing that proves a migrated database actually
+ * carries what the migrations describe. Phase P1 added `0003_prize_awards.sql`
+ * and did not teach `db:check` about it, so the script would have reported a
+ * perfectly healthy database that was missing the entire prize ledger — and
+ * the operator running it before the event would have believed it.
+ *
+ * The rule is therefore general: a table a migration creates must be named in
+ * `db-check`, whatever phase adds it.
+ *
+ * It stays READ-ONLY. Proving a constraint REJECTS a write needs a write,
+ * which is `db:smoke`'s separate and explicitly gated job.
+ */
+const dbCheckProblems = []
+const dbCheckSource = readText(join(ROOT, 'scripts/db-check.mjs'))
+
+/**
+ * One of `db-check`'s expectation ARRAYS, sliced out by name.
+ *
+ * Membership is checked inside the list that actually drives a check, not
+ * anywhere in the file. A whole-file substring match let a canary that
+ * deleted `prize_awards` from `EXPECTED_TABLES` straight through, because the
+ * name still occurred further down in the code that reads the table — a guard
+ * that proves a string is mentioned proves nothing about what is verified.
+ *
+ * A missing array is reported rather than skipped, so restructuring the
+ * script fails loudly instead of quietly disabling this.
+ */
+const dbCheckList = (source, name) => {
+  const start = source.indexOf(`const ${name} = [`)
+
+  if (start === -1) {
+    return null
+  }
+
+  const end = source.indexOf('\n]', start)
+
+  return end === -1 ? null : source.slice(start, end)
+}
+
+if (dbCheckSource === null) {
+  dbCheckProblems.push('scripts/db-check.mjs could not be read')
+} else {
+  const expectedTables = dbCheckList(dbCheckSource, 'EXPECTED_TABLES')
+
+  if (expectedTables === null) {
+    dbCheckProblems.push('db:check no longer declares EXPECTED_TABLES')
+  }
+
+  const migrationSql = migrationFiles
+    .map((file) => readText(join(ROOT, 'drizzle', file)) ?? '')
+    .join('\n')
+
+  for (const match of migrationSql.matchAll(/CREATE TABLE "([a-z_]+)"/g)) {
+    if (expectedTables !== null && !expectedTables.includes(`'${match[1]}'`)) {
+      dbCheckProblems.push(
+        `db:check does not know about the migrated table ${match[1]}`,
+      )
+    }
+  }
+
+  /**
+   * And for the PRIZE migrations specifically, every guarantee they leave
+   * BEHIND. The cross-event integrity and both name bounds live entirely in
+   * those constraints, so "the table exists" is not enough.
+   *
+   * EFFECTIVE, not merely created: 0003 creates seven constraints and 0004
+   * drops one of them, so what `db:check` must verify is the difference. A
+   * dropped constraint is checked the other way round — for being ABSENT —
+   * which is the next assertion down.
+   *
+   * Scoped to the prize migrations deliberately: the earlier ones predate
+   * this rule and `db:check` covers a chosen subset of their constraints,
+   * with the badge ones additionally exercised behaviourally by `db:smoke`.
+   * Widening this to every historical constraint would be a different,
+   * larger decision.
+   */
+  const prizeMigration = readText(join(ROOT, 'drizzle/0003_prize_awards.sql'))
+  const repeatMigration = readText(join(ROOT, 'drizzle/0004_repeat_prize_awards.sql'))
+
+  if (prizeMigration === null || repeatMigration === null) {
+    dbCheckProblems.push('a prize migration could not be read')
+  } else {
+    const removed = [
+      ...repeatMigration.matchAll(/DROP CONSTRAINT "([a-z_0-9]+)"/g),
+    ].map((match) => match[1])
+
+    if (removed.length === 0) {
+      dbCheckProblems.push('no dropped constraint could be read from 0004')
+    }
+
+    const created = [
+      ...prizeMigration.matchAll(/(?:ADD )?CONSTRAINT "([a-z_0-9]+)"/g),
+      ...prizeMigration.matchAll(/CREATE (?:UNIQUE )?INDEX "([a-z_0-9]+)"/g),
+    ].map((match) => match[1]).filter((name) => !removed.includes(name))
+
+    if (created.length === 0) {
+      dbCheckProblems.push('no prize constraint or index could be read from 0003')
+    }
+
+    const expectedPrize = [
+      dbCheckList(dbCheckSource, 'EXPECTED_PRIZE_CONSTRAINTS'),
+      dbCheckList(dbCheckSource, 'EXPECTED_PRIZE_INDEXES'),
+      dbCheckList(dbCheckSource, 'EXPECTED_GUARANTEES'),
+    ]
+
+    if (expectedPrize.some((list) => list === null)) {
+      dbCheckProblems.push('db:check no longer declares its prize expectation lists')
+    }
+
+    const expectedPrizeText = expectedPrize.filter((list) => list !== null).join('\n')
+
+    for (const name of new Set(created)) {
+      if (!expectedPrizeText.includes(name)) {
+        dbCheckProblems.push(`db:check does not verify the prize guarantee ${name}`)
+      }
+    }
+
+    /**
+     * A DROPPED CONSTRAINT MUST NOT BE EXPECTED. If `db:check` still demanded
+     * P1's `UNIQUE(event_id, badge_number)`, a correctly migrated database
+     * would fail the check and the operator's fix would be to put the
+     * constraint back — which is the one thing that must not happen.
+     */
+    for (const name of new Set(removed)) {
+      if (expectedPrizeText.includes(name)) {
+        dbCheckProblems.push(`db:check still expects the dropped constraint ${name}`)
+      }
+    }
+
+    /**
+     * And it must prove the ABSENCE, visibly. A database that still carries
+     * per-attendee uniqueness refuses a second legitimate prize, which a
+     * volunteer meets at the table rather than at release time, so `db:check`
+     * reports it as its own line and looks for the SHAPE: a replacement on
+     * `(event_id, badge_number, prize_name)` would be a different name and
+     * the same broken rule.
+     */
+    if (!/repeated prize awards are allowed/.test(dbCheckSource)) {
+      dbCheckProblems.push('db:check does not prove that repeat prize awards are possible')
+    }
+
+    for (const shape of ['primary key', 'create unique index', "includes('badge_number')"]) {
+      if (!dbCheckSource.includes(shape)) {
+        dbCheckProblems.push(`db:check does not look for the uniqueness shape: ${shape}`)
+      }
+    }
+
+    /**
+     * Every prize column too: an ADDED one is the privacy regression, and
+     * `db:check` compares the column SET rather than looking for presence.
+     *
+     * The count is asserted first. A regex that matched nothing would make
+     * the loop below pass by never running — which is the shape of a guard
+     * that looks careful and checks nothing.
+     */
+    const declared = [
+      ...prizeMigration.matchAll(/^\s*"([a-z_]+)" (?:uuid|integer|text|timestamp)/gm),
+    ].map((match) => match[1])
+
+    if (declared.length !== 6) {
+      dbCheckProblems.push(
+        `expected 6 prize columns in 0003, read ${String(declared.length)}`,
+      )
+    }
+
+    const prizeColumnList = dbCheckList(dbCheckSource, 'PRIZE_COLUMNS')
+
+    if (prizeColumnList === null) {
+      dbCheckProblems.push('db:check no longer declares PRIZE_COLUMNS')
+    }
+
+    for (const column of declared) {
+      if (prizeColumnList !== null && !prizeColumnList.includes(`'${column}'`)) {
+        dbCheckProblems.push(`db:check does not verify the prize column ${column}`)
+      }
+    }
+  }
+
+  // READ-ONLY, and not by convention: no statement may mutate anything.
+  const dbCheckCode = stripComments(dbCheckSource)
+
+  for (const statement of [
+    'INSERT', 'UPDATE ', 'DELETE', 'CREATE TABLE', 'ALTER ', 'DROP ', 'TRUNCATE',
+  ]) {
+    if (dbCheckCode.includes(statement)) {
+      dbCheckProblems.push(`scripts/db-check.mjs is no longer read-only: ${statement.trim()}`)
+    }
+  }
+
+  /**
+   * And it must not SHELL OUT, which is how it could run a migration without
+   * containing one. Naming `pnpm db:migrate` in the closing hint is fine and
+   * useful — that is advice to a human, not an invocation.
+   */
+  for (const escape of ['child_process', 'execSync', 'spawnSync', 'spawn(', 'exec(']) {
+    if (dbCheckCode.includes(escape)) {
+      dbCheckProblems.push(`scripts/db-check.mjs can run a command: ${escape}`)
+    }
+  }
+
+  // The connection string is a credential and is never printed.
+  if (/console\.(log|error)\([^)]*databaseUrl/.test(dbCheckCode)) {
+    dbCheckProblems.push('scripts/db-check.mjs prints the connection string')
+  }
+}
+
+addCheck(
+  'db-check-coverage',
+  'pnpm db:check verifies every migrated table, and that repeat prizes stay possible',
+  dbCheckProblems,
 )
 
 // --- report -----------------------------------------------------------------

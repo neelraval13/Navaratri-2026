@@ -42,10 +42,35 @@ const migrations = migrationFiles.map((f) => read(`drizzle/${f}`)).join('\n')
 const schemaSource = read('server/db/schema.ts')
 
 console.log('=== 1-17. SCHEMA ===')
-check('exactly four central tables', Object.keys(schema).filter((k) => typeof schema[k] === 'object' && schema[k] !== null).sort(),
-  ['badgeAssignments', 'deviceAttributes', 'devices', 'events'])
-for (const t of ['events', 'devices', 'device_attributes', 'badge_assignments'])
+/**
+ * RE-SCOPED BY PHASE P1, which added the prize ledger as a fifth table.
+ *
+ * The inventory is pinned, not bounded, so a table cannot appear without a
+ * decision. What 9A was really protecting is the PRIVACY boundary, and that
+ * is asserted directly below rather than implied by a count: whatever tables
+ * exist, none of them may hold attendee PII.
+ */
+check('exactly five central tables', Object.keys(schema).filter((k) => typeof schema[k] === 'object' && schema[k] !== null).sort(),
+  ['badgeAssignments', 'deviceAttributes', 'devices', 'events', 'prizeAwards'])
+for (const t of ['events', 'devices', 'device_attributes', 'badge_assignments', 'prize_awards'])
   check(`  migration creates ${t}`, new RegExp(`CREATE TABLE "${t}"`).test(migrations), true)
+/**
+ * NO ATTENDEE PII IN THE PRIZE LEDGER, checked against the MIGRATION — the
+ * thing that actually runs against Postgres — rather than against the
+ * TypeScript schema a reviewer might read instead.
+ *
+ * Scoped to the `prize_awards` block: `events` and `devices` legitimately
+ * have a `name`, and auditing those would report a problem that does not
+ * exist. `prize_name` is renamed away first, because it is a prize and not a
+ * person.
+ */
+const prizeTableSql = (/CREATE TABLE "prize_awards" \(([\s\S]*?)\n\);/
+  .exec(migrations)?.[1] ?? '').replace(/prize_name/g, 'label')
+check('  and the prize ledger declares no attendee column',
+  [prizeTableSql === '',
+   ['name', 'phone', 'whatsapp', 'age', 'gender', 'payment', 'normalized', 'amount']
+     .filter((column) => new RegExp(`"[a-z_]*${column}[a-z_]*"`, 'i').test(prizeTableSql))],
+  [false, []])
 
 check('events.slug is unique', /CONSTRAINT "events_slug_key" UNIQUE\("slug"\)/.test(migrations), true)
 check('  slug / name / timezone non-empty', ['events_slug_not_empty', 'events_name_not_empty', 'events_timezone_not_empty']
@@ -148,14 +173,44 @@ check('  no disabled message leaks a value',
   Object.values(dbEnv.DATABASE_DISABLED_MESSAGES).some((m) => /postgres|:\/\/|@/.test(m)), false)
 
 console.log('\n=== 29-35. MIGRATIONS ===')
+// RE-SCOPED BY PHASE P1.1: two appended migrations now. Earlier files stay
+// byte-for-byte as they were, which the next assertion keeps proving.
 check('migration files are version controlled', migrationFiles,
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
 check('  the journal tracks every one',
   JSON.parse(read('drizzle/meta/_journal.json')).entries.map((e) => e.tag),
-  ['0000_central_foundation', '0001_range_guards_and_touch', '0002_device_credentials'])
+  ['0000_central_foundation', '0001_range_guards_and_touch', '0002_device_credentials',
+   '0003_prize_awards', '0004_repeat_prize_awards'])
 check('  and the earlier files were never edited',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql']
     .map((file) => /password|session_version/.test(read(`drizzle/${file}`))), [false, false])
+/**
+ * A MIGRATION THAT HAS RUN ANYWHERE IS HISTORY, which is the whole reason
+ * P1.1 appended 0004 instead of editing 0003: 0003 had already been applied
+ * to Development. An environment at 0002 reaches today by running two new
+ * files, and neither touches a table any earlier phase owns.
+ */
+check('  the prize migrations touch no earlier table',
+  [/CREATE TABLE "prize_awards"/.test(read('drizzle/0003_prize_awards.sql')),
+   ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+     .some((file) => /ALTER TABLE "(events|devices|device_attributes|badge_assignments)"/
+       .test(read(`drizzle/${file}`))),
+   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql']
+     .some((file) => /prize/i.test(read(`drizzle/${file}`)))],
+  [true, false, false])
+/**
+ * AND 0003 WAS NOT REWRITTEN. The constraint it creates is still in it; what
+ * changed is that 0004 removes it afterwards. Rewriting 0003 would leave
+ * Development carrying a constraint no file in the repository describes.
+ */
+check('  0003 still creates the constraint 0004 removes',
+  [/CONSTRAINT "prize_awards_event_id_badge_number_key" UNIQUE/
+    .test(read('drizzle/0003_prize_awards.sql')),
+   /DROP CONSTRAINT "prize_awards_event_id_badge_number_key"/
+     .test(read('drizzle/0004_repeat_prize_awards.sql'))],
+  [true, true])
 const pkg = JSON.parse(read('package.json'))
 check('db scripts exist', [pkg.scripts['db:generate'], pkg.scripts['db:migrate'], pkg.scripts['db:check']],
   ['drizzle-kit generate', 'drizzle-kit migrate', 'node scripts/db-check.mjs'])

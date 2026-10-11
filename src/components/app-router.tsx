@@ -9,6 +9,7 @@ import BadgeRegistrationPage from '@/pages/badge-registration-page'
 import DeviceLoginPage from '@/pages/device-login-page'
 import HomePage from '@/pages/home-page'
 import NotFoundPage from '@/pages/not-found-page'
+import PrizesPage from '@/pages/prizes-page'
 
 /**
  * Real pathname routing on one origin, split by SECURITY REALM.
@@ -23,6 +24,8 @@ import NotFoundPage from '@/pages/not-found-page'
  *   /                      a device grant for this event, on a converged browser
  *   /badge-registration    the same, plus Registration authority and a
  *                          badge range that agrees with central
+ *   /prizes                the same, plus Prizes authority — and deliberately
+ *                          NO badge range, because a prize consumes no badge
  *
  * `/device-registration` is RETIRED. Phase D2 removed the local provisioning
  * workflow, so the path survives only for old bookmarks and redirects to
@@ -65,6 +68,12 @@ const AppRouter: React.FC = () => {
             <Route path={ROUTES.badgeRegistration}>
               <EventAccessGate module="registration">
                 <BadgeRegistrationPage />
+              </EventAccessGate>
+            </Route>
+
+            <Route path={ROUTES.prizes}>
+              <EventAccessGate module="prizes">
+                <PrizesPage />
               </EventAccessGate>
             </Route>
           </Switch>

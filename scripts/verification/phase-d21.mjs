@@ -534,19 +534,36 @@ const sheet = read('server/sync/sheet-contract.ts')
 check('22. the Sheet contract is unchanged',
   [/A1:N/.test(sheet), /A1:M/.test(sheet), /Device ID', 'Device Name'/.test(sheet)],
   [true, true, true])
+/**
+ * RE-SCOPED BY PHASE P1.1, which appended `0004_repeat_prize_awards.sql`
+ * beside P1's `0003_prize_awards.sql`. D2.1 still added none, and the prize
+ * ledger holds no badge RANGE of any kind.
+ */
 check('  no Postgres migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
-   '0002_device_credentials.sql'])
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('    and no prize migration touches a badge range',
+  PRIZE_MIGRATIONS.some((file) =>
+    /badge_assignments|range_start|range_end|next_badge/.test(read(`drizzle/${file}`))),
+  false)
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-check('23. the Function inventory is exactly eight', budget.actual, [
+/**
+ * RE-SCOPED BY PHASE P1, which spent one slot on `api/prizes.ts`. D2.1's own
+ * claim — that the refill added NO Function, because `PATCH` joined the
+ * existing claim endpoint — is unchanged and still asserted below.
+ */
+check('23. the Function inventory is exactly nine', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'device-auth', 'device-badge-claim', 'sync-registration',
+  'admin-events', 'device-auth', 'device-badge-claim', 'prizes', 'sync-registration',
 ])
-check('  with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+check('  with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
 check('  and the refill added no Function of its own',
   [budget.problems,
    readdirSync(join(root, 'api')).filter((file) => /refill|extend|badge-range/.test(file))],

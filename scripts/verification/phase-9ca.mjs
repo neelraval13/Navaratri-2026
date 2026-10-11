@@ -471,8 +471,22 @@ check('Save Device is still ONE atomic operation',
 
 console.log('\n=== MIGRATION ===')
 const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort()
+/**
+ * RE-SCOPED BY THE PRIZE PHASES, which appended `0003_prize_awards.sql` and
+ * then `0004_repeat_prize_awards.sql`. 9C-A's own concern is that IT added
+ * exactly one and that nothing later edited it, both of which are asserted
+ * directly rather than implied by a directory length.
+ */
 check('exactly one migration was added',
-  migrations, ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  migrations, ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+    '0002_device_credentials.sql', '0003_prize_awards.sql',
+    '0004_repeat_prize_awards.sql'])
+check('  and 9C-A contributed exactly one of them',
+  migrations.filter((file) => /password|credential/i.test(file)),
+  ['0002_device_credentials.sql'])
+check('  which no later migration altered',
+  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+    .some((file) => /password_hash|session_version/.test(read(`drizzle/${file}`))), false)
 const migration = read('drizzle/0002_device_credentials.sql')
 check('  it adds a nullable password_hash',
   /ADD COLUMN "password_hash" text;/.test(migration), true)

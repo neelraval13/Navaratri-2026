@@ -22,6 +22,20 @@
       "when": 1790516706899,
       "tag": "0002_device_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791653692344,
+      "tag": "0003_prize_awards",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791705647692,
+      "tag": "0004_repeat_prize_awards",
+      "breakpoints": true
     }
   ]
 }

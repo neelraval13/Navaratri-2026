@@ -1360,7 +1360,8 @@ offline is how two attendees get the same badge.
 
 Device attributes are `registration` and `prizes`. The database stores TEXT
 for future extensibility, but the application owns the allow-list and free
-text is refused.
+text is refused. Since Phase P1 `prizes` is a real capability: it opens
+`/prizes` and `/api/prizes`, and it requires no badge range.
 
 `registration` IS the whole registration-desk workflow, physical badge
 issuance included: attendee entry, hold and resume, payment, owning a
@@ -1767,6 +1768,7 @@ ROUTE POLICY DIFFERS PER MODULE:
 ```
 /                      a device grant, on a converged browser
 /badge-registration    the same, plus Registration and agreeing badge state
+/prizes                the same, plus Prizes — and NO badge state at all
 /device-registration   RETIRED — a redirect to /device-login
 ```
 
@@ -1908,7 +1910,12 @@ attendee ledger. IndexedDB remains the offline workflow state.
 
 ATTENDEE PII IS NEVER STORED CENTRALLY — no name, phone, age, gender, payment,
 held or completed registration — unless a later explicit architecture change
-says otherwise.
+says otherwise. Phase P1 added `prize_awards` and did NOT change this, and
+Phase P1.1 did not either: the prize ledger records a badge NUMBER, a prize
+name, a device and a time, and the person behind the badge stays in Google
+Sheets. The prize DIVISION — Boy, Girl, Male, Female — is part of the prize
+name, never a fact recorded about an attendee, and nothing infers one from
+the ledger.
 
 The central badge assignment owns the RANGE, never a live `nextBadge`. A
 central counter would make issuing a badge require the network, which is the
@@ -1945,6 +1952,7 @@ screen.
 
 - `/` is Home, the module launcher
 - `/badge-registration` owns the attendee badge workflow
+- `/prizes` owns prize distribution
 - `/device-registration` owns physical device provisioning and readiness
 
 Routing is presentation work. An internal route must NEVER create a new
@@ -2144,6 +2152,12 @@ only public, unauthenticated endpoints left after Phase D2 — belongs in the
 Vercel firewall, configured manually outside this repository and documented in
 `docs/VERCEL_FIREWALL.md`. Do not add Redis, a database or a KV store for it.
 
+THE LIVE PLAN PERMITS ONE RULE. Production therefore uses a SINGLE combined
+rule — `POST /api/admin-auth` OR `POST /api/device-auth`, 10 requests per 60
+seconds per IP, fixed window — not the two separate rules an earlier revision
+of the documentation described. The two endpoints share one bucket, which is
+why provisioning several desks at once needs planning rather than surprise.
+
 The device rule must be LOOSER than it looks like it should be: several desks
 normally leave the venue through one NAT address, so an IP-keyed rule sees
 them as one client, and locking the venue out is an outage rather than a
@@ -2207,6 +2221,7 @@ the retired realm.
 /admin                 Admin realm, unchanged and separate
 /                      a device grant for this event, on a CONVERGED browser
 /badge-registration    the same, plus Registration and agreeing badge state
+/prizes                the same, plus Prizes — no range, no binding needed
 /device-registration   RETIRED — a redirect to /device-login, nothing more
 ```
 
@@ -2395,15 +2410,17 @@ the build has already succeeded, at "Deploying outputs…". No build step
 reports it, so the budget is a durable check, not something a green build
 proves.
 
-Current inventory: **8 of 12, four slots of headroom.**
+Current inventory: **9 of 12, three slots of headroom.**
 
 ```
 admin-auth · admin-badge-assignment · admin-device-password · admin-devices
-admin-events · device-auth · device-badge-claim · sync-registration
+admin-events · device-auth · device-badge-claim · prizes · sync-registration
 ```
 
 Phase D2 freed three slots by DELETING the operator realm, not by
-consolidating it. Those three names must never reappear under `api/`.
+consolidating it. Those three names must never reappear under `api/`. Phase P1
+then spent one on `prizes`, which serves the whole prize module through two
+method exports rather than three endpoints.
 
 A shared helper NEVER belongs under `api/` — it costs a deployment Function
 for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
@@ -2585,6 +2602,162 @@ On `/badge-registration`, an exhausted range names the range this desk owns
 and offers **Add More Badges**, which links to Device Sign-In. Hold
 Registration stays available throughout, and nothing in the registration
 workflow writes a badge range.
+
+## Prize Distribution
+
+`/prizes` lets an authorized Prize device award prizes to registered
+attendees and shows the permanent history. Added in Phase P1; Phase P1.1
+changed the product rule to allow REPEAT WINNERS and replaced free-text prize
+names with a fixed catalog of eight.
+
+THE PRIVACY BOUNDARY IS UNCHANGED, and this module is where it would be
+easiest to lose. Google Sheets holds the attendees; Postgres holds only the
+prize ledger:
+
+```
+prize_awards   event_id · badge_number · prize_name · awarded_by_device_id · awarded_at
+```
+
+NO ATTENDEE DATA IS STORED CENTRALLY. There is no name, phone, age, gender,
+WhatsApp link or payment column, and none may be added: the screen needs a
+name beside a badge number, so the name is READ from the Badge Register on
+every request and joined into the response. A convenience copy in Postgres
+would be a second, unsynchronised source of truth for personal data in a
+database that has managed without any since Phase 9A.
+
+The phone number and the WhatsApp link are not merely unstored — they are
+never read. The prize desk identifies an attendee by the badge in their hand.
+
+The roster comes from the SAME Badge Register that production registrations
+sync into. There is deliberately no central attendee table to read instead,
+and Development fixtures therefore belong in the Development Badge Register,
+never in a new Postgres table invented for testing.
+
+REPEAT PRIZES ARE LEGAL. An attendee may win Best Dance and Best Dress, may
+win the same prize again, and may collect several over the evening. P1's
+`UNIQUE(event_id, badge_number)` was DROPPED by
+`0004_repeat_prize_awards.sql` and must NOT be replaced — not by
+`UNIQUE(event_id, badge_number, prize_name)`, not by one per category, not by
+a unique index. Each of those refuses a second legitimate award. `db:check`
+proves the absence by SHAPE, so a replacement under a new name fails it, and
+`release:check` fails if the schema declares uniqueness over the badge number
+again.
+
+0003 WAS NOT EDITED. It had already been applied to Development, and a
+migration that has run anywhere is history, so 0004 was appended. An
+environment that has never seen P1 applies 0003 then 0004.
+
+PREVIOUS AWARDS ARE INFORMATION, NEVER A REFUSAL. The ledger is not consulted
+before an insert and the endpoint has no conflict to report: `already-awarded`,
+its public conflict name, the 409 and `server/prizes/conflicts.ts` were all
+removed with the constraint. Opening Give Prize for a badge that already has
+awards shows a prominent warning naming each earlier prize with its time and
+awarding device, and the button reads `Award Another Prize` — it disables
+nothing, removes nobody from the list and asks for no override. The warning is
+drawn from the history the screen already loaded, and a successful award is
+APPENDED locally so the next open shows it; an explicit Refresh re-reads.
+
+EVERY REGISTERED ATTENDEE STAYS IN THE LIST. The first tab is `Attendees` and
+its count is the number of registrations, which does not move when a prize is
+given; the second is `Awards` and its count is the number of RECORDS, so one
+badge may appear several times. Nothing subtracts an attendee who has won:
+`composePrizeRoster` returns the roster unchanged and `filterAttendees` is
+never handed the award history, so no filter can hide a winner.
+
+CONCURRENCY CHANGED DELIBERATELY. Two desks awarding the same badge at the
+same moment BOTH succeed, and the database no longer arbitrates it. What is
+still protected is an accidental double submission from ONE UI action: the
+submit and all eight prize buttons are disabled while a request is in flight,
+the desk refuses a second call, and overlapping roster reads resolve by
+SEQUENCE rather than by timing.
+
+A SHEET THAT CANNOT BE READ WRITES NOTHING. The register is the only thing
+that can confirm the badge exists, so the read happens before the insert and a
+failure fails closed with a 503. Prizes reuses the EXISTING release interlock
+rather than a read-only variant of it: the interlock is evaluated before any
+credential is read, and a roster is only meaningful when this deployment is
+the one writing that ledger.
+
+PRIZE HISTORY IS APPEND-ONLY from the product. No undo, no delete, no edit, so
+`prize_awards` carries no `updated_at` and gets no `set_updated_at` trigger.
+Admin has no prize screen either; correcting a mistaken award is a deliberate
+database operation by a human.
+
+ONLINE ONLY, and the screen says so: *"Prizes requires an internet
+connection."* While offline there is no roster and NO award control at all, so
+nothing can appear to succeed locally. There is no offline queue, no
+optimistic award, no local authoritative prize state, no polling and no
+heartbeat — two disconnected prize desks must never be able to award the same
+badge. Registration can be offline-first because each desk owns a disjoint
+range of physical badges; prizes have no such partition.
+
+AUTHORIZATION IS `prizes` AND NOTHING ELSE of the badge world. A device
+holding only `prizes` is a complete prize desk: it needs no `registration`, no
+central badge range and no `centralBadgeRangeBinding`, because awarding a
+prize consumes no badge number. `authorizeEventModule('prizes', …)` therefore
+does NOT consult `checkBadgeOwnership` — running it would block a prizes-only
+device on `binding-missing` for a range it was never meant to have, and would
+close the prize desk because a REGISTRATION desk's ledger disagreed about
+something prizes cannot affect. Everything above that check still applies: a
+device grant for this event, an enrollment that agrees with it, and a
+CONVERGED local identity.
+
+A `registration`-only device is refused. A device with both may use both. An
+Admin cookie authorizes nothing here, and `api/prizes.ts` imports no Admin
+code.
+
+ONE FUNCTION, dispatched by method: `GET /api/prizes` returns the attendees
+and the history, `POST /api/prizes` awards. Separate list, history and award
+endpoints would cost three of twelve deployment Functions for one screen.
+
+The body is `badgeNumber` and `prizeName` and nothing else. `eventId`,
+`eventSlug`, `deviceId`, `loginName`, `awardedAt`, `awardedBy`, `attendee`,
+`name`, `age` and `gender` are REFUSED rather than ignored — the session
+identifies the device and the event, the database stamps the time, and an
+attendee field submitted by a client is a claim about a person the Badge
+Register already answers.
+
+`attendees` is EVERY Badge Register attendee, badge-ascending — nothing is
+subtracted. `awards` is every RECORD, newest first, and its `attendee` may be
+`null`: history must survive a Sheet row being edited away, because the prize
+was still given. Several award rows may share a badge number, including rows
+with the same `prizeName`, and `id` is what identifies an award.
+
+PRIZE NAMES COME FROM A FIXED CATALOG of eight canonical labels:
+
+```
+Best Dance - Boy    Best Dance - Girl    Best Dance - Male    Best Dance - Female
+Best Dress - Boy    Best Dress - Girl    Best Dress - Male    Best Dress - Female
+```
+
+The allow-list lives in `src/shared/prize-contract.ts` and is read by the
+browser chooser and the server, so what a volunteer can tap and what the
+endpoint accepts cannot drift. There is NO catalog table and none is required.
+The canonical LABEL is the wire value and the stored value; the `code` is for
+keys, grouping and tests and is never stored. An arbitrary string is REFUSED
+with a 400, never corrected into whichever prize it resembled.
+
+LEGACY NAMES STAY DISPLAYABLE. A P1 row may hold any free-text name up to 80
+characters, so the API returns it, the client parser accepts it and history
+renders it. Only NEW awards are restricted to the eight.
+
+THE DEMOGRAPHIC SUGGESTION IS NOT AUTHORIZATION. `suggestedPrizeDivision`
+derives a division from the attendee's age and gender — under 18 gives
+Boy/Girl, 18 and over Male/Female — and the chooser HIGHLIGHTS it. All eight
+buttons stay enabled, nothing is preselected, nothing is auto-submitted, and
+no award is refused for disagreeing with it. The server never calls it, and
+`release:check` fails if anything under `api/` or `server/` does. No division
+is stored against a person: it is a property of the prize.
+
+`server/prizes/awards.ts` is the ONLY module that reads or writes
+`prize_awards`. Do not add a second writer.
+
+Development fixtures live in `scripts/seed-prizes-development.mjs` — badges
+`#9001-#9030`, names `Prize Test 01` … `Prize Test 30`. It refuses to run
+unless `--confirm` is passed, `VERCEL_ENV` is exactly `development`,
+`SYNC_ALLOWED_VERCEL_ENV` is exactly `development`, and the real interlock
+agrees. It is idempotent, its cleanup blanks only its own rows in place, and
+it never deletes a row. See `docs/PRIZES.md`.
 
 ### Google Sheets Client
 

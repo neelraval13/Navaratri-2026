@@ -520,6 +520,8 @@ check('/device-login is its own realm',
 check('  and is not inside the event shell',
   /<EventAppGate>[\s\S]*deviceLogin/.test(stripComments(read('src/components/app-router.tsx'))), false)
 setDeviceGrant(grant(), DEVICE_STATE)
+// UNCHANGED BY PHASE P1: Home became attribute-aware in the same phase that
+// built Prizes, and this grant holds `registration` only.
 check('home still links only to real destinations',
   [...new Set(hrefsIn(renderRoute('/', CONFIG).html))].sort(),
   ['/admin', '/badge-registration', '/device-login'])
@@ -792,9 +794,22 @@ check('  stores unchanged',
   ((/\.stores\(\{([\s\S]*?)\}\)/.exec(read('src/db/database.ts'))?.[1] ?? '')
     .match(/^\s*(\w+):/gm) ?? []).map((entry) => entry.trim().replace(':', '')),
   ['registrations', 'config', 'outbox'])
+/**
+ * RE-SCOPED BY PHASE P1.1. The prize phases appended
+ * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
+ * phase still added none, and the assertion below keeps the real guarantee:
+ * neither later migration reaches into this phase's subject.
+ */
 check('  NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql'])
+  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
+   '0002_device_credentials.sql', '0003_prize_awards.sql',
+   '0004_repeat_prize_awards.sql'])
+/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+check('  and the prize migration does not touch event permissions',
+  PRIZE_MIGRATIONS.some((file) => /attribute|permission|enabled/i.test(read(`drizzle/${file}`))),
+  false)
 check('37, 40. the Sheet schema is unchanged',
   [/A1:N/.test(read('server/sync/sheet-contract.ts')),
    /A1:M/.test(read('server/sync/sheet-contract.ts')),
@@ -803,10 +818,10 @@ check('37, 40. the Sheet schema is unchanged',
 
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
-// C3B added no Function; Phase D2 removed the three Operator ones.
-check('62. the Function inventory is eight', budget.actual.length, 8)
-check('  with four slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 4)
+// RE-SCOPED BY PHASE P1, which added one. C3B still added none.
+check('62. the Function inventory is nine', budget.actual.length, 9)
+check('  with three slots of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 3)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 19, 23, 55-56. THE UI ===')

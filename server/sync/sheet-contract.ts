@@ -76,7 +76,20 @@ export const HELD_REGISTRATIONS_HEADERS = [
 
 export const BADGE_REGISTER_COLUMNS = {
   badge: 0,
+  /**
+   * The three attendee columns the PRIZE roster is allowed to read, named
+   * here so their positions live in this contract rather than being
+   * re-derived by a second reader that could drift from it.
+   *
+   * `phone` and the WhatsApp column at index 3 are deliberately NOT among
+   * them: the prize desk identifies an attendee by the badge in their hand,
+   * and a contact number would be personal data copied somewhere new for no
+   * operational gain. See server/prizes/roster.ts.
+   */
+  name: 1,
   phone: 2,
+  age: 4,
+  gender: 5,
   registrationId: 10,
   updatedAt: 11,
   deviceId: 12,

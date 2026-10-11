@@ -11,6 +11,8 @@ export const state = {
   attributes: [], // { deviceId, attribute }
   assignments: [], // { id, eventId, deviceId, rangeStart, rangeEnd, assignedAt, releasedAt }
   events: [],
+  // { id, eventId, badgeNumber, prizeName, awardedByDeviceId, awardedAt }
+  prizeAwards: [],
   /** Statements actually applied, in order. Reset between scenarios. */
   applied: [],
   /** Set to a message to make the NEXT applied write throw. */
@@ -30,6 +32,7 @@ export const reset = () => {
   state.attributes = []
   state.assignments = []
   state.events = []
+  state.prizeAwards = []
   state.applied = []
   state.failNextWrite = null
   state.beforeNextWrite = null
@@ -42,6 +45,7 @@ const snapshot = () => ({
   attributes: clone(state.attributes),
   assignments: clone(state.assignments),
   events: clone(state.events),
+  prizeAwards: clone(state.prizeAwards),
 })
 
 const restore = (taken) => {
@@ -49,6 +53,7 @@ const restore = (taken) => {
   state.attributes = taken.attributes
   state.assignments = taken.assignments
   state.events = taken.events
+  state.prizeAwards = taken.prizeAwards
 }
 
 const rowsOf = (table) => {
@@ -56,10 +61,56 @@ const rowsOf = (table) => {
   if (table === 'device_attributes') return state.attributes
   if (table === 'badge_assignments') return state.assignments
   if (table === 'events') return state.events
+  if (table === 'prize_awards') return state.prizeAwards
   throw new Error(`unexpected table ${table}`)
 }
 
-/** Evaluates a descriptor produced by the fake drizzle-orm operators. */
+const isColumn = (value) =>
+  typeof value === 'object' && value !== null && value.__column === true
+
+/**
+ * Evaluates a descriptor against a SCOPE: one row per table in the query.
+ *
+ * A condition names its own table, so `eq(devices.eventId, …)` in a query
+ * whose FROM is `device_attributes` reads the JOINED device row rather than
+ * looking for an `eventId` the attribute row does not have. The fake used to
+ * treat a join as a no-op and resolve every column against the base row,
+ * which silently answered that query with nothing at all.
+ *
+ * `value` may itself be a column, which is what a join condition is.
+ */
+const readScoped = (scope, fallbackTable, descriptor) => {
+  const row = scope[descriptor.table] ?? scope[fallbackTable]
+
+  return row === undefined ? undefined : row[descriptor.column]
+}
+
+const matchesScope = (scope, fallbackTable, condition) => {
+  if (condition === undefined || condition === null) return true
+
+  if (condition.op === 'and') {
+    return condition.parts.every((part) => matchesScope(scope, fallbackTable, part))
+  }
+
+  if (condition.op === 'eq') {
+    const left = readScoped(scope, fallbackTable, condition)
+    const right = isColumn(condition.value)
+      ? readScoped(scope, fallbackTable, condition.value)
+      : condition.value
+
+    return left === right
+  }
+
+  if (condition.op === 'isNull') {
+    const value = readScoped(scope, fallbackTable, condition)
+
+    return value === null || value === undefined
+  }
+
+  throw new Error(`unexpected condition ${String(condition.op)}`)
+}
+
+/** The single-table form, for the update and delete builders. */
 const matches = (row, condition) => {
   if (condition === undefined || condition === null) return true
   if (condition.op === 'and') return condition.parts.every((p) => matches(row, p))
@@ -68,13 +119,15 @@ const matches = (row, condition) => {
   throw new Error(`unexpected condition ${String(condition.op)}`)
 }
 
-const project = (row, columns) => {
-  if (columns === undefined) return clone(row)
+const project = (scope, fallbackTable, columns) => {
+  const base = scope[fallbackTable]
+
+  if (columns === undefined) return clone(base)
 
   const picked = {}
 
   for (const [alias, descriptor] of Object.entries(columns)) {
-    picked[alias] = clone(row[descriptor.column])
+    picked[alias] = clone(readScoped(scope, fallbackTable, descriptor))
   }
 
   return picked
@@ -212,6 +265,41 @@ const guardBadgeAssignmentUpdate = (row) => {
   }
 }
 
+/**
+ * The constraints `prize_awards` STILL has after `0004_repeat_prize_awards`.
+ *
+ * THERE IS NO UNIQUENESS HERE, deliberately. P1's
+ * `UNIQUE(event_id, badge_number)` was dropped in 0004 because repeat prizes
+ * became the event rule, so a fake that kept enforcing it would fail the very
+ * tests that prove a second and third award succeed — and would quietly
+ * describe a database nobody has. Do not add one back, by any column set.
+ *
+ * What remains is modelled faithfully, because those still refuse writes: the
+ * same-event composite foreign key, the positive badge number, and both
+ * bounds on the prize name.
+ */
+const guardPrizeAward = (row) => {
+  const device = state.devices.get(row.awardedByDeviceId)
+
+  // The composite foreign key: a prize cannot pair an event with a device
+  // belonging to a different one.
+  if (device === undefined || device.eventId !== row.eventId) {
+    throw constraintViolation('prize_awards_device_event_fk')
+  }
+
+  if (!(row.badgeNumber > 0)) {
+    throw constraintViolation('prize_awards_badge_number_positive')
+  }
+
+  if (String(row.prizeName ?? '').trim() === '') {
+    throw constraintViolation('prize_awards_prize_name_not_empty')
+  }
+
+  if (String(row.prizeName ?? '').length > 80) {
+    throw constraintViolation('prize_awards_prize_name_max_length')
+  }
+}
+
 const guardFailure = () => {
   if (state.beforeNextWrite !== null) {
     const commit = state.beforeNextWrite
@@ -256,7 +344,7 @@ const statement = (describe, apply) => {
 }
 
 const selectBuilder = (columns) => {
-  const query = { columns, table: null, condition: undefined }
+  const query = { columns, table: null, condition: undefined, joins: [] }
 
   const builder = {
     from(table) {
@@ -264,9 +352,15 @@ const selectBuilder = (columns) => {
 
       return builder
     },
-    innerJoin() {
-      // The registry's only join narrows attributes to one event; the fake
-      // keeps every attribute row scoped by device, so the join is a no-op.
+    /**
+     * A REAL inner join: the first matching row of the joined table is bound
+     * into the scope, and a base row with no match is dropped — which is what
+     * `INNER` means, and is how a prize whose device was deleted would
+     * disappear rather than surface a blank name.
+     */
+    innerJoin(table, condition) {
+      query.joins.push({ table: table.__table, condition })
+
       return builder
     },
     where(condition) {
@@ -280,11 +374,39 @@ const selectBuilder = (columns) => {
     then(resolve, reject) {
       try {
         state.applied.push(`select ${String(query.table)}`)
-        resolve(
-          rowsOf(query.table)
-            .filter((row) => matches(row, query.condition))
-            .map((row) => project(row, columns)),
-        )
+
+        const results = []
+
+        for (const row of rowsOf(query.table)) {
+          const scope = { [query.table]: row }
+          let joined = true
+
+          for (const join of query.joins) {
+            const match = rowsOf(join.table).find((candidate) =>
+              matchesScope(
+                { ...scope, [join.table]: candidate },
+                query.table,
+                join.condition,
+              ),
+            )
+
+            if (match === undefined) {
+              joined = false
+
+              break
+            }
+
+            scope[join.table] = match
+          }
+
+          if (!joined || !matchesScope(scope, query.table, query.condition)) {
+            continue
+          }
+
+          results.push(project(scope, query.table, columns))
+        }
+
+        resolve(results)
       } catch (error) {
         reject(error)
       }
@@ -329,6 +451,11 @@ const insertBuilder = (table) => {
             row.releasedAt ??= null
             guardBadgeAssignment(row)
             state.assignments.push(row)
+          } else if (target === 'prize_awards') {
+            row.id ??= `11111111-2222-4333-8444-${String(100000000000 + nextId++)}`
+            row.awardedAt ??= new Date('2026-10-10T12:30:00.000Z')
+            guardPrizeAward(row)
+            state.prizeAwards.push(row)
           } else if (target === 'events') {
             row.id ??= `event-${String(nextId++)}`
             row.active ??= true

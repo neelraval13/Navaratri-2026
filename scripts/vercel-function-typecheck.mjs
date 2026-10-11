@@ -66,6 +66,7 @@ export const EXPECTED_FUNCTIONS = [
   'admin-events',
   'device-auth',
   'device-badge-claim',
+  'prizes',
   'sync-registration',
 ]
 

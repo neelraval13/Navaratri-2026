@@ -6,25 +6,60 @@ import { ROUTES } from '@/app/routes'
 import DeviceReadiness from '@/components/device/device-readiness'
 import { Badge } from '@/components/ui/badge'
 import { isDeviceRegistered } from '@/db/device'
+import { useDeviceEventAuthorization } from '@/device-auth/device-event-authorization-context'
 import { useEventConfig } from '@/hooks/use-event-config'
+import type { DeviceAttribute } from '@/shared/device-attributes'
 import { cn } from '@/lib/utils'
+
+/**
+ * Why a card cannot be opened.
+ *
+ *   coming-soon    the module does not exist yet
+ *   not-permitted  it exists, and this Device was not granted it
+ *
+ * Two different facts, so two different labels. Telling a prize volunteer
+ * that Badge Registration is "Coming soon" would be a lie, and telling them
+ * nothing at all would send them into a screen that refuses them.
+ */
+type ModuleAccess =
+  /** Built, granted to this Device, and openable. */
+  | { kind: 'available'; href: string }
+  /** Built, but this Device was not granted it. */
+  | { kind: 'not-permitted' }
+  /** Does not exist yet. */
+  | { kind: 'coming-soon' }
 
 interface ModuleCardProps {
   icon: React.ReactNode
   title: string
   description: string
-  href?: string
+  /**
+   * The destination travels WITH the verdict, so an openable card without a
+   * route and an inert card that still carries one are both unrepresentable
+   * rather than merely unlikely.
+   */
+  access: ModuleAccess
 }
 
 /**
- * One operations module. A module without an `href` is not yet built and is
- * deliberately inert — it renders no link, so it cannot navigate anywhere.
+ * Two different facts, so two different labels. Telling a prize volunteer
+ * that Badge Registration is "Coming soon" would be a lie, and saying nothing
+ * at all would send them into a screen that refuses them.
+ */
+const INERT_LABEL = {
+  'coming-soon': 'Coming soon',
+  'not-permitted': 'Not on this device',
+} as const
+
+/**
+ * One operations module. Only an `available` card navigates — the other two
+ * render no link at all, so neither can be opened by a tap or by a keyboard.
  */
 const ModuleCard: React.FC<ModuleCardProps> = ({
   icon,
   title,
   description,
-  href,
+  access,
 }) => {
   const body = (
     <>
@@ -32,18 +67,18 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
         <span
           className={cn(
             'flex size-11 shrink-0 items-center justify-center rounded-2xl border border-border',
-            href === undefined ? 'text-muted-foreground' : 'text-primary',
+            access.kind === 'available' ? 'text-primary' : 'text-muted-foreground',
           )}
         >
           {icon}
         </span>
 
-        {href === undefined ? (
-          <Badge variant="secondary">
-            Coming soon
-          </Badge>
-        ) : (
+        {access.kind === 'available' ? (
           <ArrowRight className="mt-3 size-5 shrink-0 text-muted-foreground transition-transform group-hover/module:translate-x-0.5" />
+        ) : (
+          <Badge variant="secondary">
+            {INERT_LABEL[access.kind]}
+          </Badge>
         )}
       </div>
 
@@ -62,7 +97,7 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
   const shell =
     'flex min-h-44 flex-col justify-between gap-6 rounded-3xl border border-border bg-card p-6'
 
-  if (href === undefined) {
+  if (access.kind !== 'available') {
     return (
       <div
         aria-disabled="true"
@@ -75,7 +110,7 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
 
   return (
     <Link
-      href={href}
+      href={access.href}
       className={cn(
         shell,
         'group/module outline-none transition-colors hover:border-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50',
@@ -89,23 +124,37 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
 /**
  * The module launcher.
  *
+ * ATTRIBUTE-AWARE. Home renders only for a device that holds at least one
+ * capability, and each card reflects whether THIS device holds the one its
+ * module needs. The card is still not the security boundary — every module
+ * authorizes itself at its own route, and `/prizes` and `/badge-registration`
+ * each refuse a device that lacks the attribute whatever Home drew. What this
+ * avoids is inviting a prize volunteer into a screen that will turn them
+ * away.
+ *
+ * The grant comes from the ONE provider that already owns the session check.
+ * Home performs no request of its own, and an absent grant simply means
+ * nothing is offered — it never means everything is.
+ *
  * The device line here is STATIC generic identity only. It names the device,
  * never whether it distributes badges, and never `nextBadge`, remaining or
  * the pending queue — Home holds its own configuration instance and would
  * show those stale. They live in Device Readiness, which reads fresh from
  * IndexedDB every time it is opened.
- *
- * Since Phase D2 this page renders only for a browser whose identity IS the
- * signed-in central device, so the identity is always present. It is still
- * read defensively rather than asserted.
  */
 const HomePage: React.FC = () => {
   const eventConfig = useEventConfig()
+  const device = useDeviceEventAuthorization()
 
   const registered =
     eventConfig.config !== null && isDeviceRegistered(eventConfig.config)
       ? eventConfig.config
       : null
+
+  const moduleAccess = (attribute: DeviceAttribute, href: string): ModuleAccess =>
+    device.grant !== null && device.grant.attributes.includes(attribute)
+      ? { kind: 'available', href }
+      : { kind: 'not-permitted' }
 
   return (
     <div className="space-y-8">
@@ -143,19 +192,21 @@ const HomePage: React.FC = () => {
           icon={<IdCard className="size-5" />}
           title="Badge Registration"
           description="Register attendees, manage holds, payment and badge issuance."
-          href={ROUTES.badgeRegistration}
+          access={moduleAccess('registration', ROUTES.badgeRegistration)}
         />
 
         <ModuleCard
           icon={<Music className="size-5" />}
           title="Dandiya"
           description="Dandiya operations for the event."
+          access={{ kind: 'coming-soon' }}
         />
 
         <ModuleCard
           icon={<Trophy className="size-5" />}
           title="Prizes"
-          description="Prize allocation and handover."
+          description="Award prizes to registered attendees and review what has been given."
+          access={moduleAccess('prizes', ROUTES.prizes)}
         />
       </div>
 

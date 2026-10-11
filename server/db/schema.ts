@@ -227,6 +227,77 @@ export const badgeAssignments = pgTable(
   ],
 )
 
+/**
+ * THE PRIZE LEDGER. Which badge received which prize, from which device, when.
+ *
+ * ATTENDEE PII IS STILL NEVER STORED CENTRALLY. There is deliberately no
+ * name, phone, age, gender, WhatsApp link or payment column here: the person
+ * behind a badge number lives in the Google Sheet, and the prize screen joins
+ * the two per request. Copying a name in to make history easier to read would
+ * create a second, unsynchronised copy of personal data in a database that
+ * has managed without any.
+ *
+ * REPEAT PRIZES ARE LEGAL, since Phase P1.1. One attendee may win Best Dance
+ * and Best Dress, or the same prize twice, so there is NO
+ * `UNIQUE(event_id, badge_number)` — `0004_repeat_prize_awards.sql` dropped
+ * the one P1 created — and no per-attendee uniqueness constraint of any kind
+ * may replace it. Not on `(event_id, badge_number, prize_name)`, not by
+ * category, and not as a unique index: every one of those would refuse a
+ * second legitimate award, and the event rule is that the volunteer decides.
+ *
+ * Previous awards are INFORMATION. The prize desk warns about them and still
+ * lets another through, so three identical rows for one badge are three
+ * legitimate facts rather than a race to be arbitrated.
+ *
+ * APPEND-ONLY from the product. There is no undo, no delete and no edit in
+ * this phase, so the row needs no `updated_at` and gets no `set_updated_at`
+ * trigger — `awarded_at` is the only time that means anything.
+ */
+export const prizeAwards = pgTable(
+  'prize_awards',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'restrict' }),
+    badgeNumber: integer('badge_number').notNull(),
+    prizeName: text('prize_name').notNull(),
+    awardedByDeviceId: uuid('awarded_by_device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'restrict' }),
+    awardedAt: timestamp('awarded_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    /**
+     * The same cross-event integrity the badge assignments use: a prize
+     * cannot be recorded for one event by a device belonging to another.
+     */
+    foreignKey({
+      name: 'prize_awards_device_event_fk',
+      columns: [table.awardedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    index('prize_awards_event_id_idx').on(table.eventId),
+    index('prize_awards_awarded_by_device_id_idx').on(table.awardedByDeviceId),
+    check('prize_awards_badge_number_positive', sql`${table.badgeNumber} > 0`),
+    /**
+     * The application trims and length-checks the name at its boundary; these
+     * are the database's own floor, so a future writer cannot store a blank
+     * or unbounded prize name whatever it believes it validated.
+     */
+    check(
+      'prize_awards_prize_name_not_empty',
+      sql`length(btrim(${table.prizeName})) > 0`,
+    ),
+    check(
+      'prize_awards_prize_name_max_length',
+      sql`length(${table.prizeName}) <= 80`,
+    ),
+  ],
+)
+
 export type Event = typeof events.$inferSelect
 export type NewEvent = typeof events.$inferInsert
 export type Device = typeof devices.$inferSelect
@@ -235,3 +306,5 @@ export type DeviceAttribute = typeof deviceAttributes.$inferSelect
 export type NewDeviceAttribute = typeof deviceAttributes.$inferInsert
 export type BadgeAssignment = typeof badgeAssignments.$inferSelect
 export type NewBadgeAssignment = typeof badgeAssignments.$inferInsert
+export type PrizeAward = typeof prizeAwards.$inferSelect
+export type NewPrizeAward = typeof prizeAwards.$inferInsert

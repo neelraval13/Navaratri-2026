@@ -59,9 +59,10 @@ Admin needs all three:
   trimmed, not case-folded)
 
   8 is the floor, not a recommendation. A short admin code leans on the edge
-  rate limit for `POST /api/admin-auth` (5 attempts per minute per IP) and
-  the fixed wrong-code delay; neither replaces entropy, so prefer a passphrase
-  well above the minimum.
+  rate limit for `POST /api/admin-auth` — **10 requests / 60 seconds / IP**,
+  shared with `POST /api/device-auth` because the live plan permits one rule —
+  and on the fixed wrong-code delay. Neither replaces entropy, so prefer a
+  passphrase well above the minimum.
 - `EVENT_ADMIN_SESSION_SECRET` (minimum 32 characters)
 
 With any of them absent, `/admin` fails closed with a clear message and **the
@@ -396,10 +397,14 @@ replaces the transitional self-registration flow.
 
 ## Rate limiting
 
-`POST /api/admin-auth` should be rate limited at the Vercel edge. See
-[VERCEL_FIREWALL.md](VERCEL_FIREWALL.md). A 429 shows a generic *"Too many
-admin login attempts"* message that reveals no address, no counter and nothing
-about the submitted code.
+`POST /api/admin-auth` is rate limited at the Vercel edge by the ONE combined
+rule the live plan permits: `POST /api/admin-auth` **OR**
+`POST /api/device-auth`, 10 requests per 60 seconds per IP, fixed window. Admin
+has no rule of its own, and the two endpoints share one bucket. See
+[VERCEL_FIREWALL.md](VERCEL_FIREWALL.md).
+
+A 429 shows a generic *"Too many admin login attempts"* message that reveals no
+address, no counter and nothing about the submitted code.
 
 ---
 

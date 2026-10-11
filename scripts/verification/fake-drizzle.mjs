@@ -28,8 +28,20 @@ export const badgeAssignments = tableOf('badge_assignments', [
   'id', 'eventId', 'deviceId', 'rangeStart', 'rangeEnd', 'assignedAt', 'releasedAt',
 ])
 
-export const eq = (left, value) => ({ op: 'eq', column: left.column, value })
-export const isNull = (left) => ({ op: 'isNull', column: left.column })
+export const prizeAwards = tableOf('prize_awards', [
+  'id', 'eventId', 'badgeNumber', 'prizeName', 'awardedByDeviceId', 'awardedAt',
+])
+
+/**
+ * `left` is always a column. `value` may be a LITERAL or, in a join
+ * condition, another column — `eq(devices.id, prizeAwards.awardedByDeviceId)`
+ * — so both the table and the column of each side are carried and the
+ * evaluator decides which it is looking at.
+ */
+export const eq = (left, value) => ({
+  op: 'eq', table: left.table, column: left.column, value,
+})
+export const isNull = (left) => ({ op: 'isNull', table: left.table, column: left.column })
 export const and = (...parts) => ({ op: 'and', parts: parts.filter(Boolean) })
 export const asc = (left) => ({ op: 'asc', column: left.column })
 
