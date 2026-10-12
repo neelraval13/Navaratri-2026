@@ -2,8 +2,8 @@ import { Check, TriangleAlert, X } from 'lucide-react'
 import type * as React from 'react'
 
 import { Button } from '@/components/ui/button'
-import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDate, formatEventDateTime } from '@/lib/datetime'
+import { formatPhoneNumber } from '@/lib/phone'
 import {
   currentEventDayKey,
   eventDayKey,
@@ -15,6 +15,7 @@ import {
   unresolvedHolders,
 } from '@/dandiya/dandiya-filters'
 import type { DandiyaActiveLoan, DandiyaHolder } from '@/shared/dandiya-contract'
+import { dandiyaHolderDetail, dandiyaHolderLabel } from '@/shared/dandiya-contract'
 
 /** What the desk can ask for from this card. */
 export interface DandiyaRequest {
@@ -128,14 +129,30 @@ const ActiveLoanCard: React.FC<ActiveLoanCardProps> = ({ loan, isBusy, onRequest
             >
               <div className="flex items-baseline gap-3">
                 <span className="font-heading text-base font-semibold">
-                  {formatBadgeNumber(holder.badgeNumber)}
+                  {dandiyaHolderLabel(holder)}
                 </span>
 
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  {holder.attendee === null
-                    ? 'Attendee no longer in the register'
-                    : holder.attendee.name}
+                  {dandiyaHolderDetail(holder)}
                 </span>
+
+                {/*
+                  WHO ANSWERS FOR THE WHOLE PAIR, on a MIXED loan only. One
+                  badge and one guest goes out ON THE BADGE, so that
+                  attendee's obligation outlives their own stick — the label
+                  is there so a volunteer taking the first stick back does not
+                  read the pair as settled.
+
+                  Read from the server's own `accountabilityBadgeNumber`
+                  rather than inferred here, and absent for the other two
+                  modes, where it would be noise.
+                */}
+                {loan.accountabilityBadgeNumber === null ||
+                holder.badgeNumber !== loan.accountabilityBadgeNumber ? null : (
+                  <span className="shrink-0 text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                    Accountability badge
+                  </span>
+                )}
               </div>
 
               {holder.resolution === null ? (
@@ -203,6 +220,28 @@ const ActiveLoanCard: React.FC<ActiveLoanCardProps> = ({ loan, isBusy, onRequest
             </li>
           ))}
         </ul>
+
+        {/*
+          THE CONTACT NUMBER, when neither holder has a badge. It is how the
+          team finds two people who were never through the registration desk,
+          so it belongs on the card somebody is already looking at — not in a
+          database a volunteer cannot open. Shown only when it exists, which
+          is only for a fully badgeless pair.
+        */}
+        {typeof loan.contactPhone !== 'string' ? null : (
+          <div className="rounded-xl border border-border bg-muted/40 px-3 py-2">
+            <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
+              Contact
+            </p>
+
+            <a
+              href={`tel:+91${loan.contactPhone}`}
+              className="font-heading text-base font-semibold underline-offset-4 hover:underline"
+            >
+              {`+91 ${formatPhoneNumber(loan.contactPhone)}`}
+            </a>
+          </div>
+        )}
 
         <div className="text-sm text-muted-foreground">
           <p className={outstanding ? 'font-medium text-amber-700 dark:text-amber-400' : ''}>

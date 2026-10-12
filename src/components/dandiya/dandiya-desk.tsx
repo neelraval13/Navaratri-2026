@@ -20,6 +20,7 @@ import {
   issueDandiyaPair,
   resolveDandiyaPair,
 } from '@/dandiya/dandiya-api'
+import { dandiyaHolderLabel } from '@/shared/dandiya-contract'
 import {
   outstandingBeforeDay,
   selectActiveLoans,
@@ -27,7 +28,6 @@ import {
   type HistoryView,
 } from '@/dandiya/dandiya-filters'
 import { useNetworkStatus } from '@/hooks/use-network-status'
-import { formatBadgeNumber } from '@/lib/badge'
 import { cn } from '@/lib/utils'
 import type { DandiyaBoardResponse } from '@/shared/dandiya-contract'
 
@@ -249,7 +249,10 @@ const DandiyaDesk: React.FC = () => {
 
   const issue = async (input: {
     pairCode: string
-    badgeNumbers: [number, number]
+    /** Slot 1 and slot 2. `null` is a guest with no badge. */
+    badgeNumbers: [number | null, number | null]
+    /** Ten digits, and only when both slots are guests. */
+    contactPhone: string | null
   }): Promise<void> => {
     if (isSubmitting) {
       return
@@ -264,7 +267,7 @@ const DandiyaDesk: React.FC = () => {
         setNotice({
           kind: 'success',
           message: `Pair ${result.loan.pairCode} issued to ${result.loan.holders
-            .map((holder) => formatBadgeNumber(holder.badgeNumber))
+            .map((holder) => dandiyaHolderLabel(holder))
             .join(' + ')}`,
         })
         /** Clears all three inputs and refocuses the pair field. */
@@ -274,24 +277,26 @@ const DandiyaDesk: React.FC = () => {
         return
       }
 
-      setNotice({
-        kind:
-          result.status === 'pair-in-use' || result.status === 'attendee-holding'
-            ? 'info'
-            : 'error',
-        message: result.message,
-      })
+      /**
+       * AN ANCHOR CONFLICT IS ORDINARY, not an error. The pair is out, or the
+       * attendee or number already answers for one — all four are things that
+       * happen at a busy table, and all four are reported as information with
+       * a re-read rather than as a failure.
+       */
+      const contended =
+        result.status === 'pair-in-use' ||
+        result.status === 'attendee-holding' ||
+        result.status === 'contact-holding' ||
+        result.status === 'accountability-holding'
+
+      setNotice({ kind: contended ? 'info' : 'error', message: result.message })
 
       /**
        * ANOTHER DESK GOT THERE FIRST, or the answer never arrived — and an
        * unanswered request may have committed. Both are re-read rather than
        * guessed, so the board matches the ledger before the next attempt.
        */
-      if (
-        result.status === 'pair-in-use' ||
-        result.status === 'attendee-holding' ||
-        result.status === 'unreachable'
-      ) {
+      if (contended || result.status === 'unreachable') {
         refresh()
       }
     } finally {
@@ -319,7 +324,7 @@ const DandiyaDesk: React.FC = () => {
           ? {
               action: 'resolve-holder',
               loanId: request.loan.id,
-              badgeNumber: request.holder.badgeNumber,
+              slot: request.holder.slot,
               resolution: request.resolution ?? 'returned',
             }
           : { action: request.action === 'lost-pair' ? 'lost-pair' : 'return-pair', loanId: request.loan.id },
@@ -334,7 +339,7 @@ const DandiyaDesk: React.FC = () => {
             : 'success',
           message:
             request.action === 'resolve-holder' && request.holder !== undefined
-              ? `${formatBadgeNumber(request.holder.badgeNumber)} recorded as ${
+              ? `${dandiyaHolderLabel(request.holder)} recorded as ${
                   request.resolution === 'lost' ? 'lost' : 'returned'
                 } on pair ${request.loan.pairCode}.`
               : request.action === 'lost-pair'

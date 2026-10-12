@@ -5,10 +5,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Search } from 'lucide-react'
 import { matchesLoanSearch } from '@/dandiya/dandiya-filters'
-import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDateTime } from '@/lib/datetime'
 import type { DandiyaLoanRecord } from '@/shared/dandiya-contract'
-import { DANDIYA_OUTCOME_LABELS } from '@/shared/dandiya-contract'
+import {
+  DANDIYA_OUTCOME_LABELS,
+  dandiyaHolderDetail,
+  dandiyaHolderLabel,
+} from '@/shared/dandiya-contract'
 
 interface PairIssuesProps {
   loans: readonly DandiyaLoanRecord[]
@@ -98,13 +101,11 @@ const PairIssues: React.FC<PairIssuesProps> = ({ loans, search, onSearchChange }
                 {loan.holders.map((holder) => (
                   <li key={holder.slot} className="flex items-baseline gap-3">
                     <span className="font-heading text-base font-semibold">
-                      {formatBadgeNumber(holder.badgeNumber)}
+                      {dandiyaHolderLabel(holder)}
                     </span>
 
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                      {holder.attendee === null
-                        ? 'Attendee no longer in the register'
-                        : holder.attendee.name}
+                      {dandiyaHolderDetail(holder)}
                     </span>
 
                     <span

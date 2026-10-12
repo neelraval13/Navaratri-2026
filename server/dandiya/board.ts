@@ -67,7 +67,15 @@ const holdersOf = (
   row.holders.map((holder) => ({
     badgeNumber: holder.badgeNumber,
     slot: holder.slot,
-    attendee: attendeesByBadge.get(holder.badgeNumber) ?? null,
+    /**
+     * A GUEST HAS NO BADGE AND THEREFORE NO ATTENDEE. The register is never
+     * consulted for a null badge, so there is no number to look up and no
+     * chance of a stray zero matching somebody.
+     */
+    attendee:
+      holder.badgeNumber === null
+        ? null
+        : attendeesByBadge.get(holder.badgeNumber) ?? null,
     resolution: resolutionOf(holder.resolution),
     resolvedAt: holder.resolvedAt,
     resolvedBy: optionalDevice(names, holder.resolvedByDeviceId),
@@ -165,6 +173,8 @@ export const composeDandiyaBoard = (input: {
       issuedAt: row.issuedAt,
       issuedBy,
       holders,
+      contactPhone: row.contactPhone,
+      accountabilityBadgeNumber: row.accountabilityBadgeNumber,
       closedAt: row.closedAt,
       closedBy: optionalDevice(names, row.closedByDeviceId),
       outcome: outcomeOf(row.outcome),
@@ -178,6 +188,8 @@ export const composeDandiyaBoard = (input: {
         issuedAt: row.issuedAt,
         issuedBy,
         holders,
+        contactPhone: row.contactPhone,
+        accountabilityBadgeNumber: row.accountabilityBadgeNumber,
       })
     } else if (
       /**

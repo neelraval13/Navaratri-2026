@@ -2848,9 +2848,10 @@ nothing else. See `docs/ATTENDEES.md`.
 
 ## Dandiya Checkout And Return
 
-`/dandiya` issues a physical dandiya PAIR to exactly two registered attendees
-and takes the sticks back. Added in Phase D3; Phase D3.1 gave each stick its
-own ending.
+`/dandiya` issues a physical dandiya PAIR to exactly two people and takes the
+sticks back. Added in Phase D3; Phase D3.1 gave each stick its own ending, and
+Phase D3.3 made the two people a registered attendee, a guest with no badge,
+or one of each — so no screen may promise "two registered attendees".
 
 A PAIR GOES OUT AND STAYS OUT until its sticks are accounted for. One
 physical pair may be out at most once; one attendee may hold at most one
@@ -2860,10 +2861,16 @@ what happens.
 
 EACH STICK MOVES INDEPENDENTLY, `OUT` to `RETURNED` or `OUT` to `LOST`. The
 loan stays ACTIVE while any stick is out, so a partial return must never
-close the other attendee's obligation. An attendee is free as soon as THEIR
-OWN holder row is resolved, either way — a lost stick discharges them because
-they have nothing left to give back, and the loss is recorded rather than
-charged to them. Prior losses produce a warning that NEVER blocks: no
+close the other attendee's obligation. An attendee STOPS HOLDING A STICK as
+soon as THEIR OWN holder row is resolved, either way — a lost stick discharges
+them because they have nothing left to give back, and the loss is recorded
+rather than charged to them.
+
+THAT IS NOT THE SAME AS BEING DISCHARGED OF THE PAIR, and on a MIXED loan the
+two differ: one badge and one guest is issued ON THE BADGE, so that attendee
+answers for the whole pair until it closes — see the accountability anchor
+below. On a two-badge pair the two coincide, because each holder answers for
+their own stick only. Prior losses produce a warning that NEVER blocks: no
 disabled control, no conflict, no override to find.
 
 THE LOAN OUTCOME IS DERIVED, never submitted: `returned` for two returns,
@@ -2911,6 +2918,14 @@ inserting and translates the violation instead. The two pair refusals are
 DISTINGUISHED after the refusal — the blocking row is re-read and reported as
 `pair-in-use` while its loan is open and `pair-unavailable` once it is a
 quarantine. Do NOT precheck instead of relying on the index.
+
+EXACTLY ONE RULE ON THIS PATH IS NOT AN INDEX, and it is the one no index can
+be written for — see the accountability anchor below. It spans a HOLDER row of
+the new loan and the LOAN row of another, and a unique index compares columns
+of one row of one table. It is still decided by the DATABASE, as a predicate on
+the guarded insert inside a transaction that opens by locking the event row. It
+is NOT licence to precheck anything: every rule an index can hold is still held
+by one, and nothing on this path decides from a read.
 
 HOLDERS ARE ROWS, NOT COLUMNS. Two rows per loan, one per stick-slot, because
 the active-attendee guarantee has to be a unique index over a SINGLE badge
@@ -2995,9 +3010,11 @@ Active, labelled OUTSTANDING so somebody chases it.
 `src/shared/event-time.ts` owns the one definition of which event-local day an
 instant falls in, shared because the server counts and the browser filters.
 
-NO ATTENDEE PII. Neither table has a column for a name, phone, age, gender,
-WhatsApp link or payment, and none may be added. A loan records a pair code,
-two badge NUMBERS and two device ids; the names on screen are READ from the
+ALMOST NO ATTENDEE PII, and the one exception is named above. Neither table
+has a column for a name, age, gender, WhatsApp link or payment, and none may
+be added. A loan records a pair code, two badge NUMBERS — or NULL for a guest
+— two device ids, and ONLY for a fully badgeless pair one contact phone
+number. The names on screen are READ from the
 Badge Register per request through `server/attendees/register.ts` — the SAME
 reader `/api/prizes` and `/api/attendees` use, and the only Badge Register
 parser outside `server/sync/`. A Sheet row edited away does NOT erase a loan:
@@ -3011,6 +3028,180 @@ REGISTRATION desk's ledger disagreed about physical badges this device was
 never given. `dandiya` does NOT imply `attendees`: the desk reads the register
 to identify the two holders, which is not the same as being granted the
 standalone directory.
+
+THREE WAYS TO ISSUE A PAIR, since Phase D3.3, because not everybody dancing
+has been through the registration desk:
+
+```
+                    holders           anchor column                 contact
+two badges          [a, b]            NULL                          NULL
+one badge + guest   [a, NULL]         accountability_badge = a      NULL
+two guests          [NULL, NULL]      NULL                          ten digits
+```
+
+EXACTLY ONE ANCHOR PER LOAN, enforced by
+`dandiya_loans_accountability_exclusive`, so each non-null column names one
+mode: an anchor badge means MIXED, a contact number means FULLY BADGELESS.
+The MODE is derived server-side from the two holders and is never a caller's
+choice — `openDandiyaLoan` takes an already-discriminated issuance, and
+`accountabilityBadgeNumber` in a request body is REFUSED rather than ignored.
+
+A NO-BADGE HOLDER IS `badge_number = NULL`, never a synthetic badge. Not `0`,
+not `-1`, not `999999`, not `GUEST-1`: a fake number would sort, match a badge
+search and collide with a real badge, and no screen could tell a guest from an
+attendee whose badge had been mistyped. Postgres treats NULLs as DISTINCT in a
+unique index, which is what lets many unresolved guest sticks coexist and one
+loan hold two of them while every REAL badge keeps its old guarantees.
+
+BOTH STICKS STAY SEPARATE HOLDER ROWS, so each resolves on its own exactly as
+before. A stick is named by its SLOT — 1 or 2 — and never by a badge number,
+because a guest has none. `resolve-holder` therefore carries `slot`, and a
+`badgeNumber` in that body is REFUSED rather than ignored.
+
+ONE BADGE IS ENOUGH. A phone is NOT required merely because one guest exists,
+and a `contactPhone` offered beside any badge is REFUSED — so
+`contact_phone IS NOT NULL` means exactly "this loan is fully badgeless",
+which is what the open-contact index relies on. Zero badges with no phone is
+refused by the SERVER; the browser is never trusted with that rule.
+
+A MIXED LOAN GOES OUT ON THE BADGE, AND THAT OUTLIVES ITS OWN STICK. One badge
+and one guest makes that attendee answerable for the WHOLE pair until the loan
+closes, which the holder-level rule cannot express and must not be made to:
+
+```
+dandiya_loan_holders_one_unresolved_per_badge
+  UNIQUE(event_id, badge_number) WHERE resolved_at IS NULL
+
+dandiya_loans_one_open_per_accountability_badge
+  UNIQUE(event_id, accountability_badge_number) WHERE closed_at IS NULL
+```
+
+THE TWO MEAN DIFFERENT THINGS AND BOTH ARE KEPT. The holder index is partial
+on `resolved_at`, so it frees a badge the moment that badge's OWN stick is
+accounted for — right for a two-badge pair, and exactly what let #100 return
+their own stick, leave their guest's still out, and immediately take another
+mixed pair with nothing in the ledger answerable for the first. The loan index
+is partial on `closed_at`, so the anchor is released only when the pair is
+actually accounted for — a return, a partial loss or a total loss alike — and
+a historical anchoring never permanently blocks anybody.
+
+NULLS STAY NON-CONFLICTING, so two-badge and fully badgeless loans never
+participate in the anchor index, and a two-badge pair keeps its D3.1 semantics
+untouched: each holder is freed by their own stick. Whole-loan anchoring must
+never be imposed on it.
+
+AN OPEN ANCHOR BLOCKS THAT BADGE FROM EVERY NEW LOAN, not only from another
+mixed one. Pair 20 is issued on #9005 with a guest; #9005 hands their own
+stick back and the guest's is still out. Until Pair 20 closes, #9005 may
+take neither
+
+```
+PAIR 21   #9005 + Guest          refused
+PAIR 22   #9005 + #9010          refused   <- also, and this is the point
+```
+
+because Pair 20 is still issued ON that badge. No unique index can hold this
+half: the offending badge is a HOLDER row of the new loan while the anchor is
+the LOAN row of the old one, and an index compares columns of one row of one
+table. A second table recording badge availability would be a second place
+that can disagree with the ledger.
+
+ISSUANCE IS THEREFORE SERIALISED ON THE EVENT ROW, and the decision is made
+by the DATABASE inside the transaction that writes. One `db.batch`, four
+statements, in this order and no other:
+
+```
+1  SELECT id FROM events WHERE id = $event FOR UPDATE      the lock
+2  INSERT INTO dandiya_loans (...) SELECT ... FROM events
+     WHERE events.id = $event
+       AND NOT EXISTS (SELECT 1 FROM dandiya_loans
+                        WHERE event_id = $event AND closed_at IS NULL
+                          AND accountability_badge_number IN ($badges))
+     RETURNING id                                          the guarded write
+3  INSERT INTO dandiya_loan_holders (...) SELECT ...
+     FROM dandiya_loans WHERE id = $loan                    slot 1
+4  the same for slot 2
+```
+
+THE GUARD IS A PREDICATE ON THE WRITE, never a pre-read. `db.batch` cannot
+branch, so the rule is carried by the insert's own `WHERE`: when it does not
+hold the select yields no row, nothing is written, and `RETURNING` comes back
+empty — which is the verdict the writer reads and reports as
+`accountability-already-holding-pair`. Statements 3 and 4 select from the loan
+the guarded insert would have written, so a refusal writes NO holder rows
+either and the batch commits having changed nothing. A foreign-key error is
+never used as ordinary control flow.
+
+THERE WAS A PRE-READ HERE AND IT WAS A TOCTOU HOLE. `SELECT` the open anchors,
+then decide in application code, then write: a process can pause for any
+length of time between the read and the write — a GC pause, a cold start, a
+retried request — and in that window another desk can commit a mixed loan on
+the same badge AND that badge's own stick can be resolved. The holder index
+then has nothing to catch, because the only unresolved stick left on the other
+loan belongs to a guest. The retracted defence of that pre-read argued from how
+many network round trips could fit in the window; that is a TIMING ASSUMPTION,
+not a transactional guarantee, and it was wrong. A process pause has no bound.
+Never decide this outside the writing transaction again, and never defend a
+read with an argument about elapsed time.
+
+WHY THE EVENT ROW. There is no central row standing for "badge #9005 in this
+event" to lock instead — the badge lives in the Google Sheet. The event row is
+the one row every issuance of one event genuinely shares, so it is the
+truthful place to serialise them. It is deliberately COARSE: two desks issuing
+for the same event take turns, an issuance is four statements with no network
+waits in between, and different events never block each other. Correctness
+first; make it finer only if real measurements ever show contention.
+
+Never substitute an advisory lock, an application mutex, a browser lock, a
+process-local Map, sleeping or retrying, and never add a second
+badge-availability table.
+
+IT IS NOT THE D3.1 RESOLUTION LOCK and does not touch it. Resolutions keep
+locking their own LOAN row, which serialises two desks resolving different
+sticks of one pair. Issuance locks the EVENT row. Two different questions, two
+different locks, and `lockEventIssuance` and `lockOpenLoan` each have exactly
+one call site.
+
+WITHIN THE LOCKED TRANSACTION THE ANCHOR SET CAN ONLY SHRINK: anchors are
+created by issuance, which this lock serialises, and removed by a close. That
+stays true only while nothing UPDATEs an anchor and nothing sets `closed_at`
+back to null, and `release:check` fails on either.
+
+THE STAND-IN DATABASE CANNOT PROVE THIS, for the same reason it cannot prove
+the D3.1 lock: it is single-threaded, so a scripted writer has always already
+committed. `verify:d3` therefore pins the statement ORDER from the
+transaction's own record plus the structure, and
+`scripts/dandiya-issuance-concurrency-smoke.mjs` proves the EFFECT against a
+real database — a writer that began BEFORE an anchor committed still observes
+it after waiting on the event row. That script WRITES, so it is gated exactly
+like the resolution smoke: `--confirm`, `ALLOW_DANDIYA_DB_SMOKE_WRITES`
+exactly `true`, `VERCEL_ENV` exactly `development`, every check before a
+connection is opened, `SMOKE-D33B-` fixtures only, cleanup of its own rows
+only, and never wired into `verify`, `build`, `lint` or `release:check`.
+
+`dandiya_loans.contact_phone` IS THE ONLY ATTENDEE-IDENTIFYING VALUE IN
+POSTGRES, and the exception is deliberately narrow. Exactly ten digits, the
+form the rest of the application has always stored, parsed by
+`src/shared/phone.ts` — which registration's own validator also reads, so
+there is ONE phone rule. It belongs to the LOAN rather than to a stick: one of
+two people leaves a number for the pair, so copying it onto both would assert
+that both gave it. Never a guest name, age, gender, address or ID; never a
+REGISTERED attendee's number — the Badge Register reader still does not read
+that column, and `release:check` fails if it starts to. No contact number is
+ever logged.
+
+ONE OPEN BADGELESS LOAN PER CONTACT NUMBER —
+`UNIQUE(event_id, contact_phone) WHERE closed_at IS NULL` — the badgeless
+analogue of one unresolved stick per attendee, and the sibling of the anchor
+index above. PARTIAL on `closed_at`, so the number frees when the loan closes
+and a historical number never permanently blocks anybody.
+
+THE FULL RELATIONSHIP TO THE HOLDER ROWS IS THE SERVER'S, because a CHECK may
+not read another table. `issuanceColumns` in `server/dandiya/loans.ts` is the
+ONE total function from mode to columns, deliberately unexported, which is why
+none of the four impossible loans can be written: a mixed loan with no anchor,
+one anchored to a badge that is not on it, a badge loan carrying a phone
+number, and a badgeless loan with no contact.
 
 A LOAN'S HISTORICAL DAY IS `issued_at`, IN THE EVENT TIMEZONE, AND NOTHING
 ELSE. Not `closed_at`, not `resolved_at`, not when somebody looked. A pair

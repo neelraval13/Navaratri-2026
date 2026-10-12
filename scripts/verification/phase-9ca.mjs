@@ -496,7 +496,8 @@ const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('
 check('every migration is accounted for',
   migrations, ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
     '0002_device_credentials.sql', '0003_prize_awards.sql',
-    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
+    '0006_dandiya_badgeless_issuance.sql'])
 check('  and 9C-A contributed exactly one of them',
   migrations.filter((file) => /password|credential/i.test(file)),
   ['0002_device_credentials.sql'])

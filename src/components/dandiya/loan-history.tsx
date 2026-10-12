@@ -10,10 +10,14 @@ import {
   summariseDay,
   type HistoryView,
 } from '@/dandiya/dandiya-filters'
-import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDate, formatEventDateTime } from '@/lib/datetime'
+import { formatPhoneNumber } from '@/lib/phone'
 import type { DandiyaLoanRecord } from '@/shared/dandiya-contract'
-import { DANDIYA_OUTCOME_LABELS } from '@/shared/dandiya-contract'
+import {
+  DANDIYA_OUTCOME_LABELS,
+  dandiyaHolderDetail,
+  dandiyaHolderLabel,
+} from '@/shared/dandiya-contract'
 import {
   isEventDayKey,
   nextEventDayKey,
@@ -319,14 +323,25 @@ const LoanHistory: React.FC<LoanHistoryProps> = ({
                   {loan.holders.map((holder) => (
                     <li key={holder.slot} className="flex items-baseline gap-3">
                       <span className="font-heading text-base font-semibold">
-                        {formatBadgeNumber(holder.badgeNumber)}
+                        {dandiyaHolderLabel(holder)}
                       </span>
 
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {holder.attendee === null
-                          ? 'Attendee no longer in the register'
-                          : holder.attendee.name}
+                        {dandiyaHolderDetail(holder)}
                       </span>
+
+                      {/*
+                        HISTORY PRESERVES WHO ANSWERED FOR THE PAIR, for the
+                        same reason it preserves the contact number: a later
+                        return or loss does not change which identity the pair
+                        went out under.
+                      */}
+                      {loan.accountabilityBadgeNumber === null ||
+                      holder.badgeNumber !== loan.accountabilityBadgeNumber ? null : (
+                        <span className="shrink-0 text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                          Accountability badge
+                        </span>
+                      )}
 
                       <span
                         className={
@@ -348,6 +363,24 @@ const LoanHistory: React.FC<LoanHistoryProps> = ({
                 </ul>
 
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-sm">
+                  {/*
+                    HISTORY PRESERVES THE ISSUANCE MODE. A later return or
+                    loss does not change which identity the pair went out
+                    under, so a badgeless loan keeps showing the number it was
+                    accountable to — and a badge-based one has none to show.
+                  */}
+                  {typeof loan.contactPhone !== 'string' ? null : (
+                    <>
+                      <dt className="text-muted-foreground">
+                        Contact
+                      </dt>
+
+                      <dd className="font-medium">
+                        {`+91 ${formatPhoneNumber(loan.contactPhone)}`}
+                      </dd>
+                    </>
+                  )}
+
                   <dt className="text-muted-foreground">
                     Issued
                   </dt>

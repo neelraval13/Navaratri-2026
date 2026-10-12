@@ -52,6 +52,10 @@ export const DANDIYA_MESSAGES = {
     'That pair is unavailable — its last loan ended with a stick lost. Use another pair.',
   attendeeHolding:
     'That attendee is already holding a stick. The board has been refreshed.',
+  contactHolding:
+    'That number already has a pair out. Bring it back first, or issue on a badge.',
+  accountabilityHolding:
+    'That attendee is still accountable for a pair that has not come back. Bring that pair back first.',
   badgeNotRegistered:
     'That badge is not in this event’s attendee register.',
   holderResolved:
@@ -201,6 +205,21 @@ export type DandiyaIssueResult =
   | { status: 'pair-in-use'; message: string }
   | { status: 'pair-unavailable'; message: string }
   | { status: 'attendee-holding'; message: string }
+  /**
+   * THE OTHER TWO ANCHORS, each its own status because each tells the
+   * operator something different to do.
+   *
+   * `contact-holding` — this number already has an open badgeless pair.
+   * `accountability-holding` — this badge still answers for an open MIXED
+   * pair, even though its own stick may already be back.
+   *
+   * Neither may be folded into `unexpected`: an ordinary operational
+   * conflict presented as a technical error is how an overlapping badge
+   * range once reached an operator as "The server returned an unexpected
+   * response."
+   */
+  | { status: 'contact-holding'; message: string }
+  | { status: 'accountability-holding'; message: string }
   | { status: 'badge-not-registered'; message: string }
   | { status: 'unauthenticated'; message: string }
   | { status: 'not-permitted'; message: string }
@@ -211,16 +230,25 @@ export type DandiyaIssueResult =
   | { status: 'unexpected'; message: string }
 
 /**
- * Issues one pair to two badges.
+ * Issues one pair, in whichever of the three modes the operator chose.
  *
- * The body carries the pair code and the two badge numbers and NOTHING else.
- * The event, the device and the timestamp come from the authenticated session
- * and from the server — a caller that believes it can choose them is a caller
- * a later refactor might believe too.
+ * The body carries the pair code, the two slots and — ONLY when both slots
+ * are guests — one contact number. Nothing else: the event, the device and
+ * the timestamp come from the authenticated session and from the server, and
+ * the ACCOUNTABILITY BADGE of a mixed loan is derived by the server from the
+ * slots. A caller that believes it can choose any of them is a caller a later
+ * refactor might believe too.
+ *
+ * `contactPhone` IS OMITTED RATHER THAN SENT AS NULL when a holder has a
+ * badge, because the server refuses the field beside a badge rather than
+ * ignoring it.
  */
 export const issueDandiyaPair = async (input: {
   pairCode: string
-  badgeNumbers: readonly [number, number]
+  /** Slot 1 and slot 2. `null` is a guest with no badge. */
+  badgeNumbers: readonly [number | null, number | null]
+  /** Ten digits, and only when both slots are guests. */
+  contactPhone: string | null
 }): Promise<DandiyaIssueResult> => {
   let response: Response
 
@@ -231,6 +259,7 @@ export const issueDandiyaPair = async (input: {
       body: JSON.stringify({
         pairCode: input.pairCode,
         badgeNumbers: [...input.badgeNumbers],
+        ...(input.contactPhone === null ? {} : { contactPhone: input.contactPhone }),
       }),
     })
   } catch {
@@ -273,8 +302,19 @@ export const issueDandiyaPair = async (input: {
       return { status: 'pair-unavailable', message: DANDIYA_MESSAGES.pairUnavailable }
     }
 
-    return conflict === 'attendee-already-holding-pair'
-      ? { status: 'attendee-holding', message: DANDIYA_MESSAGES.attendeeHolding }
+    if (conflict === 'attendee-already-holding-pair') {
+      return { status: 'attendee-holding', message: DANDIYA_MESSAGES.attendeeHolding }
+    }
+
+    if (conflict === 'contact-already-holding-pair') {
+      return { status: 'contact-holding', message: DANDIYA_MESSAGES.contactHolding }
+    }
+
+    return conflict === 'accountability-already-holding-pair'
+      ? {
+          status: 'accountability-holding',
+          message: DANDIYA_MESSAGES.accountabilityHolding,
+        }
       : { status: 'unexpected', message: DANDIYA_MESSAGES.issueFailed }
   }
 
@@ -335,7 +375,8 @@ export type DandiyaResolveResult =
  */
 export const resolveDandiyaPair = async (
   input:
-    | { action: 'resolve-holder'; loanId: string; badgeNumber: number; resolution: DandiyaHolderResolution }
+    /** The stick is named by SLOT: a guest has no badge to name it with. */
+    | { action: 'resolve-holder'; loanId: string; slot: number; resolution: DandiyaHolderResolution }
     | { action: 'return-pair'; loanId: string }
     | { action: 'lost-pair'; loanId: string },
 ): Promise<DandiyaResolveResult> => {

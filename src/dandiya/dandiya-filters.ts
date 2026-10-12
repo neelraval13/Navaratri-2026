@@ -1,4 +1,5 @@
 import { formatBadgeNumber } from '@/lib/badge'
+import { phoneSearchDigits } from '@/shared/phone'
 import type {
   DandiyaActiveLoan,
   DandiyaHolder,
@@ -21,10 +22,11 @@ import { currentEventDayKey, eventDayKey } from '@/shared/event-time'
 /** Only the digits, so `#042`, `042` and `42` are the same query. */
 const digitsOf = (value: string): string => value.replace(/\D/g, '')
 
-const badgeMatches = (badgeNumber: number, query: string): boolean => {
+const badgeMatches = (badgeNumber: number | null, query: string): boolean => {
   const digits = digitsOf(query)
 
-  if (digits === '') {
+  /** A guest has no badge, so no badge query can find them. */
+  if (digits === '' || badgeNumber === null) {
     return false
   }
 
@@ -40,9 +42,18 @@ const textMatches = (value: string, query: string): boolean =>
 /**
  * Does this loan match what was typed?
  *
- * The pair code, EITHER badge number, or EITHER attendee name — the four
- * things somebody at the desk actually has to hand. Never a phone number:
- * this screen never receives one.
+ * The pair code, EITHER badge number, EITHER attendee name, or — since Phase
+ * D3.3 — the loan's own CONTACT NUMBER. The things somebody at the desk
+ * actually has to hand.
+ *
+ * THE ONLY PHONE NUMBER HERE IS THE LOAN'S OWN. A registered attendee's
+ * number is not read into this module and never was: a badge-based loan has
+ * no contact, so there is nothing to match. For a badgeless pair, the number
+ * is how the team finds the two people, which makes it the one thing they
+ * will type.
+ *
+ * A query of ten or more digits is compared on its LAST ten, so
+ * `+919876543210` and `9876543210` find the same loan.
  */
 export const matchesLoanSearch = (
   loan: DandiyaActiveLoan | DandiyaLoanRecord,
@@ -56,6 +67,19 @@ export const matchesLoanSearch = (
 
   if (textMatches(loan.pairCode, query)) {
     return true
+  }
+
+  /**
+   * `typeof` rather than `!== null`: a loan from an older shape carries no
+   * contact field at all, and a search box must not be able to throw inside
+   * a render over a missing optional value.
+   */
+  if (typeof loan.contactPhone === 'string') {
+    const digits = phoneSearchDigits(query)
+
+    if (digits !== null && loan.contactPhone.includes(digits)) {
+      return true
+    }
   }
 
   return loan.holders.some(
@@ -284,6 +308,56 @@ export const priorLossesFor = (
   }
 
   return losses.sort((left, right) => right.resolvedAt.localeCompare(left.resolvedAt))
+}
+
+/**
+ * WHAT THIS BADGE OWES THE EVENT RIGHT NOW — and the two are not the same.
+ *
+ * HOLDING is physical: an unresolved holder row on an open loan. That stick
+ * is in their hand.
+ *
+ * ACCOUNTABLE is the mixed loan's anchor: the pair went out ON their badge,
+ * so they answer for it until the loan closes even once their OWN stick has
+ * come back and the guest is still dancing. They are holding nothing, and
+ * saying "already holding" of them would be false.
+ *
+ * BOTH REFUSE A NEW PAIR, which is why one helper answers both: the holder
+ * index refuses the first and the accountability rule the second. A badge
+ * with NEITHER is free — including a two-badge holder whose own stick came
+ * back while their partner's is still out, which the server accepts and this
+ * must not pretend otherwise.
+ *
+ * HOLDING WINS WHEN BOTH APPLY, because then their own stick really is out
+ * and that is the more immediate fact. The anchor is read from the board's
+ * own `accountabilityBadgeNumber` rather than inferred from the holders, so
+ * the screen and the ledger cannot disagree about who is answerable.
+ *
+ * A WARNING, not an authority: the database decides, and the desk reports
+ * what it says when the two differ.
+ */
+export type HolderObligation =
+  | { kind: 'holding'; pairCode: string; issuedAt: string }
+  | { kind: 'accountable'; pairCode: string; issuedAt: string }
+
+export const holderObligationFor = (
+  loans: readonly DandiyaActiveLoan[],
+  badgeNumber: number,
+): HolderObligation | null => {
+  const holding = loans.find((loan) =>
+    loan.holders.some(
+      (holder) => holder.badgeNumber === badgeNumber && holder.resolution === null,
+    ),
+  )
+
+  if (holding !== undefined) {
+    return { kind: 'holding', pairCode: holding.pairCode, issuedAt: holding.issuedAt }
+  }
+
+  const anchoring = loans.find((loan) => loan.accountabilityBadgeNumber === badgeNumber)
+
+  return anchoring === undefined
+    ? null
+    : { kind: 'accountable', pairCode: anchoring.pairCode, issuedAt: anchoring.issuedAt }
 }
 
 /**

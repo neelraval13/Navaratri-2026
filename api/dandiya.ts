@@ -10,9 +10,10 @@ import {
   type DandiyaHistoryWindow,
 } from '../server/dandiya/loans.js'
 import {
-  badgeNumberOf,
+  slotOf,
   parseDandiyaIssueInput,
   parseDandiyaResolveInput,
+  registeredBadgesOf,
   resolutionOf,
 } from '../server/dandiya/requests.js'
 import { authorizeDeviceRequest } from '../server/device-auth/authorize.js'
@@ -81,10 +82,14 @@ const MESSAGES = {
   pairUnavailable:
     'That pair is unavailable: its last loan ended with a stick lost.',
   attendeeHolding: 'That attendee is already holding a dandiya stick.',
+  contactHolding:
+    'That contact number already has a dandiya pair out. Bring it back first, or use a badge.',
+  accountabilityHolding:
+    'That attendee is still accountable for a pair that has not come back. Bring that pair back first.',
   holderResolved: 'That stick has already been resolved.',
   loanClosed: 'Every stick on that pair has already been resolved.',
   loanNotFound: 'That loan is not open on this event.',
-  holderNotFound: 'That badge is not a holder of this loan.',
+  holderNotFound: 'That stick is not part of this loan.',
   unexpectedRead: 'The dandiya board could not be loaded. Try again.',
   unexpectedIssue: 'The pair could not be issued. Try again.',
   unexpectedResolve: 'The stick could not be resolved. Try again.',
@@ -143,6 +148,8 @@ const CONFLICT_MESSAGE = {
   'pair-in-use': MESSAGES.pairInUse,
   'pair-unavailable': MESSAGES.pairUnavailable,
   'attendee-already-holding-pair': MESSAGES.attendeeHolding,
+  'contact-already-holding-pair': MESSAGES.contactHolding,
+  'accountability-already-holding-pair': MESSAGES.accountabilityHolding,
   'holder-already-resolved': MESSAGES.holderResolved,
   'loan-already-closed': MESSAGES.loanClosed,
 } as const
@@ -323,11 +330,17 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     /**
-     * BOTH BADGES MUST EXIST, and this read happens BEFORE the insert for
-     * that reason: a pair recorded against a number nobody registered is a
-     * ledger entry no human can reconcile. A Sheet that cannot be read
-     * therefore writes NOTHING — the register is the only thing that can
-     * confirm the badges, so failing closed is the only honest answer.
+     * EVERY BADGE PRESENTED MUST EXIST, and this read happens BEFORE the
+     * insert for that reason: a pair recorded against a number nobody
+     * registered is a ledger entry no human can reconcile. A Sheet that
+     * cannot be read therefore writes NOTHING — the register is the only
+     * thing that can confirm a badge, so failing closed is the only honest
+     * answer.
+     *
+     * A GUEST SLOT PRESENTS NO BADGE, so there is nothing to confirm about
+     * it. The register is still read — the other holder may have a badge, and
+     * the board's names come from it — but a fully badgeless pair is
+     * accountable to its contact number rather than to the register.
      */
     const register = await readAttendeeRegister(access.environment)
 
@@ -338,7 +351,9 @@ export async function POST(request: Request): Promise<Response> {
     const byBadge = new Map(
       register.attendees.map((attendee) => [attendee.badgeNumber, attendee]),
     )
-    const missing = input.value.badgeNumbers.filter((badge) => !byBadge.has(badge))
+    const missing = registeredBadgesOf(input.value.issuance).filter(
+      (badge) => !byBadge.has(badge),
+    )
 
     if (missing.length > 0) {
       return deviceJson(
@@ -363,7 +378,7 @@ export async function POST(request: Request): Promise<Response> {
     const opened = await openDandiyaLoan({
       eventId: authorized.device.eventId,
       pairCode: input.value.pairCode,
-      badgeNumbers: input.value.badgeNumbers,
+      issuance: input.value.issuance,
       issuedByDeviceId: authorized.device.id,
     })
 
@@ -449,12 +464,9 @@ export async function PATCH(request: Request): Promise<Response> {
       )
     }
 
-    const badgeNumber = badgeNumberOf(input.value)
+    const slot = slotOf(input.value)
 
-    if (
-      badgeNumber !== undefined &&
-      !loan.holders.some((holder) => holder.badgeNumber === badgeNumber)
-    ) {
+    if (slot !== undefined && !loan.holders.some((holder) => holder.slot === slot)) {
       return deviceJson(
         { ok: false, blocked: 'holder-not-found', message: MESSAGES.holderNotFound },
         404,
@@ -464,7 +476,7 @@ export async function PATCH(request: Request): Promise<Response> {
     const resolved = await resolveDandiyaHolders({
       eventId: authorized.device.eventId,
       loanId: input.value.loanId,
-      badgeNumber,
+      slot,
       resolution: resolutionOf(input.value),
       resolvedByDeviceId: authorized.device.id,
     })

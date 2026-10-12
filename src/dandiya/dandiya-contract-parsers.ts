@@ -1,5 +1,6 @@
 import { parseAttendeeList, parseEventAttendee } from '@/shared/attendee-contract'
 import { isEventDayKey } from '@/shared/event-time'
+import { isCanonicalPhone } from '@/shared/phone'
 import type {
   DandiyaActiveLoan,
   DandiyaBoardResponse,
@@ -95,13 +96,25 @@ const parseDevice = (value: unknown): DandiyaDevice | null => {
  * rendered as half-resolved.
  */
 const parseHolder = (value: unknown): DandiyaHolder | null => {
-  if (!isRecord(value) || !isPositiveInteger(value.badgeNumber)) {
+  if (!isRecord(value)) {
     return null
   }
 
   if (value.slot !== 1 && value.slot !== 2) {
     return null
   }
+
+  /**
+   * A BADGE, OR `null` FOR A GUEST — and nothing in between. A `0`, a
+   * negative number or a string is REJECTED rather than coerced to "no
+   * badge": a synthetic badge arriving from a server is a bug worth seeing,
+   * and silently rendering it as a guest would hide it.
+   */
+  if (value.badgeNumber !== null && !isPositiveInteger(value.badgeNumber)) {
+    return null
+  }
+
+  const badgeNumber: number | null = value.badgeNumber
 
   const attendee =
     value.attendee === null || value.attendee === undefined
@@ -117,7 +130,7 @@ const parseHolder = (value: unknown): DandiyaHolder | null => {
 
   if (unresolved) {
     return {
-      badgeNumber: value.badgeNumber,
+      badgeNumber,
       slot: value.slot,
       attendee,
       resolution: null,
@@ -137,7 +150,7 @@ const parseHolder = (value: unknown): DandiyaHolder | null => {
   }
 
   return {
-    badgeNumber: value.badgeNumber,
+    badgeNumber,
     slot: value.slot,
     attendee,
     resolution: value.resolution,
@@ -164,7 +177,23 @@ const parseHolders = (value: unknown): DandiyaHolder[] | null => {
     holders.push(holder)
   }
 
-  return holders[0].badgeNumber === holders[1].badgeNumber ? null : holders
+  /**
+   * TWO DIFFERENT ATTENDEES, when both have badges. Two GUESTS are not the
+   * same holder twice — they are two anonymous sticks, which is exactly what
+   * the database's NULL-distinct uniqueness allows, so a pair of nulls is
+   * accepted while a repeated real badge is not.
+   */
+  const [first, second] = holders
+
+  if (
+    first.badgeNumber !== null &&
+    second.badgeNumber !== null &&
+    first.badgeNumber === second.badgeNumber
+  ) {
+    return null
+  }
+
+  return holders
 }
 
 export const parseActiveLoan = (value: unknown): DandiyaActiveLoan | null => {
@@ -179,12 +208,60 @@ export const parseActiveLoan = (value: unknown): DandiyaActiveLoan | null => {
     return null
   }
 
+  /**
+   * A CONTACT NUMBER, and only in the one shape this application stores: ten
+   * digits. Anything else rejects the loan rather than being rendered — a
+   * number somebody is meant to ring has to be the number that was given.
+   *
+   * IT MUST BE ABSENT WHENEVER A HOLDER HAS A BADGE, which is the invariant
+   * the open-contact index relies on. A server sending both is not a server
+   * this screen can reason about.
+   */
+  const badgeless = holders.every((holder) => holder.badgeNumber === null)
+  const contactPhone = value.contactPhone
+
+  if (contactPhone !== null && (!isCanonicalPhone(contactPhone) || !badgeless)) {
+    return null
+  }
+
+  /**
+   * THE MIXED LOAN'S ANCHOR, and it must be one of THIS loan's own badges.
+   *
+   * Present exactly when one holder has a badge and the other does not, and
+   * equal to that badge. Absent for two badges and for two guests, and never
+   * beside a contact number — which is the exclusivity the database enforces
+   * as a CHECK.
+   *
+   * A server sending any other combination is not a server this screen can
+   * reason about: it would be showing accountability that does not match the
+   * ledger's own, so the loan is REJECTED rather than rendered with a label
+   * nobody can act on.
+   */
+  const badges = holders
+    .map((holder) => holder.badgeNumber)
+    .filter((badge): badge is number => badge !== null)
+  /**
+   * DERIVED FROM THE HOLDERS AND THEN COMPARED, rather than read and trusted.
+   *
+   * Comparing is what makes every wrong combination fail at once: a mixed
+   * loan with no anchor, a mixed loan anchored to some other badge, an anchor
+   * on a two-badge loan, and an anchor beside a contact number — which cannot
+   * reach here, because a badgeless loan's expected anchor is `null`.
+   */
+  const anchor = badges.length === 1 ? badges[0] : null
+
+  if (value.accountabilityBadgeNumber !== anchor) {
+    return null
+  }
+
   return {
     id: value.id,
     pairCode: value.pairCode,
     issuedAt: value.issuedAt,
     issuedBy,
     holders,
+    contactPhone,
+    accountabilityBadgeNumber: anchor,
   }
 }
 

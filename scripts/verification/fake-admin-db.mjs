@@ -155,6 +155,15 @@ const matchesScope = (scope, fallbackTable, condition) => {
     return value === null || value === undefined
   }
 
+  /**
+   * The ISSUANCE GUARD, which is a SQL predicate rather than an operator
+   * because it is a correlated `NOT EXISTS` over another row of the loan
+   * table. Only its two shapes are understood; anything else throws.
+   */
+  if (condition.op === 'sql') {
+    return matchesIssuanceGuard(condition)
+  }
+
   throw new Error(`unexpected condition ${String(condition.op)}`)
 }
 
@@ -226,6 +235,58 @@ const matchesHolderCount = (expression) => {
   }
 
   throw new Error(`unsupported SQL predicate: ${text}`)
+}
+
+/**
+ * THE ISSUANCE GUARD, evaluated — the predicate that carries the cross-table
+ * accountability rule on the guarded loan insert.
+ *
+ *   true
+ *   not exists (select 1 from dandiya_loans
+ *                where event_id = $1 and closed_at is null
+ *                  and accountability_badge_number in ($2, $3))
+ *
+ * `true` is the fully badgeless case: no badge is presented, so there is
+ * nothing to look for. The other shape is the real rule, and it is evaluated
+ * against LIVE state here for the same reason the holder-count subqueries
+ * are: Postgres evaluates it inside the transaction that writes, so a fake
+ * answering from a stale snapshot would make these tests meaningless.
+ *
+ * WHAT THIS FILE STILL CANNOT PROVE is that a transaction which STARTED
+ * before another one's anchor committed observes it after waiting on the
+ * event lock. It is single-threaded, so a scripted writer has always already
+ * committed. That is the whole point of
+ * `scripts/dandiya-issuance-concurrency-smoke.mjs`.
+ *
+ * Only these two SHAPES are understood. Anything else throws rather than
+ * being quietly misread.
+ */
+const matchesIssuanceGuard = (expression) => {
+  const { text, columns, literals } = flattenSql(expression)
+  const normalised = text.replace(/\s+/g, ' ').trim()
+
+  if (normalised === 'true') {
+    return true
+  }
+
+  const eventId = literals.find((value) => typeof value === 'string')
+  const badges = literals.find((value) => Array.isArray(value))
+
+  if (!/^not exists \(select 1 from dandiya_loans where/.test(normalised) ||
+      eventId === undefined || badges === undefined ||
+      !columns.includes('eventId') ||
+      !columns.includes('closedAt') ||
+      !columns.includes('accountabilityBadgeNumber') ||
+      !/is null/.test(normalised) || !/ in /.test(normalised)) {
+    throw new Error(`unsupported issuance guard: ${normalised}`)
+  }
+
+  return !state.dandiyaLoans.some(
+    (loan) =>
+      loan.eventId === eventId &&
+      (loan.closedAt ?? null) === null &&
+      badges.includes(loan.accountabilityBadgeNumber ?? null),
+  )
 }
 
 /** The single-table form, for the update and delete builders. */
@@ -435,9 +496,10 @@ const guardPrizeAward = (row) => {
 }
 
 /**
- * The guarantees `0005_dandiya_checkout.sql` places on the two dandiya
- * tables, enforced here the way Postgres enforces them: at INSERT time,
- * after any application check the caller may have made.
+ * The guarantees `0005_dandiya_checkout.sql` and `0006_dandiya_badgeless_
+ * issuance.sql` place on the two dandiya tables, enforced here the way
+ * Postgres enforces them: at INSERT time, after any application check the
+ * caller may have made.
  *
  * THE TWO UNIQUE INDEXES ARE PARTIAL, and so are these. A fake that treated
  * them as total would refuse the SECOND loan of a pair that has already come
@@ -493,6 +555,60 @@ const guardDandiyaLoan = (row) => {
   ) {
     throw constraintViolation('dandiya_loans_one_unreleased_per_pair')
   }
+
+  /** Exactly ten digits, or absent. */
+  const contactPhone = row.contactPhone ?? null
+
+  if (contactPhone !== null && !/^[0-9]{10}$/.test(String(contactPhone))) {
+    throw constraintViolation('dandiya_loans_contact_phone_canonical')
+  }
+
+  /**
+   * UNIQUE(event_id, contact_phone) WHERE closed_at IS NULL — one OPEN
+   * badgeless loan per contact number, and NULLS ARE DISTINCT so badge-based
+   * loans never participate. Partial on `closed_at`, so the number frees as
+   * soon as the loan closes.
+   */
+  if (
+    contactPhone !== null &&
+    (row.closedAt ?? null) === null &&
+    state.dandiyaLoans.some(
+      (entry) =>
+        entry.id !== row.id &&
+        (entry.closedAt ?? null) === null &&
+        entry.eventId === row.eventId &&
+        (entry.contactPhone ?? null) === contactPhone,
+    )
+  ) {
+    throw constraintViolation('dandiya_loans_one_open_per_contact')
+  }
+
+  /**
+   * UNIQUE(event_id, accountability_badge_number) WHERE closed_at IS NULL —
+   * one OPEN mixed loan per accountability badge.
+   *
+   * PARTIAL on `closed_at`, like the contact index and unlike the HOLDER
+   * index, and that difference is the whole guarantee: the holder index
+   * releases the badge as soon as its own stick is resolved, which is correct
+   * for a two-badge pair and would let #100 anchor a second mixed pair while
+   * its guest still held a stick. NULLS ARE DISTINCT, so two-badge and fully
+   * badgeless loans never participate.
+   */
+  const anchor = row.accountabilityBadgeNumber ?? null
+
+  if (
+    anchor !== null &&
+    (row.closedAt ?? null) === null &&
+    state.dandiyaLoans.some(
+      (entry) =>
+        entry.id !== row.id &&
+        (entry.closedAt ?? null) === null &&
+        entry.eventId === row.eventId &&
+        (entry.accountabilityBadgeNumber ?? null) === anchor,
+    )
+  ) {
+    throw constraintViolation('dandiya_loans_one_open_per_accountability_badge')
+  }
 }
 
 /**
@@ -529,6 +645,21 @@ const guardDandiyaLoanState = (row) => {
       throw constraintViolation('dandiya_loans_closed_device_event_fk')
     }
   }
+
+  /** A real badge, or none. Never a synthetic anchor. */
+  const anchor = row.accountabilityBadgeNumber ?? null
+
+  if (anchor !== null && !(Number.isInteger(anchor) && anchor > 0)) {
+    throw constraintViolation('dandiya_loans_accountability_badge_positive')
+  }
+
+  /**
+   * ONE ANCHOR, NEVER TWO. This is what makes a non-null `contact_phone` mean
+   * exactly "fully badgeless" and a non-null anchor mean exactly "mixed".
+   */
+  if (anchor !== null && (row.contactPhone ?? null) !== null) {
+    throw constraintViolation('dandiya_loans_accountability_exclusive')
+  }
 }
 
 const guardDandiyaHolder = (row) => {
@@ -538,7 +669,14 @@ const guardDandiyaHolder = (row) => {
     throw constraintViolation('dandiya_loan_holders_loan_event_fk')
   }
 
-  if (!(row.badgeNumber > 0)) {
+  /**
+   * `badge_number IS NULL OR > 0`, as 0006 widened it. NULL is a guest with
+   * no badge, and the fake must accept it or every badgeless issue would
+   * look like a constraint failure that production would not have.
+   */
+  const badgeNumber = row.badgeNumber ?? null
+
+  if (badgeNumber !== null && !(badgeNumber > 0)) {
     throw constraintViolation('dandiya_loan_holders_badge_number_positive')
   }
 
@@ -554,7 +692,17 @@ const guardDandiyaHolder = (row) => {
     throw constraintViolation('dandiya_loan_holders_loan_id_slot_key')
   }
 
-  if (siblings.some((entry) => entry.badgeNumber === row.badgeNumber)) {
+  /**
+   * UNIQUE(loan_id, badge_number), and NULLS ARE DISTINCT. Two guest sticks
+   * on one pair are two anonymous holders, not the same holder twice — which
+   * is exactly what Postgres does with NULLs in a unique index, and modelling
+   * it any other way would make a two-guest pair impossible here while
+   * working in production.
+   */
+  if (
+    badgeNumber !== null &&
+    siblings.some((entry) => (entry.badgeNumber ?? null) === badgeNumber)
+  ) {
     throw constraintViolation('dandiya_loan_holders_loan_id_badge_number_key')
   }
 
@@ -566,13 +714,14 @@ const guardDandiyaHolder = (row) => {
    * LOST stick frees its holder exactly as a returned one does.
    */
   if (
+    badgeNumber !== null &&
     (row.resolvedAt ?? null) === null &&
     state.dandiyaLoanHolders.some(
       (entry) =>
         entry.id !== row.id &&
         (entry.resolvedAt ?? null) === null &&
         entry.eventId === row.eventId &&
-        entry.badgeNumber === row.badgeNumber,
+        (entry.badgeNumber ?? null) === badgeNumber,
     )
   ) {
     throw constraintViolation('dandiya_loan_holders_one_unresolved_per_badge')
@@ -700,6 +849,40 @@ const selectBuilder = (columns) => {
         () => builder.__rows(),
       )
     },
+    /**
+     * HOW MANY ROWS THIS SELECT YIELDS, without projecting. An INSERT ...
+     * SELECT needs the count: its selected fields are expressions rather
+     * than columns, so `project` has nothing to read them from.
+     */
+    __count() {
+      let total = 0
+
+      for (const row of rowsOf(query.table)) {
+        const scope = { [query.table]: row }
+        let joined = true
+
+        for (const join of query.joins) {
+          const match = rowsOf(join.table).find((candidate) =>
+            matchesScope({ ...scope, [join.table]: candidate }, query.table, join.condition),
+          )
+
+          if (match === undefined) {
+            joined = false
+
+            break
+          }
+
+          scope[join.table] = match
+        }
+
+        if (joined && matchesScope(scope, query.table, query.condition)) {
+          total += 1
+        }
+      }
+
+      return total
+    },
+    __fields: () => columns,
     __rows() {
       const results = []
 
@@ -783,84 +966,173 @@ const selectBuilder = (columns) => {
 
 let nextId = 1
 
+/**
+ * ONE SELECTED FIELD OF AN `INSERT ... SELECT`, evaluated to the value it
+ * writes.
+ *
+ * Three shapes, and only three:
+ *
+ *   ${value}::type        a bound parameter  -> that value
+ *   null::type            an explicit null   -> null
+ *   gen_random_uuid()     a database default -> undefined, so the stand-in's
+ *                                              own default fills it
+ *
+ * A field reading a COLUMN is refused outright: every value the issuance
+ * writer inserts is a constant, and a field that read the scanned row would
+ * mean this evaluator was quietly inventing semantics. Anything unrecognised
+ * throws, so a new expression cannot pass a test by being skipped.
+ */
+const evaluateInsertField = (expression) => {
+  const { text, columns, literals } = flattenSql(expression)
+  const normalised = text.replace(/\s+/g, ' ').trim()
+
+  if (columns.length === 0 && literals.length === 1) {
+    return literals[0]
+  }
+
+  if (columns.length === 0 && literals.length === 0) {
+    if (/^null(::[a-z]+)?$/.test(normalised)) {
+      return null
+    }
+
+    if (normalised === 'gen_random_uuid()') {
+      return undefined
+    }
+  }
+
+  throw new Error(`unsupported insert field: ${normalised}`)
+}
+
+/**
+ * The query builder an `INSERT ... SELECT` is handed, standing in for
+ * Drizzle's. It can do exactly what the issuance writer asks of it.
+ */
+const queryBuilder = () => ({
+  select: (columns) => selectBuilder(columns),
+})
+
+/**
+ * ONE ROW APPLIED, with the column defaults the migrations declare and then
+ * every guarantee they place on the table.
+ *
+ * Shared by `.values()` and by the INSERT ... SELECT form the issuance writer
+ * uses, so a guarded insert cannot reach the tables through a path with
+ * weaker checks than an ordinary one.
+ */
+const applyInsertRow = (target, payload) => {
+  guardFailure()
+
+  const row = { ...payload }
+
+  if (target === 'devices') {
+    row.loginName ??= null
+    // The column defaults, as the migration declares them.
+    row.passwordHash ??= null
+    row.sessionVersion ??= 1
+    row.enabled ??= true
+    row.lastSeenAt ??= null
+    row.createdAt ??= new Date('2026-01-01T00:00:00.000Z')
+    state.devices.set(row.id, row)
+  } else if (target === 'device_attributes') {
+    state.attributes.push(row)
+  } else if (target === 'badge_assignments') {
+    row.id ??= `assignment-${String(nextId++)}`
+    row.assignedAt ??= new Date('2026-01-01T00:00:00.000Z')
+    row.releasedAt ??= null
+    guardBadgeAssignment(row)
+    state.assignments.push(row)
+  } else if (target === 'prize_awards') {
+    row.id ??= `11111111-2222-4333-8444-${String(100000000000 + nextId++)}`
+    row.awardedAt ??= new Date('2026-10-10T12:30:00.000Z')
+    guardPrizeAward(row)
+    state.prizeAwards.push(row)
+  } else if (target === 'dandiya_loans') {
+    row.id ??= `aaaaaaaa-1111-4111-8111-${String(100000000000 + nextId++)}`
+    row.issuedAt ??= new Date('2026-10-11T12:00:00.000Z')
+    row.closedAt ??= null
+    row.closedByDeviceId ??= null
+    row.outcome ??= null
+    row.pairReleasedAt ??= null
+    row.contactPhone ??= null
+    /** A mixed loan's anchor; NULL for the other two modes. */
+    row.accountabilityBadgeNumber ??= null
+    guardDandiyaLoan(row)
+    state.dandiyaLoans.push(row)
+  } else if (target === 'dandiya_loan_holders') {
+    row.id ??= `bbbbbbbb-1111-4111-8111-${String(100000000000 + nextId++)}`
+    /** A guest stick: the column defaults to NULL, as 0006 allows. */
+    row.badgeNumber ??= null
+    row.resolution ??= null
+    row.resolvedAt ??= null
+    row.resolvedByDeviceId ??= null
+    guardDandiyaHolder(row)
+    state.dandiyaLoanHolders.push(row)
+  } else if (target === 'events') {
+    row.id ??= `event-${String(nextId++)}`
+    row.active ??= true
+    row.startsAt ??= null
+    row.endsAt ??= null
+    row.createdAt ??= new Date('2026-01-01T00:00:00.000Z')
+    state.events.push(row)
+  }
+
+  return clone(row)
+}
+
 const insertBuilder = (table) => {
   const target = table.__table
 
   return {
     values(payload) {
-      let returned = null
-
       const built = statement(
         () => `insert ${target}`,
+        () => [applyInsertRow(target, payload)],
+      )
+
+      /** Drizzle returns the SAME builder, so it stays batchable. */
+      built.returning = () => built
+
+      return built
+    },
+    /**
+     * `INSERT ... SELECT`, which is how the issuance writer makes its loan
+     * and holder writes CONDITIONAL inside one transaction.
+     *
+     * The source select decides HOW MANY rows are written — one when its
+     * `WHERE` holds, none when it does not — and every selected field is a
+     * constant expression, so the row's values come from those expressions
+     * rather than from the scanned row. A refusal therefore writes nothing
+     * at all, and `returning` comes back empty, which is exactly the verdict
+     * the real writer reads.
+     */
+    select(callback) {
+      const source = callback(queryBuilder())
+
+      const built = statement(
+        () => `insert ${target} select`,
         () => {
-          guardFailure()
+          const produced = source.__count()
+          const inserted = []
 
-          const row = { ...payload }
+          for (let index = 0; index < produced; index += 1) {
+            const payload = {}
 
-          if (target === 'devices') {
-            row.loginName ??= null
-            // The column defaults, as the migration declares them.
-            row.passwordHash ??= null
-            row.sessionVersion ??= 1
-            row.enabled ??= true
-            row.lastSeenAt ??= null
-            row.createdAt ??= new Date('2026-01-01T00:00:00.000Z')
-            state.devices.set(row.id, row)
-          } else if (target === 'device_attributes') {
-            state.attributes.push(row)
-          } else if (target === 'badge_assignments') {
-            row.id ??= `assignment-${String(nextId++)}`
-            row.assignedAt ??= new Date('2026-01-01T00:00:00.000Z')
-            row.releasedAt ??= null
-            guardBadgeAssignment(row)
-            state.assignments.push(row)
-          } else if (target === 'prize_awards') {
-            row.id ??= `11111111-2222-4333-8444-${String(100000000000 + nextId++)}`
-            row.awardedAt ??= new Date('2026-10-10T12:30:00.000Z')
-            guardPrizeAward(row)
-            state.prizeAwards.push(row)
-          } else if (target === 'dandiya_loans') {
-            row.id ??= `aaaaaaaa-1111-4111-8111-${String(100000000000 + nextId++)}`
-            row.issuedAt ??= new Date('2026-10-11T12:00:00.000Z')
-            row.closedAt ??= null
-            row.closedByDeviceId ??= null
-            row.outcome ??= null
-            row.pairReleasedAt ??= null
-            guardDandiyaLoan(row)
-            state.dandiyaLoans.push(row)
-          } else if (target === 'dandiya_loan_holders') {
-            row.id ??= `bbbbbbbb-1111-4111-8111-${String(100000000000 + nextId++)}`
-            row.resolution ??= null
-            row.resolvedAt ??= null
-            row.resolvedByDeviceId ??= null
-            guardDandiyaHolder(row)
-            state.dandiyaLoanHolders.push(row)
-          } else if (target === 'events') {
-            row.id ??= `event-${String(nextId++)}`
-            row.active ??= true
-            row.startsAt ??= null
-            row.endsAt ??= null
-            row.createdAt ??= new Date('2026-01-01T00:00:00.000Z')
-            state.events.push(row)
+            for (const [field, expression] of Object.entries(source.__fields())) {
+              const value = evaluateInsertField(expression)
+
+              if (value !== undefined) {
+                payload[field] = value
+              }
+            }
+
+            inserted.push(applyInsertRow(target, payload))
           }
 
-          returned = clone(row)
-
-          return [returned]
+          return inserted
         },
       )
 
-      built.returning = () => ({
-        then(resolve, reject) {
-          try {
-            resolve(built.__run())
-          } catch (error) {
-            reject(error)
-          }
-
-          return undefined
-        },
-      })
+      built.returning = () => built
 
       return built
     },

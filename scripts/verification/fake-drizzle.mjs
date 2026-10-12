@@ -35,6 +35,7 @@ export const prizeAwards = tableOf('prize_awards', [
 export const dandiyaLoans = tableOf('dandiya_loans', [
   'id', 'eventId', 'pairCode', 'issuedByDeviceId', 'issuedAt',
   'closedAt', 'closedByDeviceId', 'outcome', 'pairReleasedAt',
+  'contactPhone', 'accountabilityBadgeNumber',
 ])
 
 export const dandiyaLoanHolders = tableOf('dandiya_loan_holders', [
@@ -72,5 +73,18 @@ export const inArray = (left, values) => ({
 })
 export const asc = (left) => ({ op: 'asc', column: left.column })
 
-/** A tagged template captured as a descriptor, never as real SQL. */
-export const sql = (strings, ...values) => ({ op: 'sql', strings: [...strings], values })
+/**
+ * A tagged template captured as a descriptor, never as real SQL.
+ *
+ * `.as(alias)` exists because an INSERT ... SELECT names every selected
+ * expression, and the issuance writer builds its guarded insert that way. The
+ * alias is carried but never used to decide anything: the stand-in reads the
+ * FIELD KEY, exactly as Drizzle builds the column list from the table.
+ */
+export const sql = (strings, ...values) => {
+  const expression = { op: 'sql', strings: [...strings], values }
+
+  expression.as = (alias) => ({ ...expression, alias, as: expression.as })
+
+  return expression
+}

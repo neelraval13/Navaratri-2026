@@ -2881,6 +2881,13 @@ const EXPECTED_MIGRATIONS = [
    * migration that has run anywhere is history.
    */
   '0005_dandiya_checkout.sql',
+  /**
+   * Phase D3.3's badgeless issuance. Appended, and 0000-0005 are untouched.
+   * Every statement is additive or widening, so existing loans are preserved
+   * exactly — the one CHECK it replaces is replaced by a looser one that
+   * accepts every value already stored.
+   */
+  '0006_dandiya_badgeless_issuance.sql',
 ]
 
 if (migrationFiles.join(', ') !== EXPECTED_MIGRATIONS.join(', ')) {
@@ -3927,17 +3934,340 @@ if (
       dandiyaProblems.push(`${table} no longer declares its partial unique index`)
     }
 
-    /** No attendee column, in either table. */
-    const columns = block.slice(block.indexOf('{'), block.indexOf('\n  },'))
+    /**
+     * NO ATTENDEE COLUMN — with ONE deliberate, narrow exception since Phase
+     * D3.3.
+     *
+     * A pair may go out to two people who have no badges, and something has
+     * to be accountable for it. That something is a single contact phone
+     * number on the LOAN, and it is the only attendee-identifying value this
+     * database holds. Everything else stays forbidden, on both tables: no
+     * name, no age, no gender, no WhatsApp link, no payment, no amount.
+     *
+     * THE HOLDER TABLE STILL ALLOWS NOTHING. A number copied onto a stick
+     * would assert that both guests gave it, and two copies of one fact are
+     * two things that can disagree.
+     *
+     * COMMENTS ARE STRIPPED FIRST. The word "attendee" appears legitimately
+     * in the prose explaining these columns, and a guard that reads a
+     * declaration's documentation as its content verifies nothing.
+     */
+    const columns = stripComments(block.slice(block.indexOf('{'), block.indexOf('\n  },')))
       .replace(/pairCode|pair_code/g, 'label')
       .toLowerCase()
+
+    /**
+     * The exception is neutralised in BOTH spellings — the TypeScript field
+     * and the SQL column name — because the declaration carries both.
+     */
+    const declared =
+      table === 'dandiyaLoans'
+        ? columns.replace(/contactphone|contact_phone/g, 'contact')
+        : columns
 
     for (const field of [
       'name', 'phone', 'whatsapp', 'wa.me', 'age', 'gender', 'payment', 'amount',
       'attendee', 'normalized', 'upi',
     ]) {
-      if (columns.includes(field)) {
+      if (declared.includes(field)) {
         dandiyaProblems.push(`${table} declares an attendee column: ${field}`)
+      }
+    }
+
+    /** And the exception is exactly one column, on exactly one table. */
+    if (table === 'dandiyaLoanHolders' && /phone/i.test(columns)) {
+      dandiyaProblems.push('a dandiya HOLDER row carries a phone number')
+    }
+  }
+
+  /**
+   * THE BADGELESS GUARANTEES, in the SCHEMA as well as in the migration.
+   *
+   * The migration is what a human applies, so it is checked above; the schema
+   * is what the next generated migration is diffed against, so a narrowing
+   * here would silently produce an 0007 that broke guest issuance. Both.
+   */
+  if (!/\$\{table\.badgeNumber\} is null or \$\{table\.badgeNumber\} > 0/.test(dandiyaSchema)) {
+    dandiyaProblems.push('the holder badge check no longer admits a guest')
+  }
+
+  /**
+   * Scoped to the HOLDER table's own declaration. `prize_awards` legitimately
+   * keeps a NOT NULL badge number, and matching the whole schema reported a
+   * failure against correct code.
+   */
+  const holderBlock = (() => {
+    const start = dandiyaSchema.indexOf("export const dandiyaLoanHolders = pgTable(")
+    const next = ['\nexport const ', '\nexport type ']
+      .map((marker) => dandiyaSchema.indexOf(marker, start + 1))
+      .filter((index) => index !== -1)
+
+    return start === -1 || next.length === 0
+      ? ''
+      : dandiyaSchema.slice(start, Math.min(...next))
+  })()
+
+  if (holderBlock === '') {
+    dandiyaProblems.push('the dandiya holder table could not be located')
+  } else if (/badgeNumber: integer\('badge_number'\)\.notNull\(\)/.test(holderBlock)) {
+    dandiyaProblems.push('a dandiya holder badge is NOT NULL, so no guest can hold a stick')
+  }
+
+  if (!/contactPhone: text\('contact_phone'\)/.test(dandiyaSchema)) {
+    dandiyaProblems.push('the badgeless contact column is gone')
+  }
+
+  /**
+   * ONE OPEN BADGELESS LOAN PER NUMBER, AND PARTIAL ON `closed_at`.
+   *
+   * Without the predicate a guest who returned their sticks could never
+   * borrow again all event — the opposite failure, and the one an operator
+   * would meet at the table rather than at release time. Partial on
+   * `pair_released_at` instead would tie the person to the PAIR's quarantine,
+   * which is not their debt.
+   */
+  if (!/uniqueIndex\('dandiya_loans_one_open_per_contact'\)[\s\S]{0,160}?\.where\(sql`\$\{table\.closedAt\} is null`\)/
+    .test(dandiyaSchema)) {
+    dandiyaProblems.push('the open-contact index is missing or not partial on closed_at')
+  }
+
+  /**
+   * THE MIXED LOAN'S ANCHOR, which is what makes "give the pair ON THE BADGE"
+   * true rather than aspirational.
+   *
+   * The holder-level index cannot express it. Partial on `resolved_at`, it
+   * releases a badge the moment that badge's OWN stick is accounted for —
+   * right for a two-badge pair, and exactly what would let #100 take a second
+   * mixed pair while the guest on the first still held a stick. So the anchor
+   * is a LOAN-level column with its own index, partial on `closed_at`.
+   */
+  if (!/accountabilityBadgeNumber: integer\('accountability_badge_number'\)/
+    .test(dandiyaSchema)) {
+    dandiyaProblems.push('the mixed-loan accountability badge column is gone')
+  }
+
+  if (!/uniqueIndex\('dandiya_loans_one_open_per_accountability_badge'\)[\s\S]{0,200}?\.where\(sql`\$\{table\.closedAt\} is null`\)/
+    .test(dandiyaSchema)) {
+    dandiyaProblems.push(
+      'the accountability-badge index is missing or not partial on closed_at',
+    )
+  }
+
+  /**
+   * ONE ANCHOR PER LOAN, as a database CHECK. Without it either column could
+   * appear on any loan, and `contact_phone IS NOT NULL` would stop meaning
+   * exactly "fully badgeless" — which both the open-contact index and every
+   * screen rely on.
+   */
+  if (!/'dandiya_loans_accountability_exclusive'[\s\S]{0,200}?\$\{table\.accountabilityBadgeNumber\} is null or \$\{table\.contactPhone\} is null/
+    .test(dandiyaSchema)) {
+    dandiyaProblems.push('a dandiya loan may carry both an anchor badge and a contact number')
+  }
+
+  if (!/\$\{table\.accountabilityBadgeNumber\} is null or \$\{table\.accountabilityBadgeNumber\} > 0/
+    .test(dandiyaSchema)) {
+    dandiyaProblems.push('the accountability badge check no longer requires a real badge')
+  }
+
+  /**
+   * THE WRITER TAKES A MODE, NOT THREE FREE COLUMNS — and that is the only
+   * reason the four impossible loans cannot be written: a mixed loan with no
+   * anchor, one anchored to a badge that is not on it, a badge loan carrying
+   * a phone number, and a badgeless loan with no contact.
+   *
+   * `issuanceColumns` is the single total derivation and must stay UNEXPORTED,
+   * so no call site can assemble those columns itself.
+   */
+  if (!/openDandiyaLoan = async \(input: \{[\s\S]{0,400}?issuance: DandiyaIssuance/
+    .test(dandiyaWriter)) {
+    dandiyaProblems.push('openDandiyaLoan no longer takes a discriminated issuance')
+  }
+
+  if (/badgeNumbers: readonly \[number \| null, number \| null\][\s\S]{0,200}?issuedByDeviceId/
+    .test(dandiyaWriter)) {
+    dandiyaProblems.push('openDandiyaLoan accepts a positional badge pair again')
+  }
+
+  if (/export const issuanceColumns/.test(dandiyaWriter)) {
+    dandiyaProblems.push('issuanceColumns is exported, so a second call site can build columns')
+  }
+
+  /**
+   * ONE DEFINITION AND ONE CALL SITE — counted as two mentions of the name,
+   * rather than by matching `issuanceColumns(`, which the declaration does not
+   * contain: it is written `const issuanceColumns = (`. A guard that expects a
+   * shape the correct code does not have is a guard somebody deletes.
+   */
+  const derivationMentions =
+    (stripComments(dandiyaWriter).match(/\bissuanceColumns\b/g) ?? []).length
+
+  if (!/const issuanceColumns = \(/.test(dandiyaWriter) || derivationMentions !== 2) {
+    dandiyaProblems.push('the dandiya issuance derivation is not one definition with one caller')
+  }
+
+  /** And exactly one place decides the anchor, from the badge itself. */
+  if (!/accountabilityBadgeNumber: issuance\.badgeNumber/.test(dandiyaWriter)) {
+    dandiyaProblems.push('a mixed dandiya loan is not anchored to its own badge')
+  }
+
+  if ((stripComments(dandiyaWriter).match(/accountabilityBadgeNumber: issuance\./g) ?? [])
+    .length !== 1) {
+    dandiyaProblems.push('more than one path chooses a dandiya accountability badge')
+  }
+
+  /**
+   * AN OPEN ANCHOR BLOCKS THAT BADGE FROM EVERY NEW LOAN — a mixed one and an
+   * ordinary two-badge one alike — and the DATABASE decides it, inside the
+   * transaction that writes.
+   *
+   * ISSUANCE IS SERIALISED ON THE EVENT ROW. The rule spans a HOLDER row of
+   * the new loan and the LOAN row of another, so no unique index can hold it;
+   * and an earlier revision that read the anchors in a statement of their own
+   * and decided in application code was a TOCTOU hole — the process can pause
+   * arbitrarily after such a read, and in that window another desk can commit
+   * a mixed loan on the same badge AND that badge's own stick can be resolved,
+   * leaving the holder index nothing to catch.
+   */
+  const issuanceBody = stripComments(dandiyaWriter).slice(
+    stripComments(dandiyaWriter).indexOf('export const openDandiyaLoan'),
+    stripComments(dandiyaWriter).indexOf('const describePairConflict'),
+  )
+  const issuanceBatch = (() => {
+    const opening = 'const statements = ['
+    const index = issuanceBody.indexOf(opening)
+
+    return index === -1 ? '' : issuanceBody.slice(index + opening.length)
+  })()
+
+  /** THE LOCK IS THE FIRST STATEMENT of the issuance transaction. */
+  if (!issuanceBatch.slice(0, issuanceBatch.indexOf(',')).includes('lockEventIssuance(')) {
+    dandiyaProblems.push('dandiya issuance does not open by locking the event row')
+  }
+
+  if (!/lockEventIssuance = \(eventId: string\) =>[\s\S]{0,400}?\.from\(events\)[\s\S]{0,240}?eq\(events\.id, eventId\)[\s\S]{0,160}?\.for\('update'\)/
+    .test(dandiyaWriter)) {
+    dandiyaProblems.push('the dandiya issuance lock is not an event-scoped row lock')
+  }
+
+  if ((stripComments(dandiyaWriter).match(/\blockEventIssuance\b/g) ?? []).length !== 2) {
+    dandiyaProblems.push('the dandiya issuance lock is not one definition with one call site')
+  }
+
+  /** ONE transaction: the lock and every write in a single batch. */
+  if ((issuanceBody.match(/await database\.batch\(/g) ?? []).length !== 1) {
+    dandiyaProblems.push('dandiya issuance is not one transaction')
+  }
+
+  /** The anchor decision is a predicate ON the guarded write, not a pre-read. */
+  if (!/guardedLoanInsert[\s\S]{0,2600}?noOpenAnchorFor\(input\.eventId, input\.badges\)/
+    .test(dandiyaWriter)) {
+    dandiyaProblems.push('the dandiya anchor rule is not a predicate on the guarded insert')
+  }
+
+  if (!/not exists \(select 1 from \$\{dandiyaLoans\}/.test(dandiyaWriter) ||
+      !/\$\{dandiyaLoans\.closedAt\} is null/.test(dandiyaWriter) ||
+      !/\$\{dandiyaLoans\.accountabilityBadgeNumber\} in \$\{badges\}/.test(dandiyaWriter)) {
+    dandiyaProblems.push('the dandiya anchor guard no longer names open anchors for these badges')
+  }
+
+  /** And the holder writes are conditional on that loan existing. */
+  if (!/holderInsertForLoan[\s\S]{0,1600}?\.from\(dandiyaLoans\)[\s\S]{0,200}?eq\(dandiyaLoans\.id, input\.loanId\)/
+    .test(dandiyaWriter)) {
+    dandiyaProblems.push('a refused dandiya issuance could still write holder rows')
+  }
+
+  /** THE OLD PRE-READ MUST NOT COME BACK, in name or in shape. */
+  if (/anchoredOpenBadges/.test(dandiyaWriter)) {
+    dandiyaProblems.push('the dandiya anchor pre-read is back')
+  }
+
+  /** Nor any substitute for serialising on a row. */
+  for (const [pattern, problem] of [
+    [/pg_advisory/i, 'dandiya issuance uses an advisory lock'],
+    [/new Mutex|navigator\.locks|process-local/i, 'dandiya issuance uses an application mutex'],
+    [/setTimeout|setInterval|await new Promise\(/, 'dandiya issuance relies on timing'],
+  ]) {
+    if (pattern.test(stripComments(dandiyaWriter))) {
+      dandiyaProblems.push(problem)
+    }
+  }
+
+  /**
+   * AND THE PREMISES THE ANCHOR RULE RESTS ON. Within the locked transaction
+   * the anchor set can only SHRINK — anchors are created by issuance, which
+   * this lock serialises, and removed by a close. Both halves of that stay
+   * true only while nothing updates an anchor and nothing re-opens a loan.
+   */
+  for (const [pattern, problem] of [
+    [/\.set\(\{[^}]*accountabilityBadgeNumber/,
+      'an UPDATE writes a dandiya accountability badge, so the anchor is no longer monotone'],
+    [/\.set\(\{[^}]*closedAt: null/,
+      'an UPDATE re-opens a closed dandiya loan, so the anchor is no longer monotone'],
+  ]) {
+    if (pattern.test(stripComments(dandiyaWriter))) {
+      dandiyaProblems.push(problem)
+    }
+  }
+
+  /**
+   * AND A CALLER MAY NEVER NAME IT. The anchor is derived from the holders, so
+   * a caller that could choose it could anchor a mixed loan to a badge that is
+   * not on it. REFUSED rather than ignored, like every other such field.
+   */
+  if (!/'accountabilityBadgeNumber',/.test(dandiyaRequests)) {
+    dandiyaProblems.push('a dandiya request may name its own accountability badge')
+  }
+
+  for (const [statement, required] of [
+    ['dandiya_loans_one_open_per_contact', ['"event_id","contact_phone"', 'closed_at" is null']],
+    ['dandiya_loans_contact_phone_canonical', ["~ '^[0-9]{10}$'"]],
+    ['dandiya_loans_one_open_per_accountability_badge',
+      ['"event_id","accountability_badge_number"', 'closed_at" is null']],
+    ['dandiya_loans_accountability_exclusive',
+      ['"accountability_badge_number" is null', '"contact_phone" is null']],
+    ['dandiya_loans_accountability_badge_positive',
+      ['"accountability_badge_number" is null', '"accountability_badge_number" > 0']],
+    ['ADD COLUMN "accountability_badge_number"', ['integer']],
+  ]) {
+    const sql = (readText(join(ROOT, 'drizzle/0006_dandiya_badgeless_issuance.sql')) ?? '')
+      .replace(/^--.*$/gm, '')
+      .split('--> statement-breakpoint')
+      .find((entry) => entry.includes(statement)) ?? ''
+
+    for (const fragment of required) {
+      if (!sql.includes(fragment)) {
+        dandiyaProblems.push(`0006's ${statement} does not say: ${fragment}`)
+      }
+    }
+  }
+
+  /**
+   * AND A CONTACT NUMBER NEVER REACHES A LOG. Extracted by balancing the
+   * parentheses rather than with `[^)]*`, which stops at the first `)` and so
+   * missed `console.error('x', (await y()).contactPhone)` entirely.
+   */
+  for (const [path, source] of [
+    ['api/dandiya.ts', stripComments(dandiyaEndpoint)],
+    ['server/dandiya/loans.ts', stripComments(dandiyaWriter)],
+    ['server/dandiya/board.ts', stripComments(dandiyaBoard)],
+  ]) {
+    for (const match of source.matchAll(/console\.[a-z]+\(/g)) {
+      let depth = 0
+      let end = match.index + match[0].length - 1
+
+      while (end < source.length) {
+        if (source[end] === '(') depth += 1
+        if (source[end] === ')') {
+          depth -= 1
+
+          if (depth === 0) break
+        }
+
+        end += 1
+      }
+
+      if (/contactPhone|contact_phone/i.test(source.slice(match.index, end))) {
+        dandiyaProblems.push(`${path} logs a contact phone number`)
       }
     }
   }
@@ -4157,6 +4487,8 @@ if (
   /** The two mutations must not be able to write an attendee fact. */
   const inserted = writer.slice(writer.indexOf('const statements = ['), writer.indexOf('try {'))
     .replace(/pairCode/g, 'label')
+    // The ONE deliberate exception: a badgeless loan's contact number.
+    .replace(/contactPhone/g, 'contact')
     .toLowerCase()
 
   for (const field of ['name', 'age', 'gender', 'phone', 'attendee', 'amount']) {
@@ -4423,10 +4755,36 @@ if (
     dandiyaProblems.push('the dandiya module parses the Badge Register itself')
   }
 
+  /**
+   * THE WIRE CONTRACT CARRIES ONE PHONE FIELD AND NO OTHER ATTENDEE DATA.
+   *
+   * `contactPhone` is the badgeless pair's accountability and is deliberate.
+   * A registered attendee's number is still never carried: the register
+   * projection does not read it, so there is nothing to put here.
+   */
+  const contractFields = stripComments(dandiyaContract).replace(/contactPhone/g, 'contact')
+
   for (const field of ['phone', 'whatsapp', 'paymentMethod', 'amount']) {
-    if (new RegExp(`${field}\\s*[:?]`, 'i').test(stripComments(dandiyaContract))) {
+    if (new RegExp(`${field}\\s*[:?]`, 'i').test(contractFields)) {
       dandiyaProblems.push(`the shared dandiya contract declares ${field}`)
     }
+  }
+
+  /**
+   * AND THE REGISTER PROJECTION IS UNCHANGED. The one thing that must NOT
+   * have happened while adding a phone number to this module is the attendee
+   * reader starting to read everybody's.
+   */
+  const registerReader = stripComments(
+    readText(join(ROOT, 'server/attendees/register.ts')) ?? '',
+  )
+
+  if (/COLUMNS\.phone|whatsapp/i.test(registerReader)) {
+    dandiyaProblems.push('the Badge Register reader now reads the phone column')
+  }
+
+  if (/attendee\??\.phone|attendee\.whatsapp/i.test(stripComments(dandiyaBoard))) {
+    dandiyaProblems.push('the dandiya board reads an attendee\u2019s phone number')
   }
 
   /**
@@ -4560,36 +4918,89 @@ if (
  * would leave that resting on structure alone — and an ungated one that wrote
  * to Production would be far worse than no script at all.
  */
-const dandiyaSmoke = readText(join(ROOT, 'scripts/dandiya-concurrency-smoke.mjs'))
+const SMOKES = [
+  ['scripts/dandiya-concurrency-smoke.mjs', 'SMOKE-D31-', 'resolveDandiyaHolders'],
+  /**
+   * D3.3b's ISSUANCE smoke. The cross-table accountability rule is carried by
+   * a predicate on the guarded insert behind an event-row lock, and a
+   * single-threaded stand-in cannot produce the schedule that matters: a
+   * writer that STARTED before the anchor committed. Only a live concurrent
+   * run can, so a missing or ungated script would leave the fix resting on
+   * structure alone.
+   */
+  ['scripts/dandiya-issuance-concurrency-smoke.mjs', 'SMOKE-D33B-', 'openDandiyaLoan'],
+]
 
-if (dandiyaSmoke === null) {
-  dandiyaProblems.push('scripts/dandiya-concurrency-smoke.mjs is missing')
-} else {
+/**
+ * EVERY GATE, CHECKED PER SCRIPT.
+ *
+ * Deliberately not against the two files joined: that would let either script
+ * satisfy an interlock on the other's behalf, and a canary that ungated the
+ * issuance smoke then slipped past this check entirely. Searching a haystack
+ * proves nothing about one needle.
+ */
+for (const [path, prefix, writer] of SMOKES) {
+  const smoke = readText(join(ROOT, path))
+
+  if (smoke === null) {
+    dandiyaProblems.push(`${path} is missing`)
+
+    continue
+  }
+
+  for (const interlock of [
+    "process.env.ALLOW_DANDIYA_DB_SMOKE_WRITES !== 'true'",
+    "process.env.VERCEL_ENV !== 'development'",
+    "allowedEnv !== 'development'",
+    '--confirm',
+  ]) {
+    if (!smoke.includes(interlock)) {
+      dandiyaProblems.push(`${path} lost an interlock: ${interlock}`)
+    }
+  }
+
+  /**
+   * And each one refuses BEFORE a connection is opened.
+   *
+   * The markers name the connection BINDING rather than the driver function,
+   * so this audit does not have to contain a literal that reads like a call
+   * to one — `verify:9a` asserts that `release:check` opens no connection,
+   * and it is right to scan for exactly that shape.
+   */
+  const firstQuery = Math.min(
+    ...['const sql =', 'await sql`']
+      .map((marker) => smoke.indexOf(marker))
+      .filter((index) => index !== -1),
+  )
+
   for (const interlock of [
     "process.env.ALLOW_DANDIYA_DB_SMOKE_WRITES !== 'true'",
     "process.env.VERCEL_ENV !== 'development'",
     "allowedEnv !== 'development'",
   ]) {
-    if (!dandiyaSmoke.includes(interlock)) {
-      dandiyaProblems.push(`the dandiya smoke lost an interlock: ${interlock}`)
+    if (smoke.indexOf(interlock) > firstQuery) {
+      dandiyaProblems.push(`${path} opens a connection before its interlocks`)
     }
   }
 
-  if (!dandiyaSmoke.includes('--confirm')) {
-    dandiyaProblems.push('the dandiya smoke runs without an explicit confirmation')
+  if (!smoke.includes(prefix)) {
+    dandiyaProblems.push(`${path} no longer isolates its fixture pair codes`)
+  }
+
+  /** It exercises the REAL writer rather than reimplementing it in SQL. */
+  if (!smoke.includes(writer)) {
+    dandiyaProblems.push(`${path} no longer calls ${writer}`)
   }
 
   /** It cleans up only its own rows, and touches no central table. */
-  if (/delete from (events|devices|device_attributes|badge_assignments|prize_awards)/i
-    .test(dandiyaSmoke)) {
-    dandiyaProblems.push('the dandiya smoke deletes central state')
+  if (/(insert into|delete from) (events|devices|device_attributes|badge_assignments|prize_awards)/i
+    .test(smoke)) {
+    dandiyaProblems.push(`${path} creates or deletes central state`)
   }
+}
 
-  if (!dandiyaSmoke.includes('SMOKE-D31-')) {
-    dandiyaProblems.push('the dandiya smoke no longer isolates its fixture pair codes')
-  }
-
-  /** And it is never wired into a gate that runs unattended. */
+/** And neither is wired into a gate that runs unattended. */
+{
   const manifest = readText(join(ROOT, 'package.json')) ?? ''
   const unattended = ['"verify"', '"release:check"', '"build"', '"lint"']
     .map((name) => {
@@ -4599,7 +5010,8 @@ if (dandiyaSmoke === null) {
     })
     .join('\n')
 
-  if (/dandiya-concurrency-smoke|db:smoke/.test(unattended)) {
+  if (/dandiya-concurrency-smoke|dandiya-issuance-concurrency-smoke|db:smoke/
+    .test(unattended)) {
     dandiyaProblems.push('a writing smoke test is wired into an unattended gate')
   }
 }

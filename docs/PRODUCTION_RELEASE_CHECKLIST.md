@@ -313,8 +313,9 @@ or sync question, not a directory one.
 
 ### Dandiya checkout (Phases D3 and D3.1)
 
-`/dandiya` issues a physical dandiya pair to two registered attendees and
-takes the sticks back, for a device holding the `dandiya` attribute. It reads
+`/dandiya` issues a physical dandiya pair to two people — registered
+attendees, guests with no badge, or one of each — and takes the sticks back,
+for a device holding the `dandiya` attribute. It reads
 the SAME Badge Register the prize desk and the directory read, through the
 same reader, and stores a pair code, two badge NUMBERS, devices and
 timestamps.
@@ -345,11 +346,21 @@ twice**, so `0005` must be applied before the event.
 | 3.81a | `pnpm db:check` output includes `dandiya pair codes are stored canonical (trimmed, uppercase)`. Without that CHECK the pair uniqueness index can be bypassed by typing a label in a different case | ☐ |
 | 3.82 | `/api/dandiya` has NO firewall rule, and nobody has added one | ☐ |
 | 3.83 | Volunteers briefed that a pair stays OUT until returned — including across midnight — and that anything left over appears as **OUTSTANDING** rather than disappearing | ☐ |
-| 3.84 | Volunteers briefed that each stick is returned or marked lost SEPARATELY, that an attendee is free as soon as their own stick is resolved either way, and that **Return Whole Pair** / **Report Pair Lost** only affect sticks still out | ☐ |
+| 3.84 | Volunteers briefed that each stick is returned or marked lost SEPARATELY, that a dancer stops holding a stick as soon as their own is resolved either way, and that **Return Whole Pair** / **Report Pair Lost** only affect sticks still out | ☐ |
 | 3.84a | Volunteers briefed that a pair with a stick LOST appears under **Issues** and can never be issued again this event, and that there is no way to release it from the app — a missing stick is replaced physically or the pair is retired | ☐ |
 | 3.84b | Volunteers briefed that a dancer with a previous loss **may** be given another pair: the warning is information, not a refusal, and there is no override to look for | ☐ |
 | 3.84c | Volunteers briefed that **History is one event day at a time**, that a pair belongs to the day it was **issued** even when it came back after midnight, and that anything still out appears in that day's **Outstanding** filter as well as in Active | ☐ |
 | 3.84d | Volunteers briefed on **where the end-of-night list is**: while the event day is still running, the sticks that have not come back are **History → Today → Outstanding**. The previous-day **carryover banner** is not that list — it appears only after midnight | ☐ |
+| 3.84f | `0006_dandiya_badgeless_issuance.sql` applied the same way — Development first, Production by hand. Without it the desk cannot issue to anybody without a badge | ☐ |
+| 3.84g | `pnpm db:check` output includes `a dandiya badge number is absent or positive`, `a dandiya contact number is absent or exactly ten digits`, `one open badgeless dandiya loan per contact number, and reuse after it closes`, `a dandiya accountability badge is absent or positive`, `a dandiya loan is anchored to a badge or to a number, never to both` and `one open MIXED dandiya loan per accountability badge, freed when it closes` | ☐ |
+| 3.84h | Volunteers know how to select **No badge** for a person without one, and that the pair is then issued on the other person's badge | ☐ |
+| 3.84i | Volunteers briefed that a phone number is required **only when neither** person has a badge — **one badge is enough**, and a number must not be collected beside one | ☐ |
+| 3.84j | Volunteers briefed to **read the contact number back** to the two people before issuing a fully badgeless pair: it is the only way the team can reach them | ☐ |
+| 3.84k | Volunteers briefed that a guest's stick is returned or marked lost exactly like a badge holder's, and that the contact number appears on the Active card and in that day's Outstanding list | ☐ |
+| 3.84l | Volunteers briefed that a pair issued on ONE badge stays that badge's responsibility until **both** sticks are accounted for: returning their own stick does not end it, the card says **Accountability badge**, and that badge cannot take another no-badge pair until the first one closes | ☐ |
+| 3.84m | Volunteers briefed that while such a pair is open that badge can take **no** new pair at all — not another no-badge pair and **not** a normal two-badge one — and that the desk gives the same reason either way | ☐ |
+| 3.84n | Volunteers briefed that this does **not** apply to a normal two-badge pair — there each dancer is free as soon as their own stick is resolved, exactly as before | ☐ |
+| 3.84o | After `0006` is applied to Development, `pnpm db:smoke:dandiya-issuance --confirm` run there and passing — it proves against a real database that an issuance which began before an accountability anchor committed still refuses once it has waited on the event row. Never run against Preview or Production | ☐ |
 | 3.84e | Volunteers briefed that after midnight an unresolved pair stays in **Active** and becomes **carryover**: the banner is the next-day reminder, and **Active → Carryover** lists exactly those pairs. Nothing is reset at midnight — a pair stops being outstanding only when somebody resolves its sticks | ☐ |
 | 3.85 | The venue has connectivity at the dandiya table, and volunteers know the desk stops working without it | ☐ |
 

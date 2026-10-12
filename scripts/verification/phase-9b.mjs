@@ -1018,17 +1018,42 @@ const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('
  * contributed nothing, not that the directory has a particular length.
  */
 check('9B added no migration',
-  migrations.filter((file) => !/^000[2345]_/.test(file)),
+  migrations.filter((file) => !/^000[23456]_/.test(file)),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
 check('  and no later migration touched an Admin table',
-  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql']
+  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
+   '0006_dandiya_badgeless_issuance.sql']
     .some((file) => /ALTER TABLE "(devices|device_attributes|events)"/.test(read(`drizzle/${file}`))),
   false)
 const schemaSource = stripComments(read('server/db/schema.ts'))
 check('  no admin, session or token TABLE added',
   /CREATE TABLE|admin_users|device_sessions|refresh_tokens/i.test(schemaSource), false)
 check('  no next_badge added', /next_badge|nextBadge/.test(schemaSource), false)
-check('  no attendee column added', /phone|attendee|payment|gender/i.test(schemaSource), false)
+/**
+ * NO ADMIN-REALM ATTENDEE COLUMN. Scoped to the tables 9B is about — devices,
+ * attributes and events — because Phase D3.3 deliberately added ONE
+ * attendee-identifying column to `dandiya_loans`: the contact number a fully
+ * badgeless pair is accountable to. That exception is documented, is the only
+ * one, and is policed by the dandiya guards in `release:check`; widening this
+ * check to the whole schema would now fail on it and say nothing useful.
+ */
+check('  no attendee column added to the Admin tables',
+  ['devices', 'deviceAttributes', 'events'].map((table) => {
+    const start = schemaSource.indexOf(`export const ${table} = pgTable(`)
+    const next = ['\nexport const ', '\nexport type ']
+      .map((marker) => schemaSource.indexOf(marker, start + 1))
+      .filter((index) => index !== -1)
+    const block = start === -1 || next.length === 0
+      ? 'MISSING'
+      : schemaSource.slice(start, Math.min(...next))
+
+    return /phone|attendee|payment|gender/i.test(block)
+  }),
+  [false, false, false])
+check('  and the ONE attendee column in the schema is the badgeless contact',
+  [...schemaSource.matchAll(/\b[A-Za-z]*(?:phone|attendee|payment|gender)[A-Za-z]*:/gi)]
+    .map((match) => match[0]),
+  ['contactPhone:'])
 check('  the attribute column is free text, so the allow-list change needed no migration',
   [/attribute: text\('attribute'\)/.test(schemaSource), /pgEnum/.test(schemaSource),
    /'registration'|'prizes'/.test(schemaSource)], [true, false, false])

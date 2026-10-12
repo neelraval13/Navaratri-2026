@@ -36,11 +36,30 @@ export type DandiyaViolation =
   | 'attendee-already-holding'
   /** The same attendee was given both sticks of one pair. */
   | 'duplicate-holder-in-loan'
+  /**
+   * This contact number already has an OPEN fully badgeless loan. The
+   * badgeless analogue of `attendee-already-holding`, and it frees the moment
+   * that loan closes.
+   */
+  | 'contact-already-holding'
+  /**
+   * THIS BADGE IS STILL ACCOUNTABLE FOR AN OPEN MIXED LOAN.
+   *
+   * Distinct from `attendee-already-holding`, and the difference is the whole
+   * point of the loan-level anchor: that one says the attendee is personally
+   * holding an unresolved STICK, and it is released as soon as their own
+   * stick is accounted for. This one says they answer for a whole PAIR that
+   * has not come back — a guest still holds the other stick — and it is
+   * released only when that loan closes.
+   */
+  | 'accountability-already-holding'
 
 export const DANDIYA_CONSTRAINTS: Record<string, DandiyaViolation> = {
   dandiya_loans_one_unreleased_per_pair: 'pair-unavailable',
   dandiya_loan_holders_one_unresolved_per_badge: 'attendee-already-holding',
   dandiya_loan_holders_loan_id_badge_number_key: 'duplicate-holder-in-loan',
+  dandiya_loans_one_open_per_contact: 'contact-already-holding',
+  dandiya_loans_one_open_per_accountability_badge: 'accountability-already-holding',
 }
 
 /**
@@ -80,4 +99,6 @@ export const PUBLIC_DANDIYA_CONFLICT: Record<DandiyaViolation, DandiyaConflict> 
   'pair-unavailable': 'pair-in-use',
   'attendee-already-holding': 'attendee-already-holding-pair',
   'duplicate-holder-in-loan': 'attendee-already-holding-pair',
+  'contact-already-holding': 'contact-already-holding-pair',
+  'accountability-already-holding': 'accountability-already-holding-pair',
 }

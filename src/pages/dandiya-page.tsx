@@ -46,8 +46,7 @@ const DandiyaPage: React.FC = () => {
         </h1>
 
         <p className="text-sm text-muted-foreground">
-          Issue a pair to two registered attendees, and return it when it comes
-          back.
+          Issue a pair to two people and track each stick until it comes back.
         </p>
       </div>
 

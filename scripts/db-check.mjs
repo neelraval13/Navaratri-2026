@@ -192,6 +192,35 @@ const EXPECTED_DANDIYA_CONSTRAINTS = [
     ['check', "outcome is distinct from 'returned'", 'pair_released_at is not null'],
   ],
   [
+    'dandiya_loans_contact_phone_canonical',
+    'a dandiya contact number is absent or exactly ten digits',
+    /**
+     * The one shape this application stores a phone number in — no `+91`, no
+     * spacing. Checked by DEFINITION rather than by name: a column that
+     * accepted anything would let a number nobody can ring be the only way to
+     * reach two people with no badges.
+     */
+    ['check', 'contact_phone is null', 'or', "contact_phone ~ '^[0-9]{10}$'"],
+  ],
+  [
+    'dandiya_loans_accountability_badge_positive',
+    'a dandiya accountability badge is absent or positive',
+    ['check', 'accountability_badge_number is null', 'or',
+      'accountability_badge_number > 0'],
+  ],
+  /**
+   * ONE ANCHOR PER LOAN. A loan is accountable to a badge or to a number and
+   * never to both, which is what makes each non-null column name exactly one
+   * issuance mode: an anchor means MIXED, a contact number means FULLY
+   * BADGELESS. Without it either column could appear on any loan and no
+   * screen — and no index — could tell the modes apart.
+   */
+  [
+    'dandiya_loans_accountability_exclusive',
+    'a dandiya loan is anchored to a badge or to a number, never to both',
+    ['check', 'accountability_badge_number is null', 'or', 'contact_phone is null'],
+  ],
+  [
     'dandiya_loans_event_id_events_id_fk',
     'dandiya loan belongs to an event',
     ['foreign key (event_id)', 'references events(id)'],
@@ -253,8 +282,13 @@ const EXPECTED_DANDIYA_CONSTRAINTS = [
   ],
   [
     'dandiya_loan_holders_badge_number_positive',
-    'dandiya holder badge number positive',
-    ['check', 'badge_number > 0'],
+    'a dandiya badge number is absent or positive',
+    /**
+     * WIDENED BY 0006, and checked as the widened form. A database still
+     * carrying the old `badge_number > 0` would reject every guest stick,
+     * and matching only the tail of the expression would pass either way.
+     */
+    ['check', 'badge_number is null', 'or', 'badge_number > 0'],
   ],
   [
     'dandiya_loan_holders_slot_valid',
@@ -303,6 +337,34 @@ const EXPECTED_DANDIYA_INDEXES = [
     'one unresolved dandiya stick per attendee, whether it came back or not',
     ['create unique index', '(event_id, badge_number)', 'where', 'resolved_at is null'],
   ],
+  [
+    'dandiya_loans_one_open_per_contact',
+    'one open badgeless dandiya loan per contact number, and reuse after it closes',
+    /**
+     * The badgeless analogue of one unresolved stick per attendee. PARTIAL on
+     * `closed_at IS NULL`, so a number frees the moment its loan closes —
+     * without that predicate a guest who returned their sticks could never
+     * borrow again, which is the opposite failure and just as bad.
+     */
+    ['create unique index', '(event_id, contact_phone)', 'where', 'closed_at is null'],
+  ],
+  [
+    'dandiya_loans_one_open_per_accountability_badge',
+    'one open MIXED dandiya loan per accountability badge, freed when it closes',
+    /**
+     * PARTIAL ON `closed_at`, AND THAT IS THE POINT. The holder index beside
+     * it is partial on `resolved_at`, so it releases a badge as soon as that
+     * badge's OWN stick is accounted for — correct for a two-badge pair, and
+     * exactly what would let #100 anchor a second mixed pair while the guest
+     * on the first one still held a stick.
+     *
+     * Partial on `pair_released_at` instead would be the opposite failure:
+     * the badge would stay blocked by the PAIR's quarantine after a loss,
+     * which is the stock's problem and not that attendee's debt.
+     */
+    ['create unique index', '(event_id, accountability_badge_number)',
+      'where', 'closed_at is null'],
+  ],
 ]
 
 /** The prize ledger's read paths: history by event, and by awarding device. */
@@ -332,13 +394,39 @@ const EXPECTED_PRIZE_INDEXES = [
 const DANDIYA_LOAN_COLUMNS = {
   table: 'dandiya_loans',
   required: ['event_id', 'id', 'issued_at', 'issued_by_device_id', 'pair_code'],
-  nullable: ['closed_at', 'closed_by_device_id', 'outcome', 'pair_released_at'],
+  /**
+   * `contact_phone` IS NULLABLE AND MUST STAY SO. It is present only for a
+   * fully badgeless loan — a badge-based pair is accountable to its badges —
+   * so a NOT NULL here would make every badge loan unwritable.
+   *
+   * It is also the ONLY attendee-identifying column in this database, which
+   * is why the column SET is compared for equality: a second one appearing is
+   * the regression this check exists to catch.
+   *
+   * `accountability_badge_number` IS A BADGE NUMBER, not PII, and is nullable
+   * for the mirror-image reason: it is present only for a MIXED loan, so a
+   * NOT NULL here would make every two-badge and every fully badgeless pair
+   * unwritable.
+   */
+  nullable: [
+    'accountability_badge_number', 'closed_at', 'closed_by_device_id',
+    'contact_phone', 'outcome', 'pair_released_at',
+  ],
 }
 
 const DANDIYA_HOLDER_COLUMNS = {
   table: 'dandiya_loan_holders',
-  required: ['badge_number', 'event_id', 'id', 'loan_id', 'slot'],
-  nullable: ['resolution', 'resolved_at', 'resolved_by_device_id'],
+  required: ['event_id', 'id', 'loan_id', 'slot'],
+  /**
+   * `badge_number` BECAME NULLABLE IN 0006, and that nullability is the whole
+   * of badgeless issuance: NULL means this stick belongs to a guest with no
+   * badge. A database where it is still NOT NULL cannot issue to a guest at
+   * all, and the desk would refuse every badgeless pair with an unexplained
+   * error — so this check reports it rather than leaving it to the floor.
+   */
+  nullable: [
+    'badge_number', 'resolution', 'resolved_at', 'resolved_by_device_id',
+  ],
 }
 
 /** Lowercase, unquoted, single-spaced — so matching is about meaning. */

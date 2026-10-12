@@ -1,14 +1,20 @@
 import type * as React from 'react'
 import { useRef, useState } from 'react'
 
-import AttendeePicker, { type HoldingNote } from '@/components/dandiya/attendee-picker'
-import { pairAvailability, priorLossesFor } from '@/dandiya/dandiya-filters'
+import HolderSlot, { type HolderMode } from '@/components/dandiya/holder-slot'
+import {
+  holderObligationFor,
+  pairAvailability,
+  priorLossesFor,
+  type HolderObligation,
+} from '@/dandiya/dandiya-filters'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDateTime } from '@/lib/datetime'
 import type { EventAttendee } from '@/shared/attendee-contract'
+import { dandiyaHolderLabel } from '@/shared/dandiya-contract'
+import { localPhoneDigits, parsePhoneNumber } from '@/shared/phone'
 import type { DandiyaActiveLoan, DandiyaLoanRecord } from '@/shared/dandiya-contract'
 import { PAIR_CODE_MAX_LENGTH, parsePairCode } from '@/shared/dandiya-contract'
 
@@ -26,7 +32,13 @@ interface IssuePairFormProps {
    */
   issues: readonly DandiyaLoanRecord[]
   isSubmitting: boolean
-  onIssue: (input: { pairCode: string; badgeNumbers: [number, number] }) => void
+  onIssue: (input: {
+    pairCode: string
+    /** Slot 1 and slot 2. `null` is a guest with no badge. */
+    badgeNumbers: [number | null, number | null]
+    /** Ten digits, and only when both slots are guests. */
+    contactPhone: string | null
+  }) => void
 }
 
 /**
@@ -65,6 +77,15 @@ const IssuePairForm: React.FC<IssuePairFormProps> = ({
   const [pairCode, setPairCode] = useState('')
   const [first, setFirst] = useState<EventAttendee | null>(null)
   const [second, setSecond] = useState<EventAttendee | null>(null)
+  /**
+   * WHICH KIND OF HOLDER EACH SLOT IS. Registered by default, because most
+   * dancers have been through the desk — and because asking the question the
+   * other way round would put "No badge" in front of an operator who has a
+   * badge in their hand.
+   */
+  const [firstMode, setFirstMode] = useState<HolderMode>('attendee')
+  const [secondMode, setSecondMode] = useState<HolderMode>('attendee')
+  const [contact, setContact] = useState('')
 
   const pairInput = useRef<HTMLInputElement>(null)
 
@@ -83,30 +104,50 @@ const IssuePairForm: React.FC<IssuePairFormProps> = ({
     ? pairAvailability(code.value, { active, issues })
     : ({ status: 'available' } as const)
 
-  const holdingOf = (attendee: EventAttendee | null): HoldingNote | null => {
-    if (attendee === null) {
-      return null
-    }
+  /**
+   * WHAT THIS BADGE ALREADY OWES, through the one shared definition.
+   *
+   * It used to be "is this badge on any open loan", which was wrong in both
+   * directions. It said "already holding" of a mixed loan's anchor whose own
+   * stick had come back — they hold nothing, they are accountable — and it
+   * BLOCKED a two-badge holder whose own stick had come back while their
+   * partner's was still out, whom the server accepts.
+   */
+  const obligationOf = (attendee: EventAttendee | null): HolderObligation | null =>
+    attendee === null ? null : holderObligationFor(active, attendee.badgeNumber)
 
-    const loan = active.find((entry) =>
-      entry.holders.some((holder) => holder.badgeNumber === attendee.badgeNumber))
+  const firstObligation = obligationOf(first)
+  const secondObligation = obligationOf(second)
 
-    return loan === undefined
-      ? null
-      : { pairCode: loan.pairCode, issuedAt: loan.issuedAt }
-  }
+  /** The badge each slot presents, or `null` for a guest. */
+  const firstBadge = firstMode === 'guest' ? null : first?.badgeNumber ?? null
+  const secondBadge = secondMode === 'guest' ? null : second?.badgeNumber ?? null
 
-  const firstHolding = holdingOf(first)
-  const secondHolding = holdingOf(second)
+  /**
+   * A CONTACT NUMBER IS ASKED FOR BY EXACTLY ONE CASE: neither person has a
+   * badge, so neither is the accountability and the pair needs one.
+   *
+   * One badge is enough. Switching either slot back to a registered attendee
+   * removes the requirement, and the number is not sent — collecting a phone
+   * nobody needed would be persisting personal data for nothing.
+   */
+  const bothGuests = firstMode === 'guest' && secondMode === 'guest'
+  const parsedContact = parsePhoneNumber(contact)
+
+  /** Each slot is settled when it is a guest, or when somebody is chosen. */
+  const slotReady = (mode: HolderMode, attendee: EventAttendee | null): boolean =>
+    mode === 'guest' || attendee !== null
 
   const ready =
     code.ok &&
     availability.status === 'available' &&
-    first !== null &&
-    second !== null &&
-    first.badgeNumber !== second.badgeNumber &&
-    firstHolding === null &&
-    secondHolding === null
+    slotReady(firstMode, first) &&
+    slotReady(secondMode, second) &&
+    // Two guests are two different sticks; two badges must be two people.
+    (firstBadge === null || secondBadge === null || firstBadge !== secondBadge) &&
+    (firstMode === 'guest' || firstObligation === null) &&
+    (secondMode === 'guest' || secondObligation === null) &&
+    (!bothGuests || parsedContact.ok)
 
   return (
     <form
@@ -114,13 +155,19 @@ const IssuePairForm: React.FC<IssuePairFormProps> = ({
       onSubmit={(event) => {
         event.preventDefault()
 
-        if (!ready || isSubmitting || first === null || second === null || !code.ok) {
+        if (!ready || isSubmitting || !code.ok) {
           return
         }
 
         onIssue({
           pairCode: code.value,
-          badgeNumbers: [first.badgeNumber, second.badgeNumber],
+          badgeNumbers: [firstBadge, secondBadge],
+          /**
+           * CANONICAL, and only for a fully badgeless pair. The server
+           * refuses a number beside a badge, and parses this one again — this
+           * is the form agreeing with it in advance, not deciding.
+           */
+          contactPhone: bothGuests && parsedContact.ok ? parsedContact.value : null,
         })
       }}
     >
@@ -167,7 +214,7 @@ const IssuePairForm: React.FC<IssuePairFormProps> = ({
 
             <p className="text-sm text-muted-foreground">
               {availability.loan.holders
-                .map((holder) => formatBadgeNumber(holder.badgeNumber))
+                .map((holder) => dandiyaHolderLabel(holder))
                 .join(' + ')}
             </p>
 
@@ -202,29 +249,102 @@ const IssuePairForm: React.FC<IssuePairFormProps> = ({
         ) : null}
       </div>
 
-      <AttendeePicker
-        label="Attendee 1"
+      <HolderSlot
+        label="Person 1"
         inputId="dandiya-attendee-one"
+        mode={firstMode}
         attendees={attendees}
         selected={first}
-        excludedBadgeNumber={second?.badgeNumber ?? null}
-        holding={firstHolding}
+        excludedBadgeNumber={secondBadge}
+        obligation={firstObligation}
         priorLosses={first === null ? [] : priorLossesFor([...active, ...issues], first.badgeNumber)}
         disabled={isSubmitting}
+        onModeChange={(mode) => {
+          setFirstMode(mode)
+
+          if (mode === 'guest') {
+            setFirst(null)
+          }
+        }}
         onSelect={setFirst}
       />
 
-      <AttendeePicker
-        label="Attendee 2"
+      <HolderSlot
+        label="Person 2"
         inputId="dandiya-attendee-two"
+        mode={secondMode}
         attendees={attendees}
         selected={second}
-        excludedBadgeNumber={first?.badgeNumber ?? null}
-        holding={secondHolding}
+        excludedBadgeNumber={firstBadge}
+        obligation={secondObligation}
         priorLosses={second === null ? [] : priorLossesFor([...active, ...issues], second.badgeNumber)}
         disabled={isSubmitting}
+        onModeChange={(mode) => {
+          setSecondMode(mode)
+
+          if (mode === 'guest') {
+            setSecond(null)
+          }
+        }}
         onSelect={setSecond}
       />
+
+      {/*
+        ONLY WHEN NEITHER PERSON HAS A BADGE. This is the pair's whole
+        accountability in that case, so it is required — and it disappears the
+        moment either slot becomes a registered attendee, because then a badge
+        is the accountability and this number would be data nobody needed.
+      */}
+      {bothGuests ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="dandiya-contact-phone">
+            Contact phone
+          </Label>
+
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="font-heading text-base text-muted-foreground"
+            >
+              +91
+            </span>
+
+            <Input
+              id="dandiya-contact-phone"
+              type="tel"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="98765 43210"
+              className="h-11 font-heading text-lg"
+              disabled={isSubmitting}
+              aria-invalid={contact.trim() !== '' && !parsedContact.ok}
+              value={contact}
+              onChange={(event) => {
+                /*
+                  THE FIELD ALREADY SHOWS `+91`, so what sits beside it is the
+                  LOCAL ten digits. A pasted `+91 98765 43210` would otherwise
+                  read `+91  +91 98765 43210` — a number nobody could read
+                  back to the two people it belongs to.
+
+                  Presentation only. The parser is unchanged and the server
+                  still accepts every operator-friendly form.
+                */
+                setContact(localPhoneDigits(event.target.value))
+              }}
+            />
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            Neither person has a badge, so one number is needed to reach them.
+          </p>
+
+          {contact.trim() !== '' && !parsedContact.ok ? (
+            <p className="text-sm text-destructive">
+              {parsedContact.message}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <Button
         type="submit"

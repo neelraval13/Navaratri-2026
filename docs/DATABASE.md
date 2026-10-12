@@ -312,6 +312,7 @@ journaled migration (`0001_range_guards_and_touch.sql`) generated with
 | `0003_prize_awards.sql` | `prize_awards` — the prize ledger, its `UNIQUE(event_id, badge_number)`, three checks, both foreign keys and the same-event composite key |
 | `0004_repeat_prize_awards.sql` | Removes that `UNIQUE`, so one attendee may receive several prizes. Nothing replaces it |
 | `0005_dandiya_checkout.sql` | `dandiya_loans` and `dandiya_loan_holders` — the dandiya lending ledger, its two PARTIAL unique indexes, the per-stick resolution and loan-close pairing checks, both release rules, the outcome and resolution value checks, the canonical pair-code check, the slot check and every cross-event foreign key |
+| `0006_dandiya_badgeless_issuance.sql` | Makes `dandiya_loan_holders.badge_number` NULLABLE and widens its positivity check to `IS NULL OR > 0`, so a guest with no badge can hold a stick. Adds `dandiya_loans.contact_phone` with a ten-digit check and `UNIQUE(event_id, contact_phone) WHERE closed_at IS NULL`, and `dandiya_loans.accountability_badge_number` with a positivity check, an exclusivity check against `contact_phone` and `UNIQUE(event_id, accountability_badge_number) WHERE closed_at IS NULL` |
 
 `0002` is **additive only**: two `ADD COLUMN`s and two `ADD CONSTRAINT`s. It
 drops nothing, deletes nothing and rewrites no row. Every existing device keeps
@@ -320,6 +321,23 @@ the correct starting state — and `session_version = 1`.
 
 `0005` is additive: two new tables, their constraints and their indexes. It
 alters only the tables it created, to attach their foreign keys.
+
+`0006` is **additive or widening throughout**, so every existing loan survives
+it exactly: two `ADD COLUMN`s, two `CREATE UNIQUE INDEX`es, three
+`ADD CONSTRAINT`s, one `DROP NOT NULL`, and one constraint dropped only to be
+re-added LOOSER — `badge_number IS NULL OR > 0` accepts every value already
+stored, so Postgres validates it against the existing rows and they all pass.
+There is no `UPDATE`, `DELETE`, `INSERT` or `TRUNCATE`, and it touches no table
+outside `dandiya_*`.
+
+Its two new indexes are both partial on `closed_at`, and both rely on NULLs
+being DISTINCT: a badge-based loan carries no contact number and a two-badge
+or fully badgeless loan carries no accountability badge, so neither
+participates in the index that does not concern it. The accountability anchor
+exists because the holder index is partial on `resolved_at` and so releases a
+badge as soon as that badge's own stick is accounted for — right for a
+two-badge pair, and wrong for a pair issued on ONE badge, which that attendee
+answers for until the loan closes.
 
 `0004` is the one migration that **removes** something, and it removes only a
 constraint — no table, no column, no row. It exists as its own file because

@@ -8,13 +8,8 @@ import { Label } from '@/components/ui/label'
 import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDateTime } from '@/lib/datetime'
 import { filterAttendees, EMPTY_ATTENDEE_FILTERS } from '@/attendees/attendee-filters'
+import type { HolderObligation } from '@/dandiya/dandiya-filters'
 import type { EventAttendee } from '@/shared/attendee-contract'
-
-/** What this badge is already holding, if anything. BLOCKING. */
-export interface HoldingNote {
-  pairCode: string
-  issuedAt: string
-}
 
 /** A stick this badge has lost before. INFORMATION, never blocking. */
 export interface PriorLoss {
@@ -29,7 +24,14 @@ interface AttendeePickerProps {
   selected: EventAttendee | null
   /** Already chosen in the other slot: one pair goes to two people. */
   excludedBadgeNumber: number | null
-  holding: HoldingNote | null
+  /**
+   * WHAT THIS BADGE ALREADY OWES THE EVENT, if anything. BLOCKING.
+   *
+   * Two different facts, and the wording must not conflate them: `holding`
+   * means their own stick is out, `accountable` means a pair went out ON
+   * their badge and has not come back — which outlives their own stick.
+   */
+  obligation: HolderObligation | null
   /** Newest first. Shown when the attendee is selected; never blocking. */
   priorLosses: readonly PriorLoss[]
   disabled: boolean
@@ -74,7 +76,7 @@ const AttendeePicker: React.FC<AttendeePickerProps> = ({
   attendees,
   selected,
   excludedBadgeNumber,
-  holding,
+  obligation,
   priorLosses,
   disabled,
   onSelect,
@@ -90,7 +92,7 @@ const AttendeePicker: React.FC<AttendeePickerProps> = ({
 
         <div
           className={
-            holding === null
+            obligation === null
               ? 'flex items-start justify-between gap-3 rounded-2xl border border-green-600/40 bg-green-600/10 p-4'
               : 'flex items-start justify-between gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4'
           }
@@ -108,7 +110,7 @@ const AttendeePicker: React.FC<AttendeePickerProps> = ({
               {`Age ${String(selected.age)} · ${GENDER_LABEL[selected.gender]}`}
             </p>
 
-            {holding === null ? (
+            {obligation === null ? (
               <>
                 <p className="pt-1 text-sm font-medium text-green-700 dark:text-green-400">
                   Registered
@@ -139,14 +141,26 @@ const AttendeePicker: React.FC<AttendeePickerProps> = ({
                 )}
               </>
             ) : (
-              /* Blocking, and it says why and since when. */
+              /*
+                BLOCKING, and it says WHICH obligation and since when.
+
+                A pair issued on ONE badge stays that badge's responsibility
+                until the loan closes, so after their own stick comes back
+                they are accountable and holding NOTHING. Saying "already
+                holding" there would be plainly false to a volunteer who has
+                just taken the stick off them.
+              */
               <div className="pt-1">
                 <p className="text-sm font-medium text-destructive">
-                  {`Already holding ${holding.pairCode}`}
+                  {obligation.kind === 'holding'
+                    ? `Already holding ${obligation.pairCode}`
+                    : `Still accountable for ${obligation.pairCode}`}
                 </p>
 
                 <p className="text-sm text-muted-foreground">
-                  {`Issued ${formatEventDateTime(holding.issuedAt)}`}
+                  {obligation.kind === 'holding'
+                    ? `Issued ${formatEventDateTime(obligation.issuedAt)}`
+                    : `Guest stick still out · issued ${formatEventDateTime(obligation.issuedAt)}`}
                 </p>
               </div>
             )}

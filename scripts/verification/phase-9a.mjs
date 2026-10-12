@@ -196,11 +196,13 @@ console.log('\n=== 29-35. MIGRATIONS ===')
 check('migration files are version controlled', migrationFiles,
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
+   '0006_dandiya_badgeless_issuance.sql'])
 check('  the journal tracks every one',
   JSON.parse(read('drizzle/meta/_journal.json')).entries.map((e) => e.tag),
   ['0000_central_foundation', '0001_range_guards_and_touch', '0002_device_credentials',
-   '0003_prize_awards', '0004_repeat_prize_awards', '0005_dandiya_checkout'])
+   '0003_prize_awards', '0004_repeat_prize_awards', '0005_dandiya_checkout',
+   '0006_dandiya_badgeless_issuance'])
 check('  and the earlier files were never edited',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql']
     .map((file) => /password|session_version/.test(read(`drizzle/${file}`))), [false, false])

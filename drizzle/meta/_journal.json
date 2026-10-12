@@ -43,6 +43,13 @@
       "when": 1791723648832,
       "tag": "0005_dandiya_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791795028203,
+      "tag": "0006_dandiya_badgeless_issuance",
+      "breakpoints": true
     }
   ]
 }

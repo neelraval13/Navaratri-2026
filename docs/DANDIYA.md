@@ -26,12 +26,191 @@ D-014
 | A loan stays open | while **any** stick is still out |
 | A pair may go out again | only after **both** sticks were RETURNED |
 | After any loss | the pair is **unavailable for the rest of the event** |
-| An attendee is free | as soon as **their own** stick is resolved, either way |
+| An attendee stops holding a stick | as soon as **their own** stick is resolved, either way |
+| A pair issued on ONE badge | stays **that badge's** responsibility until the loan closes |
 | A loan is closed by | a person, and by nothing else |
 
 Repetition is the normal case, not the exception: the same pair may go out
 fifty times in an evening, and the same two people may take one out again
 after returning the first.
+
+### Three ways to issue a pair
+
+Not everybody dancing has been through the registration desk, so a pair needs
+an accountability anchor rather than two badges.
+
+| Mode | Holders | Accountability | Anchor column | Phone |
+|---|---|---|---|---|
+| **Two badges** | two registered attendees | **each own stick** | NULL | none |
+| **One badge** | one attendee + one guest | **that badge, whole loan** | `accountability_badge_number` | none |
+| **No badges** | two guests | **one contact phone number** | NULL | required |
+
+**Exactly one anchor per loan**, so each non-null column names one mode: an
+anchor badge means *mixed*, a contact number means *fully badgeless*. The
+database holds that with `dandiya_loans_accountability_exclusive`; the mode
+itself is derived server-side from the two holders and is never a caller's
+choice.
+
+```
+PAIR 12                         PAIR 14                    PAIR 18
+
+#9012  Person A                 #9012  Person A            Guest 1  No badge
+#9023  Person B                 Guest 2  No badge          Guest 2  No badge
+
+                                                           Contact
+                                                           +91 98765 43210
+```
+
+**One badge is enough.** A phone is *not* collected because one guest exists —
+the other holder's badge is the anchor, and the server **refuses** a number
+offered beside a badge rather than storing one nobody needed.
+
+**And that badge answers for the WHOLE pair until the loan closes.** This is
+what "give the pair on the badge" means, and the holder-level rule cannot say
+it:
+
+```
+PAIR 20     #100 registered attendee        #100 returns their OWN stick
+            Guest 2  no badge               Guest 2's stick is still OUT
+                                            -> the loan is still OPEN
+                                            -> #100 may NOT anchor another
+                                               mixed pair
+```
+
+`dandiya_loan_holders_one_unresolved_per_badge` is partial on `resolved_at`,
+so it has already freed #100 — correctly, they are holding nothing. The
+whole-loan obligation is a **separate** guarantee, and it lives on the loan:
+
+```sql
+UNIQUE(event_id, accountability_badge_number) WHERE closed_at IS NULL
+```
+
+**Partial on `closed_at`**, so the anchor is released when the pair is
+actually accounted for — a clean return, a partial loss or a total loss alike
+— and a historical anchoring never permanently blocks anybody. Partial on
+`pair_released_at` instead would tie the attendee to the *pair's* quarantine
+after a loss, which is the stock's problem and not their debt.
+
+**Both rules are kept, because they protect different things.** One attendee
+cannot personally hold two unresolved **sticks**; one badge cannot anchor two
+open mixed **loans**. NULLs stay non-conflicting, so **a two-badge pair keeps
+its D3.1 semantics exactly**: each holder is freed by their own stick, and
+whole-loan anchoring is never imposed on it.
+
+#### An open anchor blocks that badge from *every* new loan
+
+Not only from another mixed pair. While Pair 20 is open and issued on #9005,
+that badge takes part in nothing:
+
+```
+PAIR 21   #9005 + Guest    refused   accountability-already-holding-pair
+PAIR 22   #9005 + #9010    refused   accountability-already-holding-pair
+```
+
+No unique index can hold this half. The offending badge is a **holder** row of
+the new loan while the anchor is the **loan** row of the old one, and an index
+compares columns of one row of one table — and a second table recording badge
+availability would be a second place that can disagree with the ledger.
+
+#### Issuance serialises on the event row
+
+So the decision is made by the **database**, inside the transaction that
+writes. One `db.batch`, four statements, in this order and no other:
+
+```sql
+-- 1. the serialisation point
+SELECT id FROM events WHERE id = $event FOR UPDATE;
+
+-- 2. the guarded write: the anchor rule is this statement's own WHERE
+INSERT INTO dandiya_loans (id, event_id, pair_code, ...)
+SELECT $loan, $event, $pair, ...
+  FROM events
+ WHERE events.id = $event
+   AND NOT EXISTS (SELECT 1 FROM dandiya_loans
+                    WHERE event_id = $event
+                      AND closed_at IS NULL
+                      AND accountability_badge_number IN ($badges))
+RETURNING id;
+
+-- 3, 4. one per stick, conditional on that loan existing
+INSERT INTO dandiya_loan_holders (id, loan_id, event_id, badge_number, slot, ...)
+SELECT gen_random_uuid(), $loan, $event, $badge, $slot, ...
+  FROM dandiya_loans WHERE id = $loan;
+```
+
+`db.batch` cannot branch, so the rule rides on the insert's own `WHERE`. When
+it does not hold the select yields no row, nothing is written, and `RETURNING`
+comes back empty — which is the verdict the writer reads. Statements 3 and 4
+select from the loan statement 2 would have written, so **a refusal writes no
+holder rows either** and the batch commits having changed nothing. A
+foreign-key error is never used as ordinary control flow.
+
+**There was a pre-read here, and it was a TOCTOU hole.** `SELECT` the open
+anchors, decide in application code, then write: a process can pause for any
+length of time in between — a GC pause, a cold start, a retried request — and
+in that window another desk can commit a mixed loan on the same badge *and*
+that badge's own stick can be resolved. The holder index then has nothing to
+catch, because the only unresolved stick left on the other loan belongs to a
+guest. The retracted defence of that read argued from how many network round
+trips could fit in the window, which is a timing assumption rather than a
+transactional guarantee. A process pause has no bound.
+
+**Why the event row.** There is no central row standing for "badge #9005 in
+this event" to lock instead — the badge lives in the Google Sheet. The event
+row is the one row every issuance of one event genuinely shares. It is
+deliberately coarse: two desks issuing for the same event take turns, an
+issuance is four statements with no network waits in between, and different
+events never block each other. Correctness first; make it finer only if real
+measurements show contention.
+
+Never an advisory lock, an application mutex, a browser lock, sleeping,
+retrying, or a second badge-availability table.
+
+**It is not the D3.1 resolution lock.** Resolutions lock their own **loan**
+row, which serialises two desks resolving different sticks of one pair.
+Issuance locks the **event** row. Two questions, two locks, one call site each.
+
+**Within the locked transaction the anchor set can only shrink** — anchors are
+created by issuance, which this lock serialises, and removed by a close. That
+holds only while nothing `UPDATE`s an anchor and nothing sets `closed_at` back
+to null, and `release:check` fails on either.
+
+**The stand-in database cannot prove this.** It is single-threaded, so a
+scripted writer has always already committed. `verify:d3` pins the statement
+order from the transaction's own record and the structure around it;
+`scripts/dandiya-issuance-concurrency-smoke.mjs` proves the effect against a
+real database — a writer that began *before* an anchor committed still
+observes it after waiting on the event row.
+
+**Closing the loan releases the badge into both kinds of pair again**, because
+the anchor index is partial on `closed_at`.
+
+**The mode is derived, never submitted.** `openDandiyaLoan` takes an
+already-discriminated issuance — `two-badges`, `one-badge` or `badgeless` —
+and `issuanceColumns` is the one total, unexported function from mode to
+columns. That is why none of the four impossible loans can be written: a mixed
+loan with no anchor, one anchored to a badge that is not on it, a badge loan
+carrying a phone number, and a badgeless loan with no contact. A request body
+naming `accountabilityBadgeNumber` is **refused**, not ignored.
+
+**On screen** a mixed pair labels its badge holder *Accountability badge*, on
+the Active card and in History, read from the server's own value rather than
+inferred. The other two modes show nothing — on a two-badge pair it would be
+false, and on a badgeless one the contact number is already there.
+
+**A no-badge holder is `badge_number = NULL`**, never a synthetic badge. Not
+`0`, not `-1`, not `999999`, not `GUEST-1`. A fake number would sort, match a
+badge search and collide with a real badge, and no screen could tell a guest
+from an attendee whose badge had been mistyped. NULL is the truthful
+representation of "there is no badge".
+
+**Both sticks are still separate holder rows**, so each can be returned or
+marked lost on its own exactly as a badge holder's can. A guest's stick is
+named by its **slot** — 1 or 2 — because a badge could not name it.
+
+**Nothing else is collected.** No guest name, no age, no gender, no address,
+no ID, no WhatsApp field. The slot exists so the stick can be accounted for;
+the pair's accountability is a badge or a single number.
 
 ### Each stick is its own obligation
 
@@ -358,11 +537,65 @@ what keep the loan from closing twice, or closing while a stick is still out.
 
 ---
 
-## No attendee PII
+### The contact number
 
-Neither table has a column for a name, phone, age, gender, WhatsApp link or
-payment, and none may be added. A loan records a pair code, two badge
-**numbers** and two device ids.
+The **only** attendee-identifying value this database holds, and deliberately
+narrow.
+
+```
+dandiya_loans.contact_phone   text, NULL unless BOTH holders are guests
+```
+
+| | |
+|---|---|
+| Stored as | exactly **ten digits** — `9876543210` |
+| Never | `+91`, spacing, or a second format |
+| Accepted from an operator | `+91 98765 43210`, `919876543210`, `09876543210`, `98765 43210` |
+| Belongs to | the **loan**, not to either stick |
+| Present when | and only when both holders are badgeless |
+
+The parser is `src/shared/phone.ts`, read by the browser form **and** the
+server, so instant feedback and real enforcement cannot drift. It is the same
+ten-digit rule registration has always used — `attendee-validation.ts` reads
+its length and pattern from that module rather than repeating them.
+
+**It is on the loan because one of two people leaves a number for the pair.**
+Copying it onto both holder rows would assert that both gave it; copying it
+onto one would make the slots unequal for no reason.
+
+**One open badgeless loan per number**, enforced by
+
+```sql
+UNIQUE(event_id, contact_phone) WHERE closed_at IS NULL
+```
+
+the badgeless analogue of one unresolved stick per registered attendee, and
+the sibling of the mixed loan's anchor index. It is
+**partial on `closed_at`**, so the number frees the moment that loan closes —
+a guest who brought their sticks back may borrow again the same evening, and a
+historical number never permanently blocks anybody. Badge-based loans carry
+NULL here, and Postgres treats NULLs as distinct, so they never participate.
+
+**Where it is shown.** On the Active card and in a day's History, including the
+Outstanding filter — because that is how the team finds two people who have no
+badges, and nobody should have to open a database to read it. It is also
+searchable, with or without a country code.
+
+**What it is not.** It is never a registered attendee's number: the Badge
+Register reader still does not read that column, and `release:check` fails if
+it starts to. No contact number is ever logged.
+
+## Almost no attendee PII
+
+Neither table has a column for a name, age, gender, WhatsApp link or payment,
+and none may be added. A loan records a pair code, two badge **numbers** (or
+NULL for a guest), two device ids — and, **only for a fully badgeless pair**,
+one contact phone number.
+
+**That one number is the whole of the exception**, added in Phase D3.3 because
+a pair issued to two people with no badges would otherwise be accountable to
+nobody. It is documented in full above. Everything else about an attendee
+still lives in Google Sheets.
 
 The screen needs names beside those numbers, so they are **read** from the
 Badge Register on every request and joined into the response — through

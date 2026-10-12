@@ -274,11 +274,16 @@ for (const testCase of CASES) {
 
     // GENUINELY CONCURRENT: two separate transactions, issued together.
     const results = await Promise.all(
-      loan.badges.map((badgeNumber, index) =>
+      /**
+       * BY SLOT, since Phase D3.3: a stick is named by its slot rather than
+       * by a badge number, because a guest has none. Slot 1 and slot 2 are
+       * the two sticks this fixture seeded.
+       */
+      [1, 2].map((slot, index) =>
         resolveDandiyaHolders({
           eventId: event.id,
           loanId: loan.loanId,
-          badgeNumber,
+          slot,
           resolution: testCase.resolutions[index],
           resolvedByDeviceId: device.id,
         }),
@@ -315,14 +320,13 @@ for (const testCase of CASES) {
  */
 for (let round = 1; round <= ROUNDS; round++) {
   const loan = await seedLoan(`D${String(round)}`)
-  const [badgeNumber] = loan.badges
-
   const results = await Promise.all(
+    /** The SAME slot, twice at once. */
     ['returned', 'lost'].map((resolution) =>
       resolveDandiyaHolders({
         eventId: event.id,
         loanId: loan.loanId,
-        badgeNumber,
+        slot: 1,
         resolution,
         resolvedByDeviceId: device.id,
       }),

@@ -26,6 +26,7 @@
     "verify:9a": "node scripts/verification/phase-9a.mjs",
     "db:smoke": "node scripts/db-constraint-smoke.mjs",
     "db:smoke:dandiya": "node scripts/dandiya-concurrency-smoke.mjs",
+    "db:smoke:dandiya-issuance": "node scripts/dandiya-issuance-concurrency-smoke.mjs",
     "verify:9b": "node scripts/verification/phase-9b.mjs",
     "verify:9ca": "node scripts/verification/phase-9ca.mjs",
     "verify:9cb": "node scripts/verification/phase-9cb.mjs",

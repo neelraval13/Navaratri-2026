@@ -1,10 +1,14 @@
 import type { AttendeeField, Gender } from '@/components/registration/types'
+import { PHONE_DIGITS, isCanonicalPhone } from '@/shared/phone'
 
-export const PHONE_LENGTH = 10
+/**
+ * Re-exported from the one shared definition rather than written again: the
+ * dandiya contact number has to obey the same rule, and two copies of "how
+ * long is a phone number" would eventually disagree.
+ */
+export const PHONE_LENGTH = PHONE_DIGITS
 
 export const MAX_AGE = 120
-
-const PHONE_PATTERN = /^\d{10}$/
 
 const DIGITS_PATTERN = /^\d+$/
 
@@ -19,7 +23,7 @@ export const ATTENDEE_FIELD_MESSAGES: Record<AttendeeField, string> = {
  * The +91 prefix is a visual prefix, so the stored value is exactly 10 digits.
  */
 export const isPhoneValid = (phone: string): boolean => {
-  return PHONE_PATTERN.test(phone)
+  return isCanonicalPhone(phone)
 }
 
 export const isNameValid = (name: string): boolean => {

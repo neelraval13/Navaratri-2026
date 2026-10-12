@@ -303,10 +303,23 @@ export const prizeAwards = pgTable(
  * A PHYSICAL DANDIYA PAIR, OUT ON LOAN. Which pair, to whom, by whom, when,
  * and how it ended.
  *
- * ATTENDEE PII IS STILL NEVER STORED CENTRALLY. A loan records a pair code,
- * two badge NUMBERS and device ids. The people behind those badges live in
- * the Google Sheet, which the Dandiya screen joins per request — exactly as
- * the prize desk and the attendee directory do.
+ * ATTENDEE PII IS STILL NEVER STORED CENTRALLY, with one named exception. A
+ * loan records a pair code, badge NUMBERS and device ids; the people behind
+ * those badges live in the Google Sheet, which the Dandiya screen joins per
+ * request — exactly as the prize desk and the attendee directory do. The
+ * exception is `contact_phone`, present only for a FULLY badgeless pair,
+ * which has no badge to be accountable to.
+ *
+ * THERE ARE THREE ACCOUNTABILITY SHAPES, since Phase D3.3, and exactly one
+ * holds per loan:
+ *
+ *   two badges          each holder answers for their own stick
+ *   one badge + guest   `accountability_badge_number` answers for the loan
+ *   two guests          `contact_phone` answers for the loan
+ *
+ * The last two are mutually exclusive by CHECK, so a non-null contact number
+ * means exactly "fully badgeless" and a non-null accountability badge means
+ * exactly "mixed".
  *
  * A LOAN CLOSES WHEN BOTH STICKS ARE RESOLVED, and its `outcome` is derived
  * from them rather than chosen: two returns are a `returned`, one loss is a
@@ -357,6 +370,42 @@ export const dandiyaLoans = pgTable(
     outcome: text('outcome'),
     /** Set only by a clean return. Null is the pair's quarantine. */
     pairReleasedAt: timestamp('pair_released_at', { withTimezone: true }),
+    /**
+     * THE ACCOUNTABILITY NUMBER FOR A FULLY BADGELESS LOAN, and the only
+     * attendee-identifying value this database holds.
+     *
+     * Ten digits, the form registration has always stored. NULL whenever any
+     * holder has a badge — a badge IS the accountability, and a phone
+     * collected beside one would be personal data nobody needed.
+     *
+     * ON THE LOAN, NOT ON A HOLDER. Two people share one pair and one of them
+     * leaves a number; copying it onto both sticks would assert that both
+     * gave it, and copying it onto one would make the slots unequal for no
+     * reason. It is the pair's contact.
+     */
+    contactPhone: text('contact_phone'),
+    /**
+     * THE BADGE ACCOUNTABLE FOR THE WHOLE LOAN, and only for a MIXED one.
+     *
+     * One badge + one guest is given OUT ON THE BADGE: that attendee answers
+     * for both sticks until the loan closes. The holder-level rule cannot
+     * express that, and must not be made to — it is partial on
+     * `resolved_at`, so the badge holder is freed the moment their OWN stick
+     * is accounted for, which is correct for a two-badge pair and wrong here.
+     * Returning your own stick while a guest still has theirs does not end
+     * your accountability for the pair.
+     *
+     * So the anchor is a LOAN-level column with its own partial unique index
+     * on `closed_at`, and the two rules coexist: the holder index says a
+     * registered attendee cannot personally hold two unresolved sticks, and
+     * this one says a badge cannot anchor two open mixed loans.
+     *
+     * NULL FOR THE OTHER TWO MODES. Two badges need no anchor — each holder
+     * answers for their own stick, exactly as before — and two guests are
+     * anchored by `contact_phone` instead. It is DERIVED from the holders by
+     * one server-side normalisation and is never a caller's choice.
+     */
+    accountabilityBadgeNumber: integer('accountability_badge_number'),
   },
   (table) => [
     /**
@@ -432,6 +481,65 @@ export const dandiyaLoans = pgTable(
       'dandiya_loans_returned_requires_release',
       sql`${table.outcome} is distinct from 'returned' or ${table.pairReleasedAt} is not null`,
     ),
+    /** Exactly the ten digits the rest of the application stores. */
+    check(
+      'dandiya_loans_contact_phone_canonical',
+      sql`${table.contactPhone} is null or ${table.contactPhone} ~ '^[0-9]{10}$'`,
+    ),
+    /**
+     * ONE OPEN BADGELESS LOAN PER CONTACT NUMBER, which is the badgeless
+     * analogue of one unresolved stick per registered attendee.
+     *
+     * PARTIAL on `closed_at IS NULL`, so the number frees the moment the loan
+     * closes — a guest who brought their sticks back may borrow again the
+     * same evening. A historical number must never permanently block
+     * somebody.
+     *
+     * Badge-based loans carry NULL here and Postgres treats NULLs as
+     * distinct, so they never participate in this index at all.
+     */
+    uniqueIndex('dandiya_loans_one_open_per_contact')
+      .on(table.eventId, table.contactPhone)
+      .where(sql`${table.closedAt} is null`),
+    /** A real badge, or none. Never a synthetic anchor. */
+    check(
+      'dandiya_loans_accountability_badge_positive',
+      sql`${table.accountabilityBadgeNumber} is null or ${table.accountabilityBadgeNumber} > 0`,
+    ),
+    /**
+     * ONE ANCHOR, NEVER TWO. A loan is accountable to a badge or to a number
+     * and never to both: a mixed loan has a registered attendee answering for
+     * it, so a phone collected beside that badge would be personal data
+     * nobody needed — and `contact_phone IS NOT NULL` would stop meaning
+     * exactly "this loan is fully badgeless", which both the open-contact
+     * index and every screen rely on.
+     *
+     * The FULL relationship to the holder rows — that the anchor is the
+     * loan's own sole badge — cannot be a CHECK, because a CHECK may not read
+     * another table. The server owns that half, through one normalisation
+     * that derives all three columns from the two holders together.
+     */
+    check(
+      'dandiya_loans_accountability_exclusive',
+      sql`${table.accountabilityBadgeNumber} is null or ${table.contactPhone} is null`,
+    ),
+    /**
+     * ONE OPEN MIXED LOAN PER ACCOUNTABILITY BADGE — the mixed-loan analogue
+     * of the other two anchors.
+     *
+     * PARTIAL on `closed_at IS NULL`, so the badge frees when the loan
+     * actually closes — on a return, a partial loss or a total loss alike —
+     * and a historical anchoring never permanently blocks anybody. NULLs are
+     * distinct, so two-badge and badgeless loans never participate.
+     *
+     * THIS IS THE REGRESSION IT EXISTS FOR: #100 takes a pair with a guest,
+     * returns their own stick, and the guest's is still out. The holder index
+     * has already released #100, and without this index #100 could anchor
+     * another mixed pair while answering for the first one.
+     */
+    uniqueIndex('dandiya_loans_one_open_per_accountability_badge')
+      .on(table.eventId, table.accountabilityBadgeNumber)
+      .where(sql`${table.closedAt} is null`),
   ],
 )
 
@@ -464,7 +572,18 @@ export const dandiyaLoanHolders = pgTable(
     eventId: uuid('event_id')
       .notNull()
       .references(() => events.id, { onDelete: 'restrict' }),
-    badgeNumber: integer('badge_number').notNull(),
+    /**
+     * NULL MEANS "THIS STICK BELONGS TO A GUEST WITH NO BADGE", since Phase
+     * D3.3. It is the truthful representation: there is no badge, so there is
+     * no number. A synthetic `0`, `-1` or `999999` would be a badge number
+     * that sorts, matches a search and collides with a real one.
+     *
+     * Postgres treats NULLs as DISTINCT in a unique index, which is exactly
+     * what both of this table's uniqueness rules need: many unresolved guest
+     * sticks may coexist, and one loan may hold two of them, while every REAL
+     * badge keeps its old guarantees unchanged.
+     */
+    badgeNumber: integer('badge_number'),
     /** 1 or 2. Which stick of the pair, not a ranking. */
     slot: smallint('slot').notNull(),
     /** `returned` | `lost`. All three resolution columns move together. */
@@ -506,7 +625,10 @@ export const dandiyaLoanHolders = pgTable(
       .where(sql`${table.resolvedAt} is null`),
     index('dandiya_loan_holders_loan_id_idx').on(table.loanId),
     index('dandiya_loan_holders_event_id_idx').on(table.eventId),
-    check('dandiya_loan_holders_badge_number_positive', sql`${table.badgeNumber} > 0`),
+    check(
+      'dandiya_loan_holders_badge_number_positive',
+      sql`${table.badgeNumber} is null or ${table.badgeNumber} > 0`,
+    ),
     check('dandiya_loan_holders_slot_valid', sql`${table.slot} in (1, 2)`),
     /**
      * A RESOLUTION IS ONE FACT, so its three columns move together — the same

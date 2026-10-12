@@ -824,7 +824,8 @@ check('NO new migration',
   readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
+    '0006_dandiya_badgeless_issuance.sql'])
 /**
  * Every migration later phases appended: the two prize ones and D3's dandiya
  * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each

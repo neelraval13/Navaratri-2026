@@ -148,7 +148,14 @@ export const isDandiyaOutcome = (value: unknown): value is DandiyaOutcome =>
  * together, which the database enforces as well.
  */
 export interface DandiyaHolder {
-  badgeNumber: number
+  /**
+   * `null` means THIS STICK BELONGS TO A GUEST WITH NO BADGE.
+   *
+   * Never a synthetic number. A `0` or a `999999` would sort, match a badge
+   * search and collide with a real badge, and the screen could not tell a
+   * guest from an attendee whose badge had been mistyped.
+   */
+  badgeNumber: number | null
   slot: number
   attendee: EventAttendee | null
   resolution: DandiyaHolderResolution | null
@@ -171,6 +178,32 @@ export interface DandiyaActiveLoan {
   issuedAt: string
   issuedBy: DandiyaDevice
   holders: DandiyaHolder[]
+  /**
+   * THE PAIR'S ACCOUNTABILITY NUMBER, and only for a FULLY badgeless loan.
+   *
+   * Ten digits, as the rest of the application stores a phone number. `null`
+   * whenever any holder has a badge: the badge is the accountability, and a
+   * number collected beside one would be personal data nobody needed.
+   *
+   * It is how the team finds two people who have no badges, so Active and a
+   * day's Outstanding show it. It is never a registered attendee's number —
+   * those are not read into this module at all.
+   */
+  contactPhone: string | null
+  /**
+   * THE BADGE ACCOUNTABLE FOR THE WHOLE PAIR, and only for a MIXED loan —
+   * one badge and one guest.
+   *
+   * `null` for two badges, where each holder answers for their own stick, and
+   * for two guests, where `contactPhone` is the anchor instead. It is always
+   * one of this loan's own holder badges.
+   *
+   * THE SERVER DECIDES IT, from the holders, and the screen reads it rather
+   * than inferring it — the same reason `eventDay` travels in the response.
+   * A browser that worked out accountability for itself would be a second
+   * definition of the rule the database is enforcing.
+   */
+  accountabilityBadgeNumber: number | null
 }
 
 /**
@@ -297,6 +330,25 @@ export const DANDIYA_CONFLICTS = [
   /** One of the two attendees is already holding an unresolved stick. */
   'attendee-already-holding-pair',
   /**
+   * This CONTACT NUMBER already has an open fully badgeless loan.
+   *
+   * The badgeless analogue of the attendee rule: one open pair per
+   * accountability anchor. It frees as soon as that loan closes, so the same
+   * number may borrow again the same evening.
+   */
+  'contact-already-holding-pair',
+  /**
+   * THIS BADGE IS STILL ACCOUNTABLE FOR AN OPEN MIXED PAIR.
+   *
+   * One badge + one guest goes out ON THE BADGE, so that attendee answers for
+   * both sticks until the loan closes. Returning their own stick does not end
+   * it while the guest still holds theirs — which is exactly why this is a
+   * different conflict from `attendee-already-holding-pair`, and why it tells
+   * the operator to bring the first pair back rather than to pick somebody
+   * else.
+   */
+  'accountability-already-holding-pair',
+  /**
    * Somebody resolved that stick first. A resolution is never overwritten:
    * returned does not become lost and lost does not become returned.
    */
@@ -331,6 +383,57 @@ export type DandiyaAction = (typeof DANDIYA_ACTIONS)[number]
 
 export const isDandiyaAction = (value: unknown): value is DandiyaAction =>
   typeof value === 'string' && (DANDIYA_ACTIONS as readonly string[]).includes(value)
+
+/**
+ * WHAT TO CALL ONE STICK'S HOLDER, in one place.
+ *
+ * `#042` for a registered attendee, `Guest 1` for somebody with no badge —
+ * named by SLOT, because that is the only thing that distinguishes two
+ * guests, and it is the same slot every screen and the resolution request
+ * use.
+ *
+ * Here rather than in `src/lib/badge.ts` because this is a dandiya rule
+ * rather than a badge rule, and because every surface that renders a holder
+ * must say the same thing. The `#000` padding matches `formatBadgeNumber`
+ * deliberately; this module is framework-free and imported by the server, so
+ * it reaches into no `src/lib`.
+ */
+export const dandiyaHolderLabel = (holder: {
+  badgeNumber: number | null
+  slot: number
+}): string =>
+  holder.badgeNumber === null
+    ? `Guest ${String(holder.slot)}`
+    : `#${String(holder.badgeNumber).padStart(3, '0')}`
+
+/**
+ * THE SECOND LINE BESIDE THAT LABEL — who the holder actually is.
+ *
+ * ONE helper, because four surfaces render a holder and all four got this
+ * wrong in the same way: they printed "Attendee no longer in the register"
+ * whenever `attendee` was null, which for a GUEST is simply false. A guest
+ * was never in the register; there is nothing missing.
+ *
+ *   badgeNumber === null                  ->  "No badge"
+ *   badgeNumber !== null, attendee null   ->  "Attendee no longer in the register"
+ *   otherwise                             ->  the attendee's name
+ *
+ * The middle case is the real one and stays: a loan must survive its Sheet
+ * row being edited away, because the stick really did go out, and that is a
+ * row somebody should go and look at.
+ */
+export const dandiyaHolderDetail = (holder: {
+  badgeNumber: number | null
+  attendee: { name: string } | null
+}): string => {
+  if (holder.badgeNumber === null) {
+    return 'No badge'
+  }
+
+  return holder.attendee === null
+    ? 'Attendee no longer in the register'
+    : holder.attendee.name
+}
 
 /** Human labels for the three outcomes, used wherever one is shown. */
 export const DANDIYA_OUTCOME_LABELS: Record<DandiyaOutcome, string> = {

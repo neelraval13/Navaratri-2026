@@ -10,8 +10,9 @@ import {
 } from '@/components/ui/dialog'
 import type { DandiyaRequest } from '@/components/dandiya/active-loan-card'
 import { unresolvedHolders } from '@/dandiya/dandiya-filters'
-import { formatBadgeNumber } from '@/lib/badge'
 import { formatEventDateTime } from '@/lib/datetime'
+import type { DandiyaHolder } from '@/shared/dandiya-contract'
+import { dandiyaHolderDetail, dandiyaHolderLabel } from '@/shared/dandiya-contract'
 
 interface ResolvePairDialogProps {
   request: DandiyaRequest | null
@@ -55,14 +56,21 @@ const ResolvePairDialog: React.FC<ResolvePairDialogProps> = ({
   const alreadyLost = loan.holders.filter((entry) => entry.resolution === 'lost')
   const alreadyReturned = loan.holders.filter((entry) => entry.resolution === 'returned')
 
-  const nameOf = (badgeNumber: number, attendeeName: string | null): string =>
-    `${formatBadgeNumber(badgeNumber)}${attendeeName === null ? '' : ` ${attendeeName}`}`
+  /**
+   * `#042 Meera Patel`, or `Guest 1` when there is no badge and therefore no
+   * name. One label helper, so a confirmation names a stick the same way the
+   * card the operator tapped did.
+   */
+  const nameOf = (entry: DandiyaHolder): string =>
+    `${dandiyaHolderLabel(entry)}${
+      entry.attendee === null ? '' : ` ${entry.attendee.name}`
+    }`
 
   const title =
     action === 'resolve-holder' && holder !== undefined
       ? resolution === 'lost'
-        ? `Mark ${nameOf(holder.badgeNumber, holder.attendee?.name ?? null)}’s stick as lost?`
-        : `Return ${nameOf(holder.badgeNumber, holder.attendee?.name ?? null)}’s stick?`
+        ? `Mark ${nameOf(holder)}’s stick as lost?`
+        : `Return ${nameOf(holder)}’s stick?`
       : action === 'lost-pair'
         ? `Report pair ${loan.pairCode} lost?`
         : remaining.length === loan.holders.length
@@ -105,13 +113,11 @@ const ResolvePairDialog: React.FC<ResolvePairDialogProps> = ({
             (entry) => (
               <li key={entry.slot} className="flex items-baseline gap-3">
                 <span className="font-heading text-base font-semibold">
-                  {formatBadgeNumber(entry.badgeNumber)}
+                  {dandiyaHolderLabel(entry)}
                 </span>
 
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  {entry.attendee === null
-                    ? 'Attendee no longer in the register'
-                    : entry.attendee.name}
+                  {dandiyaHolderDetail(entry)}
                 </span>
 
                 <span className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
@@ -130,7 +136,7 @@ const ResolvePairDialog: React.FC<ResolvePairDialogProps> = ({
         {action !== 'resolve-holder' && alreadyLost.length > 0 ? (
           <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
             {`${alreadyLost
-              .map((entry) => formatBadgeNumber(entry.badgeNumber))
+              .map((entry) => dandiyaHolderLabel(entry))
               .join(' and ')} already recorded as lost — that stays, and this pair will stay unavailable.`}
           </p>
         ) : null}
@@ -138,7 +144,7 @@ const ResolvePairDialog: React.FC<ResolvePairDialogProps> = ({
         {action === 'lost-pair' && alreadyReturned.length > 0 ? (
           <p className="rounded-xl border border-green-600/40 bg-green-600/10 px-3 py-2 text-sm text-green-700 dark:text-green-400">
             {`${alreadyReturned
-              .map((entry) => formatBadgeNumber(entry.badgeNumber))
+              .map((entry) => dandiyaHolderLabel(entry))
               .join(' and ')} already returned — that stays.`}
           </p>
         ) : null}

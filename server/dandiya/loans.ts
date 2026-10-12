@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto'
 import { and, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 
 import { getDatabase } from '../db/client.js'
-import { dandiyaLoanHolders, dandiyaLoans, devices } from '../db/schema.js'
+import { dandiyaLoanHolders, dandiyaLoans, devices, events } from '../db/schema.js'
 import {
   mapDandiyaViolation,
   PUBLIC_DANDIYA_CONFLICT,
   type DandiyaViolation,
 } from './conflicts.js'
+import type { DandiyaIssuance } from './requests.js'
 import type {
   DandiyaConflict,
   DandiyaHolderResolution,
@@ -45,8 +46,16 @@ export interface DandiyaLoanRow {
   closedByDeviceId: string | null
   outcome: string | null
   pairReleasedAt: string | null
+  /** Ten digits, and only for a fully badgeless loan. */
+  contactPhone: string | null
+  /**
+   * THE BADGE ACCOUNTABLE FOR THE WHOLE LOAN, and only for a MIXED one — one
+   * badge and one guest. `null` for two badges and for two guests.
+   */
+  accountabilityBadgeNumber: number | null
   holders: {
-    badgeNumber: number
+    /** `null` is a guest with no badge. Never a synthetic number. */
+    badgeNumber: number | null
     slot: number
     resolution: string | null
     resolvedAt: string | null
@@ -142,6 +151,8 @@ export const readDandiyaLedger = async (input: {
       closedByDeviceId: dandiyaLoans.closedByDeviceId,
       outcome: dandiyaLoans.outcome,
       pairReleasedAt: dandiyaLoans.pairReleasedAt,
+      contactPhone: dandiyaLoans.contactPhone,
+      accountabilityBadgeNumber: dandiyaLoans.accountabilityBadgeNumber,
     })
     .from(dandiyaLoans)
     .where(
@@ -224,6 +235,8 @@ export const readDandiyaLedger = async (input: {
       closedByDeviceId: row.closedByDeviceId,
       outcome: row.outcome,
       pairReleasedAt: iso(row.pairReleasedAt),
+      contactPhone: row.contactPhone,
+      accountabilityBadgeNumber: row.accountabilityBadgeNumber,
       // Slot order, so holder 1 is always the first stick.
       holders: (holdersByLoan.get(row.id) ?? []).sort((left, right) => left.slot - right.slot),
     })),
@@ -259,6 +272,8 @@ export const readDandiyaLoan = async (input: {
       closedByDeviceId: dandiyaLoans.closedByDeviceId,
       outcome: dandiyaLoans.outcome,
       pairReleasedAt: dandiyaLoans.pairReleasedAt,
+      contactPhone: dandiyaLoans.contactPhone,
+      accountabilityBadgeNumber: dandiyaLoans.accountabilityBadgeNumber,
     })
     .from(dandiyaLoans)
     .where(
@@ -294,6 +309,8 @@ export const readDandiyaLoan = async (input: {
     closedByDeviceId: loan.closedByDeviceId,
     outcome: loan.outcome,
     pairReleasedAt: iso(loan.pairReleasedAt),
+    contactPhone: loan.contactPhone,
+    accountabilityBadgeNumber: loan.accountabilityBadgeNumber,
     holders: holders
       .map((holder) => ({
         badgeNumber: holder.badgeNumber,
@@ -305,6 +322,199 @@ export const readDandiyaLoan = async (input: {
       .sort((left, right) => left.slot - right.slot),
   }
 }
+
+/**
+ * THE ONE PLACE A MODE BECOMES COLUMNS, and the only reason the four
+ * impossible loans cannot be written.
+ *
+ *   two badges          [a, b]            anchor NULL      contact NULL
+ *   one badge + guest   [a, null] or      anchor THAT a    contact NULL
+ *                       [null, a]
+ *   two guests          [null, null]      anchor NULL      contact the number
+ *
+ * TOTAL over the union, so a fourth mode fails to compile rather than
+ * defaulting to something. Deliberately NOT exported: `openDandiyaLoan` takes
+ * the MODE, so there is no call site that could assemble these three columns
+ * itself and anchor a mixed loan to a badge that is not on it, leave one
+ * unanchored, put a number beside a badge, or open a badgeless loan with no
+ * contact. The database's exclusivity CHECK is the floor underneath this; the
+ * relationship to the holder rows is here, because a CHECK cannot read
+ * another table.
+ */
+const issuanceColumns = (
+  issuance: DandiyaIssuance,
+): {
+  badgeNumbers: readonly [number | null, number | null]
+  accountabilityBadgeNumber: number | null
+  contactPhone: string | null
+} => {
+  switch (issuance.mode) {
+    case 'two-badges':
+      return {
+        badgeNumbers: issuance.badgeNumbers,
+        accountabilityBadgeNumber: null,
+        contactPhone: null,
+      }
+    case 'one-badge':
+      return {
+        /** The slot is the stick, so which one holds the badge is carried. */
+        badgeNumbers:
+          issuance.badgeSlot === 1
+            ? [issuance.badgeNumber, null]
+            : [null, issuance.badgeNumber],
+        /** OUT ON THE BADGE: it answers for the pair until the loan closes. */
+        accountabilityBadgeNumber: issuance.badgeNumber,
+        contactPhone: null,
+      }
+    case 'badgeless':
+      return {
+        badgeNumbers: [null, null],
+        accountabilityBadgeNumber: null,
+        contactPhone: issuance.contactPhone,
+      }
+  }
+}
+
+/**
+ * THE ISSUANCE SERIALISATION POINT: the event row, locked FOR UPDATE.
+ *
+ * Deliberately COARSE. There is no central row standing for "badge #9005 in
+ * this event" to lock instead — the badge lives in the Google Sheet, and a
+ * badge-availability table would be a second place that can disagree with the
+ * ledger. The event row is the one row every issuance of one event genuinely
+ * shares, so it is the truthful place to serialise them.
+ *
+ * WHAT IT COSTS is that two desks issuing for the same event take turns. An
+ * issuance is four statements and no network waits, and different events
+ * never block each other. Correctness first; if real measurements ever show
+ * contention, that is the time to make it finer.
+ *
+ * IT IS NOT the D3.1 resolution lock and does not touch it. Resolutions keep
+ * locking their own loan row, which is a different question — serialising two
+ * desks resolving different sticks of ONE pair.
+ */
+const lockEventIssuance = (eventId: string) =>
+  getDatabase()
+    .select({ id: events.id })
+    .from(events)
+    .where(eq(events.id, eventId))
+    .for('update')
+
+/**
+ * IS ANY REAL BADGE ON THIS PAIR ALREADY ANSWERING FOR AN OPEN LOAN?
+ *
+ * A pair issued on ONE badge is issued ON THAT BADGE, so until that loan
+ * closes the badge takes part in NO new loan — a mixed one or an ordinary
+ * two-badge one alike. No index can hold this: the offending badge is a
+ * HOLDER row of the new loan while the anchor is the LOAN row of the old one,
+ * and a unique index compares columns of one row of one table.
+ *
+ * So it is a SQL predicate on the insert itself, evaluated by the database
+ * inside the locked transaction rather than by this process beforehand.
+ *
+ * A fully badgeless pair presents no badge, so there is nothing to look for
+ * and the condition is simply true — not a sentinel badge number, which would
+ * be a value that could one day match a row.
+ */
+const noOpenAnchorFor = (eventId: string, badges: readonly number[]) =>
+  badges.length === 0
+    ? sql`true`
+    : sql`not exists (select 1 from ${dandiyaLoans}
+         where ${dandiyaLoans.eventId} = ${eventId}
+           and ${dandiyaLoans.closedAt} is null
+           and ${dandiyaLoans.accountabilityBadgeNumber} in ${badges})`
+
+/**
+ * THE LOAN INSERT, GUARDED BY ITS OWN `WHERE`.
+ *
+ * `INSERT ... SELECT ... WHERE <event row> AND <no open anchor>`, so the
+ * anchor rule is decided by the same statement that writes. When it does not
+ * hold, the select yields no row, the insert writes nothing, and `returning`
+ * comes back empty — which is the verdict the caller reads. There is no
+ * branch in a batch and none is needed.
+ *
+ * IT SELECTS FROM `events`, the row the lock above is already holding, which
+ * is both the cheapest single-row source available and a second assertion
+ * that the event exists.
+ *
+ * EVERY COLUMN, IN THE TABLE'S OWN ORDER. Drizzle builds the insert's column
+ * list from the whole table definition, so the selected fields must match it
+ * key for key — and it throws loudly if they ever stop matching, which is the
+ * failure mode wanted: a column added to `dandiya_loans` without a decision
+ * here fails the suite rather than silently landing in the wrong column.
+ */
+const guardedLoanInsert = (input: {
+  loanId: string
+  eventId: string
+  pairCode: string
+  issuedByDeviceId: string
+  issuedAt: Date
+  contactPhone: string | null
+  accountabilityBadgeNumber: number | null
+  badges: readonly number[]
+}) =>
+  getDatabase()
+    .insert(dandiyaLoans)
+    .select((qb) =>
+      qb
+        .select({
+          id: sql<string>`${input.loanId}::uuid`.as('id'),
+          eventId: sql<string>`${input.eventId}::uuid`.as('event_id'),
+          pairCode: sql<string>`${input.pairCode}::text`.as('pair_code'),
+          issuedByDeviceId: sql<string>`${input.issuedByDeviceId}::uuid`
+            .as('issued_by_device_id'),
+          issuedAt: sql<Date>`${input.issuedAt}::timestamptz`.as('issued_at'),
+          /** A loan is never born closed, and never born released. */
+          closedAt: sql<Date | null>`null::timestamptz`.as('closed_at'),
+          closedByDeviceId: sql<string | null>`null::uuid`.as('closed_by_device_id'),
+          outcome: sql<string | null>`null::text`.as('outcome'),
+          pairReleasedAt: sql<Date | null>`null::timestamptz`.as('pair_released_at'),
+          contactPhone: sql<string | null>`${input.contactPhone}::text`.as('contact_phone'),
+          accountabilityBadgeNumber: sql<number | null>`${input.accountabilityBadgeNumber}::integer`
+            .as('accountability_badge_number'),
+        })
+        .from(events)
+        .where(
+          and(
+            eq(events.id, input.eventId),
+            noOpenAnchorFor(input.eventId, input.badges),
+          ),
+        ),
+    )
+    .returning({ id: dandiyaLoans.id })
+
+/**
+ * ONE HOLDER ROW, CONDITIONAL ON ITS LOAN EXISTING.
+ *
+ * Selected from `dandiya_loans` by the id the guarded insert above would have
+ * written, so within this transaction it yields one row if that insert held
+ * and none if it did not. A refused issuance therefore writes NO holder rows
+ * either, and the batch commits having changed nothing — rather than failing
+ * a foreign key, which would be an error used as ordinary control flow.
+ */
+const holderInsertForLoan = (input: {
+  loanId: string
+  eventId: string
+  badgeNumber: number | null
+  slot: number
+}) =>
+  getDatabase()
+    .insert(dandiyaLoanHolders)
+    .select((qb) =>
+      qb
+        .select({
+          id: sql<string>`gen_random_uuid()`.as('id'),
+          loanId: sql<string>`${input.loanId}::uuid`.as('loan_id'),
+          eventId: sql<string>`${input.eventId}::uuid`.as('event_id'),
+          badgeNumber: sql<number | null>`${input.badgeNumber}::integer`.as('badge_number'),
+          slot: sql<number>`${input.slot}::smallint`.as('slot'),
+          resolution: sql<string | null>`null::text`.as('resolution'),
+          resolvedAt: sql<Date | null>`null::timestamptz`.as('resolved_at'),
+          resolvedByDeviceId: sql<string | null>`null::uuid`.as('resolved_by_device_id'),
+        })
+        .from(dandiyaLoans)
+        .where(eq(dandiyaLoans.id, input.loanId)),
+    )
 
 export type DandiyaIssueOutcome =
   | { ok: true; value: DandiyaLoanRow }
@@ -337,23 +547,57 @@ export type DandiyaIssueOutcome =
 export const openDandiyaLoan = async (input: {
   eventId: string
   pairCode: string
-  badgeNumbers: readonly [number, number]
+  /** ALREADY DISCRIMINATED BY MODE. The three columns are derived from it. */
+  issuance: DandiyaIssuance
   issuedByDeviceId: string
 }): Promise<DandiyaIssueOutcome> => {
   const database = getDatabase()
   const loanId = randomUUID()
   const issuedAt = new Date()
+  const { badgeNumbers, accountabilityBadgeNumber, contactPhone } = issuanceColumns(
+    input.issuance,
+  )
 
+  const badges = badgeNumbers.filter(
+    (badgeNumber): badgeNumber is number => badgeNumber !== null,
+  )
+
+  /**
+   * THE WHOLE ISSUANCE IS ONE TRANSACTION, AND IT OPENS BY LOCKING THE EVENT.
+   *
+   *   1. SELECT the event row FOR UPDATE      <- the serialisation point
+   *   2. the GUARDED loan insert, whose own WHERE decides the anchor rule
+   *   3. the two holder inserts, each conditional on that loan existing
+   *
+   * `db.batch` is this driver's single transaction, so all four statements
+   * commit together or none does — and because the lock is the FIRST of them,
+   * every later statement in this transaction runs with issuance for this
+   * event serialised behind it.
+   *
+   * THERE IS NO PRE-READ, and there must never be one again. An earlier
+   * revision read the open anchors in a statement of their own and decided in
+   * application code, which is a TOCTOU hole: the process can pause for any
+   * length of time after that read — a GC pause, a cold start, a retried
+   * request — and in that window another desk can issue a mixed loan on the
+   * same badge AND that badge's own stick can be resolved. The holder index
+   * then has nothing to catch, because the only unresolved stick left on the
+   * other loan belongs to a guest. The decision must be made by the database,
+   * inside the transaction that writes.
+   */
   const statements = [
-    database.insert(dandiyaLoans).values({
-      id: loanId,
+    lockEventIssuance(input.eventId),
+    guardedLoanInsert({
+      loanId,
       eventId: input.eventId,
       pairCode: input.pairCode,
       issuedByDeviceId: input.issuedByDeviceId,
       issuedAt,
+      contactPhone,
+      accountabilityBadgeNumber,
+      badges,
     }),
-    ...input.badgeNumbers.map((badgeNumber, index) =>
-      database.insert(dandiyaLoanHolders).values({
+    ...badgeNumbers.map((badgeNumber, index) =>
+      holderInsertForLoan({
         loanId,
         eventId: input.eventId,
         badgeNumber,
@@ -363,7 +607,27 @@ export const openDandiyaLoan = async (input: {
   ] as const
 
   try {
-    await database.batch(statements as unknown as Parameters<typeof database.batch>[0])
+    const results = await database.batch(
+      statements as unknown as Parameters<typeof database.batch>[0],
+    )
+    /**
+     * THE GUARD'S VERDICT, read from the statement that made it.
+     *
+     * The loan insert returns its row only when its own `WHERE` held, so an
+     * empty result means a badge on this pair is already answering for an
+     * open loan. The holder inserts in the same batch are each conditional on
+     * that loan existing, so NOTHING was written — no loan, no holder rows,
+     * and no foreign-key error used as control flow.
+     */
+    const inserted = results[1]
+
+    if (!Array.isArray(inserted) || inserted.length === 0) {
+      return {
+        ok: false,
+        conflict: PUBLIC_DANDIYA_CONFLICT['accountability-already-holding'],
+        violation: 'accountability-already-holding',
+      }
+    }
   } catch (error: unknown) {
     const violation = mapDandiyaViolation(error)
 
@@ -390,7 +654,9 @@ export const openDandiyaLoan = async (input: {
       closedByDeviceId: null,
       outcome: null,
       pairReleasedAt: null,
-      holders: input.badgeNumbers.map((badgeNumber, index) => ({
+      contactPhone,
+      accountabilityBadgeNumber,
+      holders: badgeNumbers.map((badgeNumber, index) => ({
         badgeNumber,
         slot: index + 1,
         resolution: null,
@@ -483,9 +749,11 @@ const lockOpenLoan = (eventId: string, loanId: string) =>
  * leaves none unresolved — ALL IN ONE TRANSACTION, behind the loan's own row
  * lock.
  *
- * `badgeNumber` picks one stick; omitting it resolves every stick still out,
- * which is what the `return-pair` and `lost-pair` shortcuts are. Either way
- * the WHERE clause carries `resolved_at IS NULL`, so:
+ * `slot` picks one stick; omitting it resolves every stick still out, which
+ * is what the `return-pair` and `lost-pair` shortcuts are. The SLOT is the
+ * identity rather than a badge number, because since Phase D3.3 a stick may
+ * belong to a guest who has none. Either way the WHERE clause carries
+ * `resolved_at IS NULL`, so:
  *
  *   - a resolution is never overwritten: returned does not become lost and
  *     lost does not become returned, however often the request is repeated
@@ -520,14 +788,14 @@ const lockOpenLoan = (eventId: string, loanId: string) =>
 export const resolveDandiyaHolders = async (input: {
   eventId: string
   loanId: string
-  /** One stick, or every stick still out when absent. */
-  badgeNumber?: number
+  /** One stick by slot, or every stick still out when absent. */
+  slot?: number
   resolution: DandiyaHolderResolution
   resolvedByDeviceId: string
 }): Promise<DandiyaResolveOutcome> => {
   const database = getDatabase()
   const resolvedAt = new Date()
-  const { eventId, loanId, badgeNumber, resolution, resolvedByDeviceId } = input
+  const { eventId, loanId, slot, resolution, resolvedByDeviceId } = input
 
   const closing = {
     closedAt: resolvedAt,
@@ -558,12 +826,10 @@ export const resolveDandiyaHolders = async (input: {
           eq(dandiyaLoanHolders.loanId, loanId),
           eq(dandiyaLoanHolders.eventId, eventId),
           isNull(dandiyaLoanHolders.resolvedAt),
-          ...(badgeNumber === undefined
-            ? []
-            : [eq(dandiyaLoanHolders.badgeNumber, badgeNumber)]),
+          ...(slot === undefined ? [] : [eq(dandiyaLoanHolders.slot, slot)]),
         ),
       )
-      .returning({ badgeNumber: dandiyaLoanHolders.badgeNumber }),
+      .returning({ slot: dandiyaLoanHolders.slot }),
     /** Both sticks back: the pair is freed in the same breath. */
     database
       .update(dandiyaLoans)
@@ -594,7 +860,7 @@ export const resolveDandiyaHolders = async (input: {
   if (resolved.length === 0) {
     return {
       ok: false,
-      conflict: badgeNumber === undefined ? 'loan-already-closed' : 'holder-already-resolved',
+      conflict: slot === undefined ? 'loan-already-closed' : 'holder-already-resolved',
     }
   }
 
