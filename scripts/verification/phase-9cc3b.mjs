@@ -795,18 +795,24 @@ check('  stores unchanged',
     .match(/^\s*(\w+):/gm) ?? []).map((entry) => entry.trim().replace(':', '')),
   ['registrations', 'config', 'outbox'])
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('  NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
-/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
-const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+/**
+ * Every migration later phases appended: the two prize ones and D3's dandiya
+ * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each
+ * assertion below needs is that NONE of the later migrations reaches into the
+ * phase it belongs to.
+ */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql',
+  '0005_dandiya_checkout.sql']
 check('  and the prize migration does not touch event permissions',
   PRIZE_MIGRATIONS.some((file) => /attribute|permission|enabled/i.test(read(`drizzle/${file}`))),
   false)
@@ -819,9 +825,9 @@ check('37, 40. the Sheet schema is unchanged',
 const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // RE-SCOPED BY PHASE P1, which added one. C3B still added none.
-check('62. the Function inventory is ten', budget.actual.length, 10)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('62. the Function inventory is eleven', budget.actual.length, 11)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 19, 23, 55-56. THE UI ===')

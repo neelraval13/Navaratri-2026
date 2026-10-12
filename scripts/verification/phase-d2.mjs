@@ -518,18 +518,24 @@ check('  and exactly three stores',
   ((/\.stores\(\{([\s\S]*?)\}\)/.exec(dexie)?.[1] ?? '').match(/^\s*(\w+):/gm) ?? [])
     .map((entry) => entry.trim().replace(':', '')), ['registrations', 'config', 'outbox'])
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('69. no Postgres migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
-/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
-const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+/**
+ * Every migration later phases appended: the two prize ones and D3's dandiya
+ * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each
+ * assertion below needs is that NONE of the later migrations reaches into the
+ * phase it belongs to.
+ */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql',
+  '0005_dandiya_checkout.sql']
 check('  and the prize migration does not touch the retired operator realm',
   PRIZE_MIGRATIONS.some((file) => /operator|access_code/i.test(read(`drizzle/${file}`))),
   false)
@@ -548,13 +554,13 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
  * claim — that it FREED three slots by deleting the operator realm rather
  * than consolidating it — is unchanged and still asserted below.
  */
-check('71. the Function inventory is exactly ten', budget.actual, [
+check('71. the Function inventory is exactly eleven', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
-  'sync-registration',
+  'admin-events', 'attendees', 'dandiya', 'device-auth', 'device-badge-claim',
+  'prizes', 'sync-registration',
 ])
-check('72. with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('72. with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('73. and no Function was introduced to replace the operator realm',
   [budget.problems,
    readdirSync(join(root, 'api')).filter((file) => /^operator-/.test(file))], [[], []])

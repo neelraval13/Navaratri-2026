@@ -501,24 +501,30 @@ check('  stores unchanged',
     .match(/^\s*(\w+):/gm) ?? []).map((entry) => entry.trim().replace(':', '')),
   ['registrations', 'config', 'outbox'])
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('38. NO central migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
 /**
  * `awarded_by_device_id` is a FOREIGN KEY to the central device, which is the
  * right thing for a ledger to record. What D1 protects is that central
  * Postgres never stores this browser's LOCAL identity or its convergence
  * state — convergence is `config.deviceId === device.id` and nothing else.
  */
-/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
-const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+/**
+ * Every migration later phases appended: the two prize ones and D3's dandiya
+ * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each
+ * assertion below needs is that NONE of the later migrations reaches into the
+ * phase it belongs to.
+ */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql',
+  '0005_dandiya_checkout.sql']
 check('  and the prize migration records no local identity or convergence state',
   PRIZE_MIGRATIONS.some((file) => /converg|local_device|device_uuid|"identity"/i.test(read(`drizzle/${file}`))),
   false)
@@ -535,9 +541,9 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // RE-SCOPED BY PHASE P1, which added one. D1 still added none, and the
 // assertion below is D1's own concern: nothing new writes a local identity.
-check('46. the Function inventory is ten', budget.actual.length, 10)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('46. the Function inventory is eleven', budget.actual.length, 11)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and nothing unexpected', budget.problems, [])
 
 console.log('\n=== 52. DOCUMENTATION ===')

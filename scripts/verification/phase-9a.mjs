@@ -43,16 +43,19 @@ const schemaSource = read('server/db/schema.ts')
 
 console.log('=== 1-17. SCHEMA ===')
 /**
- * RE-SCOPED BY PHASE P1, which added the prize ledger as a fifth table.
+ * RE-SCOPED BY PHASE D3, which added the two dandiya tables beside P1's prize
+ * ledger.
  *
  * The inventory is pinned, not bounded, so a table cannot appear without a
  * decision. What 9A was really protecting is the PRIVACY boundary, and that
  * is asserted directly below rather than implied by a count: whatever tables
- * exist, none of them may hold attendee PII.
+ * exist, NONE of them may hold attendee PII.
  */
-check('exactly five central tables', Object.keys(schema).filter((k) => typeof schema[k] === 'object' && schema[k] !== null).sort(),
-  ['badgeAssignments', 'deviceAttributes', 'devices', 'events', 'prizeAwards'])
-for (const t of ['events', 'devices', 'device_attributes', 'badge_assignments', 'prize_awards'])
+check('exactly seven central tables', Object.keys(schema).filter((k) => typeof schema[k] === 'object' && schema[k] !== null).sort(),
+  ['badgeAssignments', 'dandiyaLoanHolders', 'dandiyaLoans', 'deviceAttributes',
+   'devices', 'events', 'prizeAwards'])
+for (const t of ['events', 'devices', 'device_attributes', 'badge_assignments',
+  'prize_awards', 'dandiya_loans', 'dandiya_loan_holders'])
   check(`  migration creates ${t}`, new RegExp(`CREATE TABLE "${t}"`).test(migrations), true)
 /**
  * NO ATTENDEE PII IN THE PRIZE LEDGER, checked against the MIGRATION — the
@@ -71,6 +74,21 @@ check('  and the prize ledger declares no attendee column',
    ['name', 'phone', 'whatsapp', 'age', 'gender', 'payment', 'normalized', 'amount']
      .filter((column) => new RegExp(`"[a-z_]*${column}[a-z_]*"`, 'i').test(prizeTableSql))],
   [false, []])
+/**
+ * THE SAME AUDIT FOR THE DANDIYA TABLES. A loan records a pair code and two
+ * badge NUMBERS; `pair_code` is renamed away first because it names a pair of
+ * sticks and not a person.
+ */
+for (const table of ['dandiya_loans', 'dandiya_loan_holders']) {
+  const tableSql = (new RegExp(`CREATE TABLE "${table}" \\(([\\s\\S]*?)\\n\\);`)
+    .exec(migrations)?.[1] ?? '').replace(/pair_code/g, 'label')
+
+  check(`  and ${table} declares no attendee column`,
+    [tableSql === '',
+     ['name', 'phone', 'whatsapp', 'age', 'gender', 'payment', 'normalized', 'amount']
+       .filter((column) => new RegExp(`"[a-z_]*${column}[a-z_]*"`, 'i').test(tableSql))],
+    [false, []])
+}
 
 check('events.slug is unique', /CONSTRAINT "events_slug_key" UNIQUE\("slug"\)/.test(migrations), true)
 check('  slug / name / timezone non-empty', ['events_slug_not_empty', 'events_name_not_empty', 'events_timezone_not_empty']
@@ -173,16 +191,16 @@ check('  no disabled message leaks a value',
   Object.values(dbEnv.DATABASE_DISABLED_MESSAGES).some((m) => /postgres|:\/\/|@/.test(m)), false)
 
 console.log('\n=== 29-35. MIGRATIONS ===')
-// RE-SCOPED BY PHASE P1.1: two appended migrations now. Earlier files stay
+// RE-SCOPED BY PHASE D3: three appended migrations now. Earlier files stay
 // byte-for-byte as they were, which the next assertion keeps proving.
 check('migration files are version controlled', migrationFiles,
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
 check('  the journal tracks every one',
   JSON.parse(read('drizzle/meta/_journal.json')).entries.map((e) => e.tag),
   ['0000_central_foundation', '0001_range_guards_and_touch', '0002_device_credentials',
-   '0003_prize_awards', '0004_repeat_prize_awards'])
+   '0003_prize_awards', '0004_repeat_prize_awards', '0005_dandiya_checkout'])
 check('  and the earlier files were never edited',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql']
     .map((file) => /password|session_version/.test(read(`drizzle/${file}`))), [false, false])
@@ -192,14 +210,21 @@ check('  and the earlier files were never edited',
  * to Development. An environment at 0002 reaches today by running two new
  * files, and neither touches a table any earlier phase owns.
  */
-check('  the prize migrations touch no earlier table',
+check('  the later migrations touch no earlier table',
   [/CREATE TABLE "prize_awards"/.test(read('drizzle/0003_prize_awards.sql')),
-   ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+   ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql']
      .some((file) => /ALTER TABLE "(events|devices|device_attributes|badge_assignments)"/
        .test(read(`drizzle/${file}`))),
    ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql', '0002_device_credentials.sql']
-     .some((file) => /prize/i.test(read(`drizzle/${file}`)))],
+     .some((file) => /prize|dandiya/i.test(read(`drizzle/${file}`)))],
   [true, false, false])
+// D3 adds TABLES. It alters only its own, to attach their foreign keys.
+check('  and 0005 alters only the tables it created',
+  [...read('drizzle/0005_dandiya_checkout.sql')
+    .replace(/^--.*$/gm, '')
+    .matchAll(/ALTER TABLE "([a-z_]+)"/g)]
+    .map((match) => match[1])
+    .filter((table) => !table.startsWith('dandiya_')), [])
 /**
  * AND 0003 WAS NOT REWRITTEN. The constraint it creates is still in it; what
  * changed is that 0004 removes it afterwards. Rewriting 0003 would leave

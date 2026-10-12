@@ -7,6 +7,7 @@ import EventAppGate from '@/components/event-app-gate'
 import AdminPage from '@/pages/admin-page'
 import AttendeesPage from '@/pages/attendees-page'
 import BadgeRegistrationPage from '@/pages/badge-registration-page'
+import DandiyaPage from '@/pages/dandiya-page'
 import DeviceLoginPage from '@/pages/device-login-page'
 import HomePage from '@/pages/home-page'
 import NotFoundPage from '@/pages/not-found-page'
@@ -29,6 +30,8 @@ import PrizesPage from '@/pages/prizes-page'
  *                          NO badge range, because a prize consumes no badge
  *   /attendees             the same, plus Attendees authority — a read-only
  *                          directory, so no badge range and no mutation
+ *   /dandiya               the same, plus Dandiya authority — issuing a pair
+ *                          of sticks consumes no badge, so no range either
  *
  * `/device-registration` is RETIRED. Phase D2 removed the local provisioning
  * workflow, so the path survives only for old bookmarks and redirects to
@@ -83,6 +86,12 @@ const AppRouter: React.FC = () => {
             <Route path={ROUTES.prizes}>
               <EventAccessGate module="prizes">
                 <PrizesPage />
+              </EventAccessGate>
+            </Route>
+
+            <Route path={ROUTES.dandiya}>
+              <EventAccessGate module="dandiya">
+                <DandiyaPage />
               </EventAccessGate>
             </Route>
           </Switch>

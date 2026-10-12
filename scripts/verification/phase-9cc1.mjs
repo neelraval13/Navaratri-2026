@@ -107,7 +107,7 @@ const routesModule = await createJiti(import.meta.url, {
  */
 check('  and the event route pattern no longer contains it',
   [/device-registration/.test(/EVENT_ROUTE_PATTERN = (.*)/.exec(read('src/app/routes.ts'))?.[1] ?? ''),
-   ['/', '/badge-registration', '/prizes', '/attendees'].every((path) =>
+   ['/', '/badge-registration', '/prizes', '/attendees', '/dandiya'].every((path) =>
      routesModule.EVENT_ROUTE_PATTERN.test(path)),
    ['/device-registration', '/device-login', '/admin', '/nope'].some((path) =>
      routesModule.EVENT_ROUTE_PATTERN.test(path))],
@@ -117,12 +117,12 @@ const vercel = JSON.parse(read('vercel.json'))
 const sources = vercel.rewrites.map((rule) => rule.source)
 check('vercel.json rewrites /device-login to the SPA',
   vercel.rewrites.find((rule) => rule.source === '/device-login')?.destination, '/index.html')
-// RE-SCOPED BY PHASE A1: `/attendees` is a new SPA route with its own
-// explicit rewrite, as `/prizes` was in P1. Still an exact inventory — a
+// RE-SCOPED BY PHASE D3: `/dandiya` is a new SPA route with its own explicit
+// rewrite, as `/prizes` and `/attendees` were. Still an exact inventory — a
 // catch-all would swallow /api.
 check('  the existing rewrites are kept',
   sources.sort(),
-  ['/admin', '/attendees', '/badge-registration', '/device-login',
+  ['/admin', '/attendees', '/badge-registration', '/dandiya', '/device-login',
    '/device-registration', '/prizes'])
 check('  no rewrite is a wildcard that could swallow /api',
   sources.filter((source) => /[*:()]/.test(source)), [])
@@ -331,8 +331,10 @@ check('a valid context parses', parse({}) !== null, true)
 check('  and is projected, not spread',
   Object.keys(parse({ authenticated: true, configured: true, futureField: 'x' })).sort(),
   ['activeBadgeRange', 'device', 'event'])
+// Phase D3 made `dandiya` a real attribute, so the unknown case needs a value
+// that genuinely is not one — the point was never this particular word.
 check('  an UNKNOWN attribute fails the whole response closed',
-  parse({ device: { ...safeContext().device, attributes: ['registration', 'dandiya'] } }), null)
+  parse({ device: { ...safeContext().device, attributes: ['registration', 'checkin'] } }), null)
 check('  free text too',
   parse({ device: { ...safeContext().device, attributes: ['anything'] } }), null)
 check('  a non-array attributes field',
@@ -703,18 +705,24 @@ check('badge allocation stays local',
   [/nextBadge/.test(read('src/db/registrations.ts')),
    /device-auth|central/.test(read('src/db/registrations.ts'))], [true, false])
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('NO new migration',
   readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
-/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
-const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+/**
+ * Every migration later phases appended: the two prize ones and D3's dandiya
+ * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each
+ * assertion below needs is that NONE of the later migrations reaches into the
+ * phase it belongs to.
+ */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql',
+  '0005_dandiya_checkout.sql']
 check('  and the prize migration does not touch the central enrollment',
   PRIZE_MIGRATIONS.some((file) => /enrollment|centralDevice|config/i.test(read(`drizzle/${file}`))),
   false)

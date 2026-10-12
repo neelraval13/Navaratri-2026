@@ -255,7 +255,7 @@ console.log(`  ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_
 check('the deployment stays within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
 // RE-SCOPED BY PHASE P1: `api/prizes.ts` is the ninth.
-check('  at exactly ten Functions', budget.actual.length, 10)
+check('  at exactly eleven Functions', budget.actual.length, 11)
 check('  with no unexpected entrypoint', budget.problems, [])
 check('the six consolidated Functions are GONE, not wrappers',
   ['admin-login', 'admin-session', 'admin-logout',
@@ -325,15 +325,24 @@ for (const [label, pattern, useStripped] of [
     }).map((file) => file.replace(`${root}/`, '')), [])
 
 /**
- * `as unknown as` is not banned outright: two sites predate this repair and
- * are genuine library-typing limitations (drizzle's `batch` signature, and
- * the wire contract's post-validation payload narrowing). They are pinned so
- * a NEW one cannot appear unnoticed.
+ * `as unknown as` is not banned outright: a small number of sites are genuine
+ * library-typing limitations rather than silenced errors, and each is pinned
+ * by name so a NEW one cannot appear unnoticed.
+ *
+ *   server/admin/registry.ts     drizzle's `batch` demands a non-empty tuple
+ *   server/dandiya/loans.ts      the same signature, for the same reason —
+ *                                issuing a loan batches one loan insert and
+ *                                two holder inserts
+ *   src/shared/sync-contract.ts  post-validation payload narrowing
+ *
+ * The dandiya one is deliberately the SAME workaround as the Admin one rather
+ * than a different invention: one shape of cast for one library limitation is
+ * easier to audit than two.
  */
 check('`as unknown as` appears only where it already did',
   sources.filter((file) => /\bas unknown as\b/.test(stripComments(readFileSync(file, 'utf8'))))
     .map((file) => file.replace(`${root}/`, '')).sort(),
-  ['server/admin/registry.ts', 'src/shared/sync-contract.ts'])
+  ['server/admin/registry.ts', 'server/dandiya/loans.ts', 'src/shared/sync-contract.ts'])
 
 console.log('\n=== RESULT CONTRACTS NARROW EXPLICITLY ===')
 /**
@@ -355,16 +364,16 @@ check('  the explicit form is used instead',
 
 console.log('\n=== NOTHING ELSE MOVED ===')
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('no migration was added',
   readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
 /**
  * 0003 `ALTER TABLE "prize_awards"`s its own new table to attach the foreign
  * keys, which is how Drizzle emits them, and 0004 drops a constraint from

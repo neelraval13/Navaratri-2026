@@ -192,12 +192,14 @@ const attributes = await domainJiti.import(`${root}/src/shared/device-attributes
 const filters = await domainJiti.import(`${root}/src/attendees/attendee-filters.ts`)
 const client = await domainJiti.import(`${root}/src/attendees/attendee-api.ts`)
 
+// RE-SCOPED BY PHASE D3, which added `dandiya` as a fourth independent
+// capability. A1's concern is that `attendees` is one of them and is its own.
 check('1. `attendees` is a valid device attribute',
   [[...attributes.DEVICE_ATTRIBUTES],
    attributes.isDeviceAttribute('attendees'),
    attributes.parseAttributeSet(['attendees']).attributes,
    attributes.ATTENDEE_DIRECTORY_REQUIRED_ATTRIBUTE],
-  [['registration', 'prizes', 'attendees'], true, ['attendees'], 'attendees'])
+  [['registration', 'prizes', 'attendees', 'dandiya'], true, ['attendees'], 'attendees'])
 check('  it is labelled and described for the Admin form',
   [attributes.DEVICE_ATTRIBUTE_LABELS.attendees,
    attributes.DEVICE_ATTRIBUTE_DESCRIPTIONS.attendees.length > 0],
@@ -723,11 +725,13 @@ const moduleLinks = (html) =>
 const cardOrder = (html) =>
   [...html.matchAll(/<h2 class="[^"]*">([^<]+)<\/h2>/g)].map((match) => match[1].trim())
 
+// RE-SCOPED BY PHASE D3: Dandiya is a real module now, so a viewer sees three
+// ungranted cards and no `Coming soon` at all.
 check('Home offers Attendees to a viewer, and nothing else',
   [moduleLinks(homeFor(['attendees'])),
    (homeFor(['attendees']).match(/Not on this device/g) ?? []).length,
    (homeFor(['attendees']).match(/Coming soon/g) ?? []).length],
-  [['/attendees'], 2, 1])
+  [['/attendees'], 3, 0])
 check('  the card order is Badge Registration, Attendees, Prizes, Dandiya',
   cardOrder(homeFor(['attendees'])),
   ['Badge Registration', 'Attendees', 'Prizes', 'Dandiya'])
@@ -884,20 +888,28 @@ check('37. IndexedDB version unchanged (1)', /DATABASE_VERSION = 1\b/.test(dexie
 check('  stores unchanged',
   ((/\.stores\(\{([\s\S]*?)\}\)/.exec(dexie)?.[1] ?? '').match(/^\s*(\w+):/gm) ?? [])
     .map((entry) => entry.trim().replace(':', '')), ['registrations', 'config', 'outbox'])
-check('38. no Postgres migration was added',
-  readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
-  ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
-   '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
-check('  and none was needed: the attribute column is already text',
+/**
+ * 38. A1 NEEDED NO MIGRATION, and still does not.
+ *
+ * RE-SCOPED BY PHASE D3, which legitimately took the next migration number.
+ * Counting files cannot express A1's concern any more, so the concern is
+ * stated directly: the attribute column is already text, and no migration
+ * anywhere creates an attendee table or an attendee column.
+ */
+const everyMigration = readdirSync(join(root, 'drizzle'))
+  .filter((file) => file.endsWith('.sql'))
+  .map((file) => read(`drizzle/${file}`))
+  .join('\n')
+
+check('38. no migration was needed: the attribute column is already text',
   [/attribute: text\('attribute'\)/.test(read('server/db/schema.ts')),
    /pgEnum/.test(read('server/db/schema.ts'))], [true, false])
-check('  the schema gained no attendee table',
-  [/attendees = pgTable|'attendees'/.test(read('server/db/schema.ts')),
-   /CREATE TABLE "attendee/i.test(
-     readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql'))
-       .map((f) => read(`drizzle/${f}`)).join('\n'))],
-  [false, false])
+check('  and nothing anywhere created an attendee table or column',
+  [/CREATE TABLE "attendee/i.test(everyMigration),
+   ['attendee_name', 'attendee_phone', 'whatsapp']
+     .filter((column) => everyMigration.includes(column)),
+   /attendees = pgTable/.test(read('server/db/schema.ts'))],
+  [false, [], false])
 
 console.log('  -- 39-40. the prize module is untouched --')
 seedCentral({ attributes: ['prizes', 'attendees'] })
@@ -964,13 +976,13 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_FUNCTION_LIMIT)}` +
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
-check('42. the Function inventory is exactly ten', budget.actual, [
+check('42. the Function inventory is exactly eleven', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
-  'sync-registration',
+  'admin-events', 'attendees', 'dandiya', 'device-auth', 'device-badge-claim',
+  'prizes', 'sync-registration',
 ])
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  the directory is ONE Function, and no helper joined it',
   [readdirSync(join(root, 'api')).filter((file) => /attendee/.test(file)),
    readdirSync(join(root, 'api'))

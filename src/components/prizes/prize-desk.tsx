@@ -8,7 +8,7 @@ import AttendeeFilters from '@/components/attendees/attendee-filters'
 import AttendeeCard from '@/components/prizes/attendee-card'
 import AwardHistory from '@/components/prizes/award-history'
 import AwardPrizeDialog from '@/components/prizes/award-prize-dialog'
-import PrizeNotice, { type PrizeNoticeState } from '@/components/prizes/prize-notice'
+import EventNotice, { type EventNoticeState } from '@/components/event/event-notice'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { useNetworkStatus } from '@/hooks/use-network-status'
 import { formatBadgeNumber } from '@/lib/badge'
@@ -70,7 +70,7 @@ const PrizeDesk: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [readAttempt, setReadAttempt] = useState(0)
-  const [notice, setNotice] = useState<PrizeNoticeState | null>(null)
+  const [notice, setNotice] = useState<EventNoticeState | null>(null)
 
   /**
    * LATEST READ WINS, by sequence rather than by timing.
@@ -315,7 +315,7 @@ const PrizeDesk: React.FC = () => {
         </Button>
       </div>
 
-      {notice === null ? null : <PrizeNotice notice={notice} />}
+      {notice === null ? null : <EventNotice notice={notice} />}
 
       {tab === 'attendees' ? (
         <div

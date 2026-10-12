@@ -143,6 +143,26 @@ const REQUIRED_FILES = [
   'src/components/attendees/attendee-directory.tsx',
   'src/pages/attendees-page.tsx',
   'api/attendees.ts',
+  // Phase D3: the dandiya checkout desk.
+  'api/dandiya.ts',
+  'src/shared/dandiya-contract.ts',
+  'src/shared/event-time.ts',
+  'server/dandiya/loans.ts',
+  'server/dandiya/board.ts',
+  'server/dandiya/conflicts.ts',
+  'server/dandiya/requests.ts',
+  'src/dandiya/dandiya-api.ts',
+  'src/dandiya/dandiya-filters.ts',
+  'src/dandiya/dandiya-contract-parsers.ts',
+  'src/components/dandiya/dandiya-desk.tsx',
+  'src/components/dandiya/issue-pair-form.tsx',
+  'src/components/dandiya/attendee-picker.tsx',
+  'src/components/dandiya/active-loan-card.tsx',
+  'src/components/dandiya/resolve-pair-dialog.tsx',
+  'src/components/dandiya/pair-issues.tsx',
+  'src/components/dandiya/loan-history.tsx',
+  'src/components/event/event-notice.tsx',
+  'src/pages/dandiya-page.tsx',
   'docs/PRIZES.md',
   'scripts/seed-prizes-development.mjs',
   'tsconfig.server.json',
@@ -1260,6 +1280,8 @@ const EXPECTED_FUNCTIONS = [
   'admin-events.ts',
   // Phase A1. GET only; every other method answers 405 with Allow: GET.
   'attendees.ts',
+  // Phase D3. GET the board, POST an issue, PATCH a return.
+  'dandiya.ts',
   'device-auth.ts',
   'device-badge-claim.ts',
   // Phase P1. GET lists the eligible roster and the history; POST awards.
@@ -1644,14 +1666,28 @@ if (claimSource === null || reserveSource === null || claimRequestSource === nul
     }
   }
 
-  // A central range is never released, by anyone.
+  /**
+   * A central BADGE range is never released, by anyone.
+   *
+   * RE-SCOPED BY PHASE D3, which introduced a second table with a
+   * `released_at` column: a dandiya holder is released on every return, which
+   * is the whole point of that column and has nothing to do with badges. The
+   * guard therefore looks for a release of a BADGE ASSIGNMENT rather than for
+   * the word — an over-broad pattern that fires on unrelated code is a guard
+   * somebody eventually deletes.
+   */
   for (const path of [...walk(join(ROOT, 'server')), ...walk(join(ROOT, 'api')), ...walk(join(ROOT, 'src'))]) {
     if (extname(path) !== '.ts' && extname(path) !== '.tsx') {
       continue
     }
 
-    if (/releaseBadgeRange|releasedAt:\s*new Date|\.set\(\{\s*releasedAt/
-      .test(stripComments(readText(path) ?? ''))) {
+    const code = stripComments(readText(path) ?? '')
+    const releasesBadgeRange =
+      /releaseBadgeRange/.test(code) ||
+      (/\.update\(badgeAssignments\)/.test(code) &&
+        /releasedAt:\s*(new Date|[a-zA-Z])/.test(code))
+
+    if (releasesBadgeRange) {
       selfClaimProblems.push(`${rel(path)} releases a central badge range`)
     }
   }
@@ -2669,15 +2705,18 @@ addCheck(
 )
 
 /**
- * RE-SCOPED BY PHASE A1, which spent one slot on `api/attendees.ts` beside
- * P1's `api/prizes.ts`. Ten of twelve, two spare. The headroom is pinned
- * rather than merely bounded so it cannot be consumed quietly: the Hobby
- * limit is enforced at DEPLOY time, after the build has already succeeded, so
- * nothing else would report it.
+ * RE-SCOPED BY PHASE D3, which spent one slot on `api/dandiya.ts` beside
+ * P1's `api/prizes.ts` and A1's `api/attendees.ts`. ELEVEN of twelve, ONE
+ * spare. The headroom is pinned rather than merely bounded so it cannot be
+ * consumed quietly: the Hobby limit is enforced at DEPLOY time, after the
+ * build has already succeeded, so nothing else would report it.
+ *
+ * At one slot left, the next module that wants a Function has a real decision
+ * to make rather than a habit to follow.
  */
-if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 2) {
+if (HOBBY_FUNCTION_LIMIT - apiFiles.length !== 1) {
   budgetProblems.push(
-    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 2`,
+    `headroom is ${String(HOBBY_FUNCTION_LIMIT - apiFiles.length)}; this checkpoint expects exactly 1`,
   )
 }
 
@@ -2837,6 +2876,11 @@ const EXPECTED_MIGRATIONS = [
    * seen P1 applies 0003 then 0004 and arrives at the same place.
    */
   '0004_repeat_prize_awards.sql',
+  /**
+   * Phase D3's dandiya ledger. Appended, and 0000-0004 are untouched: a
+   * migration that has run anywhere is history.
+   */
+  '0005_dandiya_checkout.sql',
 ]
 
 if (migrationFiles.join(', ') !== EXPECTED_MIGRATIONS.join(', ')) {
@@ -2916,8 +2960,21 @@ if (
    * definition, so a column added later is audited rather than hidden behind
    * the rest of the schema file.
    */
+  /**
+   * THE PRIZE TABLE BLOCK, and only it.
+   *
+   * The end was once "the next `export type`", which worked until Phase D3
+   * appended two more tables before them — the slice then swallowed the
+   * dandiya tables, whose partial unique index over `badge_number` tripped
+   * the repeat-prize guard below. A canary would never have found that: the
+   * code was correct and the GUARD was wrong, which is the failure mode of
+   * auditing by slicing text.
+   */
   const tableStart = schemaSource.indexOf('export const prizeAwards = pgTable(')
-  const tableEnd = schemaSource.indexOf('export type ', tableStart)
+  const nextDeclaration = ['\nexport const ', '\nexport type ']
+    .map((marker) => schemaSource.indexOf(marker, tableStart + 1))
+    .filter((index) => index !== -1)
+  const tableEnd = nextDeclaration.length === 0 ? -1 : Math.min(...nextDeclaration)
   const table = tableStart === -1
     ? ''
     : stripComments(schemaSource.slice(tableStart, tableEnd === -1 ? undefined : tableEnd))
@@ -3435,9 +3492,9 @@ if (
   directoryProblems.push('an attendee directory module is missing')
 } else {
   /** The allow-list the Admin form renders and the server validates against. */
-  if (!/DEVICE_ATTRIBUTES = \['registration', 'prizes', 'attendees'\] as const/
+  if (!/DEVICE_ATTRIBUTES = \['registration', 'prizes', 'attendees', 'dandiya'\] as const/
     .test(attributeSource)) {
-    directoryProblems.push('the device attribute allow-list is not the expected three')
+    directoryProblems.push('the device attribute allow-list is not the expected four')
   }
 
   for (const name of ['DEVICE_ATTRIBUTE_LABELS', 'DEVICE_ATTRIBUTE_DESCRIPTIONS']) {
@@ -3463,8 +3520,20 @@ if (
     directoryProblems.push('the attendees route does not require the attendees attribute')
   }
 
-  if (/'prizes'|'registration'/.test(decision)) {
-    directoryProblems.push('the attendees route accepts another module\u2019s attribute')
+  /**
+   * NO OTHER ATTRIBUTE, named or not.
+   *
+   * This once listed `'prizes'` and `'registration'`, and a canary that made
+   * `dandiya` grant the directory sailed past it — a guard that enumerates
+   * today's siblings misses tomorrow's. Every attribute literal except its
+   * own is forbidden, so the next capability is covered by construction.
+   */
+  for (const other of ['registration', 'prizes', 'dandiya']) {
+    if (decision.includes(`'${other}'`)) {
+      directoryProblems.push(
+        `the attendees route accepts another module\u2019s attribute: ${other}`,
+      )
+    }
   }
 
   /**
@@ -3703,10 +3772,27 @@ if (
     directoryProblems.push('the offline copy is not the agreed sentence')
   }
 
-  /** A1 adds no migration. `device_attributes` is already extensible text. */
-  if (exists(join(ROOT, 'drizzle', '0005_attendees.sql')) ||
-      readdirSync(join(ROOT, 'drizzle')).some((file) => file.startsWith('0005'))) {
-    directoryProblems.push('A1 added a migration, and it needs none')
+  /**
+   * A1 NEEDED NO MIGRATION, and still does not.
+   *
+   * RE-SCOPED BY PHASE D3, which legitimately took the next migration number.
+   * Counting files cannot express A1's concern any more, so the concern is
+   * stated directly: `device_attributes` is already extensible text, so no
+   * migration anywhere creates an attendee table or an attendee column.
+   */
+  const everyMigration = readdirSync(join(ROOT, 'drizzle'))
+    .filter((file) => file.endsWith('.sql'))
+    .map((file) => readText(join(ROOT, 'drizzle', file)) ?? '')
+    .join('\n')
+
+  if (/CREATE TABLE "attendee/i.test(everyMigration)) {
+    directoryProblems.push('a migration created an attendee table, and none is needed')
+  }
+
+  for (const column of ['attendee_name', 'attendee_phone', 'whatsapp']) {
+    if (everyMigration.includes(column)) {
+      directoryProblems.push(`a migration created an attendee column: ${column}`)
+    }
   }
 
   /**
@@ -3724,6 +3810,804 @@ addCheck(
   'attendee-directory',
   'The attendee directory reads the one register, changes nothing, and needs its own attribute',
   directoryProblems,
+)
+
+// --- K3. the dandiya ledger: no PII, and the database owns uniqueness -----
+/**
+ * PHASE D3 ADDED A LENDING LEDGER, AND KEPT THE PRIVACY BOUNDARY. PHASE D3.1
+ * GAVE EACH STICK ITS OWN ENDING, WHICH ADDED TWO MORE WAYS TO BE WRONG.
+ *
+ * A physical pair goes out to two attendees. Each stick comes back or is
+ * lost, independently; the loan stays open while either is still out, and the
+ * pair code is only free to go out again once BOTH came back. Six things
+ * could go wrong, and every one of them would be quiet:
+ *
+ *   1. THE PARTIAL INDEXES COULD LOSE THEIR PREDICATE. `UNIQUE(event_id,
+ *      pair_code)` without `WHERE pair_released_at IS NULL` forbids a pair
+ *      from ever going out twice — which is most of what an evening consists
+ *      of. The opposite mistake, dropping the index, lets two desks hand out
+ *      the same pair.
+ *   2. THE ATTENDEE INDEX COULD BECOME PARTIAL ON THE WRONG COLUMN. On
+ *      `resolution IS NULL` it reads almost identically and means something
+ *      else: a lost stick resolves with `resolution = 'lost'`, so the
+ *      attendee would leave the index and could be handed a second pair,
+ *      while a RETURNED one would too. The predicate has to be `resolved_at`.
+ *   3. A LOSS COULD RELEASE THE PAIR. Releasing is `pair_released_at`, and a
+ *      pair with one stick missing must stay quarantined for the rest of the
+ *      event. Both directions are a database CHECK, because this is the rule
+ *      a well-meaning repair would relax first.
+ *   4. A RESOLUTION COULD BE OVERWRITTEN. Returned must never become lost and
+ *      lost must never become returned, so every holder write is a
+ *      compare-and-set on `resolved_at IS NULL`.
+ *   5. THE OUTCOME COULD BE DECIDED FROM A PRIOR READ. "Am I the last stick?"
+ *      answered by a SELECT leaves two simultaneous resolutions both deciding
+ *      "no", and the loan open forever. It is three mutually exclusive
+ *      compare-and-sets in the same transaction instead.
+ *   6. IT COULD STORE A PERSON. The ledger holds badge NUMBERS, and a name
+ *      column added for the convenience of one card would end the property
+ *      Postgres has had since Phase 9A.
+ *
+ * A last guard is about TIME: nothing may resolve a stick or close a loan on
+ * a date. Midnight moves a counter and a history filter, and must never
+ * return a stick, close a loan or release a pair.
+ */
+const dandiyaProblems = []
+
+const dandiyaSchema = readText(join(ROOT, 'server/db/schema.ts'))
+const dandiyaMigration = readText(join(ROOT, 'drizzle/0005_dandiya_checkout.sql'))
+const dandiyaWriter = readText(join(ROOT, 'server/dandiya/loans.ts'))
+const dandiyaBoard = readText(join(ROOT, 'server/dandiya/board.ts'))
+const dandiyaEndpoint = readText(join(ROOT, 'api/dandiya.ts'))
+const dandiyaContract = readText(join(ROOT, 'src/shared/dandiya-contract.ts'))
+const dandiyaRequests = readText(join(ROOT, 'server/dandiya/requests.ts'))
+const dandiyaApi = readText(join(ROOT, 'src/dandiya/dandiya-api.ts'))
+
+if (
+  dandiyaSchema === null || dandiyaMigration === null || dandiyaWriter === null ||
+  dandiyaBoard === null || dandiyaEndpoint === null || dandiyaContract === null ||
+  dandiyaRequests === null || dandiyaApi === null
+) {
+  dandiyaProblems.push('a dandiya module is missing')
+} else {
+  /**
+   * THE TWO PARTIAL UNIQUE INDEXES, in the migration, WITH their predicates.
+   * Checked in the SQL rather than in the Drizzle source, because the SQL is
+   * what a human applies.
+   */
+  for (const [index, columns, predicate] of [
+    ['dandiya_loans_one_unreleased_per_pair', '"event_id","pair_code"', 'pair_released_at'],
+    ['dandiya_loan_holders_one_unresolved_per_badge', '"event_id","badge_number"', 'resolved_at'],
+  ]) {
+    /**
+     * SQL ONLY. 0005's own header explains both indexes in prose, and that
+     * commentary sits in the first chunk — so matching the raw file found the
+     * CREATE TABLE statement and reported the index missing. A guard that
+     * reads a file's documentation as its content verifies nothing.
+     */
+    const statement = dandiyaMigration
+      .replace(/^--.*$/gm, '')
+      .split('--> statement-breakpoint')
+      .find((entry) => entry.includes(index)) ?? ''
+
+    if (!/CREATE UNIQUE INDEX/.test(statement) || !statement.includes(columns)) {
+      dandiyaProblems.push(`0005 does not create the unique index ${index}`)
+    }
+
+    // The predicate is what makes reuse after a return possible at all.
+    if (!new RegExp(`WHERE[^;]*\\b${predicate}\\b[^;]*is null`, 'i').test(statement)) {
+      dandiyaProblems.push(`${index} is not PARTIAL, so a returned loan would block the next`)
+    }
+
+    /**
+     * AND IT IS PARTIAL ON THE RIGHT COLUMN. `resolution IS NULL` is the
+     * near-miss that matters: it looks like the same predicate and releases
+     * an attendee the moment their stick is marked LOST, which is exactly
+     * when their obligation is not discharged by a returned stick.
+     */
+    if (/\bresolution\b/i.test(statement.slice(statement.search(/WHERE/i)))) {
+      dandiyaProblems.push(`${index} is partial on resolution rather than ${predicate}`)
+    }
+  }
+
+  /** And the schema still declares them as partial, where a change starts. */
+  for (const [table, predicate] of [
+    ['dandiyaLoans', 'pairReleasedAt'],
+    ['dandiyaLoanHolders', 'resolvedAt'],
+  ]) {
+    const start = dandiyaSchema.indexOf(`export const ${table} = pgTable(`)
+    const nextDeclaration = ['\nexport const ', '\nexport type ']
+      .map((marker) => dandiyaSchema.indexOf(marker, start + 1))
+      .filter((index) => index !== -1)
+    const block = start === -1 || nextDeclaration.length === 0
+      ? ''
+      : dandiyaSchema.slice(start, Math.min(...nextDeclaration))
+
+    if (!new RegExp(`uniqueIndex\\([\\s\\S]*?\\.where\\(sql\`\\$\\{table\\.${predicate}\\} is null\`\\)`)
+      .test(block)) {
+      dandiyaProblems.push(`${table} no longer declares its partial unique index`)
+    }
+
+    /** No attendee column, in either table. */
+    const columns = block.slice(block.indexOf('{'), block.indexOf('\n  },'))
+      .replace(/pairCode|pair_code/g, 'label')
+      .toLowerCase()
+
+    for (const field of [
+      'name', 'phone', 'whatsapp', 'wa.me', 'age', 'gender', 'payment', 'amount',
+      'attendee', 'normalized', 'upi',
+    ]) {
+      if (columns.includes(field)) {
+        dandiyaProblems.push(`${table} declares an attendee column: ${field}`)
+      }
+    }
+  }
+
+  /**
+   * PAIR CODES ARE CANONICAL, AND THAT UNDERWRITES THE PAIR INDEX.
+   *
+   * The index compares bytes, so a stored `d-014` beside an open `D-014`
+   * would be two loans on one set of sticks. Three things therefore have to
+   * hold together, and all three are checked: the shared parser uppercases,
+   * the database refuses anything else, and the migration carries that check.
+   */
+  if (!/trimmed\.toUpperCase\(\)/.test(stripComments(dandiyaContract))) {
+    dandiyaProblems.push('parsePairCode no longer canonicalises to uppercase')
+  }
+
+  if (!/upper\(btrim\(\$\{table\.pairCode\}\)\)/.test(dandiyaSchema)) {
+    dandiyaProblems.push('dandiya_loans no longer requires a canonical pair code')
+  }
+
+  if (!/dandiya_loans_pair_code_canonical/.test(dandiyaMigration) ||
+      !/= upper\(btrim\("dandiya_loans"\."pair_code"\)\)/.test(dandiyaMigration)) {
+    dandiyaProblems.push('0005 no longer enforces a canonical pair code')
+  }
+
+  /**
+   * ONLY A FULLY RETURNED PAIR IS EVER FREED, AND EVERY FULLY RETURNED PAIR
+   * IS.
+   *
+   * This is the quarantine rule, and it is the one a plausible repair would
+   * weaken: a pair with a stick missing stays out of circulation for the
+   * whole event, however convenient it would be to hand the remaining stick
+   * to somebody. Checked in BOTH directions and in BOTH places, because
+   * `pair_released_at` is simultaneously the release and the pair index's
+   * predicate — so relaxing it would silently let a quarantined pair be
+   * issued again, which is a desk handing out one stick.
+   */
+  for (const [constraint, definition] of [
+    ['dandiya_loans_release_requires_returned', /"pair_released_at" is null or/i],
+    ['dandiya_loans_returned_requires_release', /"outcome" is distinct from 'returned' or/i],
+  ]) {
+    const statement = dandiyaMigration
+      .replace(/^--.*$/gm, '')
+      .split('--> statement-breakpoint')
+      .find((entry) => entry.includes(constraint)) ?? ''
+
+    if (statement === '' || !definition.test(statement)) {
+      dandiyaProblems.push(`0005 no longer carries ${constraint}`)
+    }
+  }
+
+  if (!/release_requires_returned/.test(dandiyaSchema) ||
+      !/returned_requires_release/.test(dandiyaSchema)) {
+    dandiyaProblems.push('the schema no longer pairs a release with a returned outcome')
+  }
+
+  /**
+   * ONE WRITER. A second inserter is a second place for somebody to decide
+   * they know better than the indexes.
+   */
+  const dandiyaTableReaders = []
+
+  for (const directory of ['api', 'server', 'src']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      if (/\bdandiyaLoans\b|\bdandiyaLoanHolders\b/.test(stripComments(readText(path) ?? ''))) {
+        dandiyaTableReaders.push(rel(path))
+      }
+    }
+  }
+
+  const allowedDandiyaReaders = ['server/db/schema.ts', 'server/dandiya/loans.ts']
+
+  for (const path of dandiyaTableReaders) {
+    if (!allowedDandiyaReaders.includes(path)) {
+      dandiyaProblems.push(`${path} reaches the dandiya tables directly`)
+    }
+  }
+
+  for (const path of allowedDandiyaReaders) {
+    if (!dandiyaTableReaders.includes(path)) {
+      dandiyaProblems.push(`${path} no longer names the dandiya tables`)
+    }
+  }
+
+  const writer = stripComments(dandiyaWriter)
+
+  /**
+   * ONE TRANSACTION EACH. The loan and both holders commit together, or the
+   * pair ends up marked out with one holder; the return closes the loan and
+   * releases both holders together, or an attendee stays stuck holding a pair
+   * that has come back.
+   */
+  if ((writer.match(/\.batch\(/g) ?? []).length !== 2) {
+    dandiyaProblems.push('server/dandiya/loans.ts no longer issues and returns in one batch each')
+  }
+
+  if (!/isNull\(dandiyaLoans\.closedAt\)/.test(writer)) {
+    dandiyaProblems.push('the close is not a compare-and-set on an open loan')
+  }
+
+  /**
+   * A RESOLUTION IS FINAL. Without `resolved_at IS NULL` in the holder
+   * update, `return-pair` on a loan with one stick already lost would
+   * rewrite that loss as a return — the ledger quietly losing the fact that
+   * a stick is gone, and the pair silently becoming reusable.
+   */
+  if (!/isNull\(dandiyaLoanHolders\.resolvedAt\)/.test(writer)) {
+    dandiyaProblems.push('a holder resolution can be overwritten')
+  }
+
+  /**
+   * AND THE LOAN ROW IS LOCKED FIRST, which is what actually serialises two
+   * desks resolving DIFFERENT sticks of one pair.
+   *
+   * Compare-and-set alone cannot: those two transactions write different
+   * holder rows and never conflict, and under READ COMMITTED neither close
+   * query can see the other's uncommitted resolution — so both would decline
+   * to close and both would commit, leaving every stick resolved and the loan
+   * open for the rest of the event. The shared loan row is the serialisation
+   * point, and the lock has to be the FIRST statement of the same
+   * transaction: taken afterwards it protects nothing, and taken in a
+   * transaction of its own it is released before the work it was meant to
+   * guard.
+   */
+  const resolveBatch = writer.slice(
+    writer.indexOf('await database.batch(['),
+    writer.indexOf('\n  ])', writer.indexOf('await database.batch([')),
+  )
+
+  if (!/\.for\('update'\)/.test(writer)) {
+    dandiyaProblems.push('the resolution writer no longer locks the loan row')
+  }
+
+  if (!resolveBatch.includes('lockOpenLoan(eventId, loanId)')) {
+    dandiyaProblems.push('the loan row lock is not inside the resolution transaction')
+  }
+
+  for (const [statement, label] of [
+    ['.update(dandiyaLoanHolders)', 'a holder resolution'],
+    ['.update(dandiyaLoans)', 'a loan close'],
+  ]) {
+    const lock = resolveBatch.indexOf('lockOpenLoan')
+    const at = resolveBatch.indexOf(statement)
+
+    if (lock === -1 || at === -1 || lock > at) {
+      dandiyaProblems.push(`${label} runs before the loan row lock`)
+    }
+  }
+
+  /** The lock is a real row lock on the right row, not a near-miss. */
+  const lockDefinition = writer.slice(
+    writer.indexOf('const lockOpenLoan ='),
+    writer.indexOf('export const resolveDandiyaHolders'),
+  )
+
+  for (const required of [
+    '.for(\'update\')', 'eq(dandiyaLoans.id, loanId)',
+    'eq(dandiyaLoans.eventId, eventId)', 'isNull(dandiyaLoans.closedAt)',
+  ]) {
+    if (!lockDefinition.includes(required)) {
+      dandiyaProblems.push(`the loan row lock does not carry ${required}`)
+    }
+  }
+
+  /** And nothing stands in for it in the application. */
+  if (/advisory|pg_advisory|mutex|navigator\.locks|sleep\(/i.test(writer)) {
+    dandiyaProblems.push('the dandiya writer substitutes a lock of its own')
+  }
+
+  /**
+   * THE OUTCOME IS DERIVED INSIDE THE TRANSACTION, by three mutually
+   * exclusive compare-and-sets counting the holders AFTER the resolution in
+   * the same batch. Each needs its own guard, so none of them may be dropped
+   * and none may become unconditional.
+   */
+  for (const [guard, outcome] of [
+    ['closeWhen(0)', "outcome: 'returned'"],
+    ['closeWhen(1)', "outcome: 'partial_loss'"],
+    ['closeWhen(2)', "outcome: 'lost'"],
+  ]) {
+    if (!writer.includes(guard) || !writer.includes(outcome)) {
+      dandiyaProblems.push(`the writer no longer closes ${outcome} under ${guard}`)
+    }
+  }
+
+  if (!/unresolvedHolders\(loanId\)\} = 0/.test(writer) ||
+      !/lostHolders\(loanId\)\} = \$\{lost\}/.test(writer)) {
+    dandiyaProblems.push('a loan can close with a stick still out')
+  }
+
+  /**
+   * AND ONLY THE ALL-RETURNED CLOSE RELEASES THE PAIR. The database refuses
+   * anything else, but a second `pairReleasedAt` in this file would be an
+   * attempt at it, and the attempt is the bug.
+   */
+  const releasing = [...writer.matchAll(/\.set\(\{([^}]*)\}\)/g)]
+    .map((match) => match[1])
+    .filter((assignment) => assignment.includes('pairReleasedAt'))
+
+  if (releasing.length !== 1 || !/pairReleasedAt: resolvedAt/.test(releasing[0] ?? '')) {
+    dandiyaProblems.push('server/dandiya/loans.ts releases a pair on more than one path')
+  }
+
+  /** And a loan is never BORN released, which would free the pair at issue. */
+  if (!/pairReleasedAt: null/.test(writer)) {
+    dandiyaProblems.push('a new dandiya loan does not start with its pair held')
+  }
+
+  if (!/\.delete\(/.test(writer) === false) {
+    dandiyaProblems.push('server/dandiya/loans.ts deletes ledger rows')
+  }
+
+  /** The two mutations must not be able to write an attendee fact. */
+  const inserted = writer.slice(writer.indexOf('const statements = ['), writer.indexOf('try {'))
+    .replace(/pairCode/g, 'label')
+    .toLowerCase()
+
+  for (const field of ['name', 'age', 'gender', 'phone', 'attendee', 'amount']) {
+    if (inserted !== '' && inserted.includes(field)) {
+      dandiyaProblems.push(`the dandiya insert sets ${field}, which it must not`)
+    }
+  }
+
+  /**
+   * NOTHING CLOSES A LOAN ON A DATE — and this guard is scoped to the paths
+   * that could, which is what it always meant.
+   *
+   * It used to forbid the calendar anywhere in these two files, which was a
+   * fine approximation while the board answered for every day at once. Phase
+   * D3.2 made history a question ABOUT a day, so the READ path has to resolve
+   * one: the whole point is that the server decides the boundaries in event
+   * time rather than trusting a browser's idea of them. Widening the guard to
+   * the file would now have forced that decision back into the client, which
+   * is worse than the thing the guard was protecting against.
+   *
+   * What must stay true, and is checked below, is that nothing which WRITES
+   * knows the date: a pair is issued and returned by a person, never by a
+   * clock.
+   */
+  const bodyBetween = (source, from, to) => {
+    const start = source.indexOf(from)
+
+    if (start === -1) {
+      return null
+    }
+
+    const end = to === null ? source.length : source.indexOf(to, start + 1)
+
+    return source.slice(start, end === -1 ? source.length : end)
+  }
+
+  const CALENDAR = /eventDayKey|currentEventDayKey|eventDayWindow|EVENT_TIME_ZONE/
+  const endpointSource = stripComments(dandiyaEndpoint)
+
+  for (const [label, source, from, to] of [
+    ['openDandiyaLoan', writer, 'export const openDandiyaLoan', '\nexport '],
+    ['resolveDandiyaHolders', writer, 'export const resolveDandiyaHolders', '\nexport '],
+    ['lockOpenLoan', writer, 'const lockOpenLoan', '\nexport '],
+    ['POST', endpointSource, 'export async function POST(', 'export async function PATCH('],
+    ['PATCH', endpointSource, 'export async function PATCH(', null],
+  ]) {
+    const body = bodyBetween(source, from, to)
+
+    if (body === null) {
+      dandiyaProblems.push(`the dandiya ${label} path could not be located`)
+    } else if (CALENDAR.test(body)) {
+      dandiyaProblems.push(`the dandiya ${label} path consults the calendar`)
+    }
+  }
+
+  /**
+   * AND THE READ PATH RESOLVES THE DAY ON THE SERVER. A `historyDate` that
+   * reached SQL as a date string, or boundaries computed in the browser,
+   * would both put the event's clock in the wrong place.
+   */
+  if (!/const readHistoryDay/.test(endpointSource) ||
+      !/readHistoryDay\(request\)/.test(endpointSource)) {
+    dandiyaProblems.push('the dandiya read path no longer resolves the day server-side')
+  }
+
+  if (!/eventDayWindow\(/.test(endpointSource)) {
+    dandiyaProblems.push('the dandiya endpoint no longer computes event-day boundaries')
+  }
+
+  /**
+   * HISTORY IS GROUPED BY `issued_at`, AND THE DAY IS A TIMESTAMP RANGE.
+   *
+   * Two regressions this catches. `DATE(issued_at)` or `::date` would be
+   * evaluated in the database session's timezone and would group the ninety
+   * minutes either side of IST midnight into the wrong day — the window a
+   * dandiya evening actually lives in. And grouping by `closedAt` would move
+   * a loan between days as it was resolved, so "what did we hand out last
+   * night" could never be answered twice the same way.
+   */
+  /**
+   * Scoped to the RAW SQL this module writes. Matching the whole file caught
+   * `new Date()` and `.update(` — a guard loose enough to fire on correct
+   * code is a guard somebody deletes.
+   */
+  const rawSql = [...writer.matchAll(/sql`([^`]*)`/g)].map((match) => match[1]).join('\n')
+
+  if (/\bdate\s*\(|::date|date_trunc/i.test(rawSql)) {
+    dandiyaProblems.push('the dandiya reader casts a timestamp to a date in SQL')
+  }
+
+  const composer = stripComments(dandiyaBoard)
+
+  if (!/gte\(dandiyaLoans\.issuedAt/.test(writer) ||
+      !/lt\(dandiyaLoans\.issuedAt/.test(writer)) {
+    dandiyaProblems.push('the day window is not a half-open issuedAt range')
+  }
+
+  if (!/eventDayKey\(row\.issuedAt\) === historyDay/.test(composer)) {
+    dandiyaProblems.push('a day\u2019s history is no longer selected by issuedAt')
+  }
+
+  if (/eventDayKey\((?:row|loan)\.closedAt\) === historyDay/.test(composer)) {
+    dandiyaProblems.push('a day\u2019s history is grouped by closedAt')
+  }
+
+  /**
+   * MIDNIGHT WRITES NOTHING. There is no nightly job, no snapshot table and
+   * no daily rollover mutation — the carryover is derived from open loans on
+   * every read, which is why nothing has to be reset at 00:00.
+   */
+  for (const banned of [
+    'daily_snapshot', 'dandiya_day', 'rolloverDay', 'closeOutDay',
+    'resetDay', 'archiveDay',
+  ]) {
+    if ((writer + composer + endpointSource).includes(banned)) {
+      dandiyaProblems.push(`a daily rollover mutation appeared: ${banned}`)
+    }
+  }
+
+  /**
+   * AND PREVIOUS-DAY OUTSTANDING IS A PROJECTION of the open loans the board
+   * already carries, never a stored figure. It also uses the SERVER's day:
+   * a tablet with a wrong clock must not be able to under-report sticks
+   * nobody has brought back.
+   */
+  const dandiyaFilters = stripComments(
+    readText(join(ROOT, 'src/dandiya/dandiya-filters.ts')) ?? '',
+  )
+
+  if (!/outstandingBeforeDay/.test(dandiyaFilters)) {
+    dandiyaProblems.push('the previous-day outstanding projection is gone')
+  }
+
+  if (/currentEventDayKey\(\)/.test(
+    stripComments(readText(join(ROOT, 'src/components/dandiya/carryover-banner.tsx')) ?? ''),
+  )) {
+    dandiyaProblems.push('the carryover banner reads the browser clock for today')
+  }
+
+  if (!/eventDayKey/.test(stripComments(dandiyaBoard))) {
+    dandiyaProblems.push('the dandiya board no longer counts today in the event timezone')
+  }
+
+  /**
+   * THE CONSTRAINTS ARE THE AUTHORITY, so the endpoint must not precheck
+   * them: a SELECT above the insert would only move the race.
+   */
+  const endpoint = stripComments(dandiyaEndpoint)
+  const postStart = endpoint.indexOf('export async function POST(')
+
+  if (postStart === -1) {
+    dandiyaProblems.push('api/dandiya.ts exports no POST')
+  } else {
+    const post = endpoint.slice(postStart, endpoint.indexOf('export async function PATCH('))
+
+    if (post.includes('readDandiyaLedger(')) {
+      dandiyaProblems.push('the issue endpoint prechecks the ledger instead of trusting the indexes')
+    }
+
+    if (post.indexOf('readAttendeeRegister(') === -1 ||
+        post.indexOf('readAttendeeRegister(') > post.indexOf('openDandiyaLoan(')) {
+      dandiyaProblems.push('the issue endpoint writes before confirming both badges are registered')
+    }
+
+    if (!post.includes("blocked: 'badge-not-registered'")) {
+      dandiyaProblems.push('the issue endpoint does not refuse a badge missing from the register')
+    }
+  }
+
+  /**
+   * AND THE RESOLUTION ENDPOINT DECIDES NO ENDING.
+   *
+   * Its ledger read exists for the MESSAGE — which loan, whose stick — and
+   * for nothing else. An outcome computed up here, from rows read before the
+   * transaction, is the race in person: two volunteers each take a stick back
+   * at the same moment, each reads one stick still out, and the loan never
+   * closes. The three compare-and-sets in the writer are the only authority.
+   */
+  const patchStart = endpoint.indexOf('export async function PATCH(')
+  const patch = patchStart === -1 ? '' : endpoint.slice(patchStart)
+
+  if (patch === '') {
+    dandiyaProblems.push('api/dandiya.ts exports no PATCH')
+  }
+
+  for (const decision of ['partial_loss', 'pairReleasedAt', 'outcome:', 'closedAt']) {
+    if (patch.includes(decision)) {
+      dandiyaProblems.push(`the resolution endpoint decides the loan's ending: ${decision}`)
+    }
+  }
+
+  if (!/resolveDandiyaHolders\(/.test(patch)) {
+    dandiyaProblems.push('the resolution endpoint does not go through the one writer')
+  }
+
+  const methods = [...endpoint.matchAll(/export async function ([A-Z]+)\(/g)]
+    .map((match) => match[1])
+    .sort()
+    .join(',')
+
+  if (methods !== 'GET,PATCH,POST') {
+    dandiyaProblems.push(`api/dandiya.ts exports ${methods} rather than exactly GET,PATCH,POST`)
+  }
+
+  if (!/DANDIYA_REQUIRED_ATTRIBUTE/.test(endpoint)) {
+    dandiyaProblems.push('api/dandiya.ts does not require the dandiya attribute')
+  }
+
+  if (/PRIZE_REQUIRED_ATTRIBUTE|ATTENDEE_DIRECTORY_REQUIRED_ATTRIBUTE|BADGE_RANGE_REQUIRED_ATTRIBUTE/
+    .test(endpoint)) {
+    dandiyaProblems.push('the dandiya endpoint consults another module\u2019s attribute')
+  }
+
+  /** And the ROUTE branch accepts its own attribute and nothing else. */
+  const dandiyaBranch = stripComments(authorizationSource ?? '')
+    .slice(stripComments(authorizationSource ?? '').indexOf("if (module === 'dandiya')"))
+  const dandiyaDecision = dandiyaBranch.slice(0, dandiyaBranch.indexOf('}'))
+
+  if (dandiyaDecision === '' ||
+      !/grant\.attributes\.includes\('dandiya'\)/.test(dandiyaDecision)) {
+    dandiyaProblems.push('the dandiya route does not require the dandiya attribute')
+  }
+
+  for (const other of ['registration', 'prizes', 'attendees']) {
+    if (dandiyaDecision.includes(`'${other}'`)) {
+      dandiyaProblems.push(
+        `the dandiya route accepts another module\u2019s attribute: ${other}`,
+      )
+    }
+  }
+
+  if (/admin-auth|adminSession|readAdminSessionCookie/.test(endpoint)) {
+    dandiyaProblems.push('the dandiya endpoint reaches into the Admin realm')
+  }
+
+  // A Postgres constraint name is never a wire value, and never a response.
+  for (const line of endpoint.split('\n')) {
+    if (line.includes('SQLSTATE') && !line.includes('console.error')) {
+      dandiyaProblems.push('the dandiya endpoint moves a SQLSTATE outside the server log')
+    }
+  }
+
+  if (/dandiya_loans_|dandiya_loan_holders_/.test(endpoint)) {
+    dandiyaProblems.push('the dandiya endpoint names a database constraint')
+  }
+
+  /** Every identity, timing and attendee field is refused, not ignored. */
+  for (const field of [
+    'eventId', 'eventSlug', 'deviceId', 'loginName', 'issuedAt', 'closedAt',
+    'closedByDeviceId', 'outcome', 'pairReleasedAt', 'resolvedAt',
+    'resolvedByDeviceId', 'attendees', 'name', 'age', 'gender',
+  ]) {
+    if (!new RegExp(`'${field}'`).test(dandiyaRequests)) {
+      dandiyaProblems.push(`a dandiya request body may still carry ${field}`)
+    }
+  }
+
+  /** It reuses the ONE Badge Register reader rather than parsing the Sheet. */
+  if (!/readAttendeeRegister/.test(endpoint)) {
+    dandiyaProblems.push('api/dandiya.ts does not use the shared Badge Register reader')
+  }
+
+  if (/BADGE_REGISTER_COLUMNS|checkTabShape/.test(endpoint + stripComments(dandiyaBoard))) {
+    dandiyaProblems.push('the dandiya module parses the Badge Register itself')
+  }
+
+  for (const field of ['phone', 'whatsapp', 'paymentMethod', 'amount']) {
+    if (new RegExp(`${field}\\s*[:?]`, 'i').test(stripComments(dandiyaContract))) {
+      dandiyaProblems.push(`the shared dandiya contract declares ${field}`)
+    }
+  }
+
+  /**
+   * ONLINE ONLY. No local dandiya state, no queue, no timer. A pair that
+   * survived a failed request is how two desks hand out the same sticks.
+   */
+  for (const directory of [
+    'src/dandiya', 'src/components/dandiya', 'src/pages/dandiya-page.tsx',
+  ]) {
+    const target = join(ROOT, directory)
+
+    if (!exists(target)) {
+      dandiyaProblems.push(`missing: ${directory}`)
+
+      continue
+    }
+
+    for (const path of statSync(target).isDirectory() ? walk(target) : [target]) {
+      const code = stripComments(readText(path) ?? '')
+
+      if (/@\/db\/database|from 'dexie'|outbox|localStorage|sessionStorage|caches\./.test(code)) {
+        dandiyaProblems.push(`${rel(path)} keeps dandiya state locally`)
+      }
+
+      if (/setInterval/.test(code)) {
+        dandiyaProblems.push(`${rel(path)} polls on an interval`)
+      }
+
+      /**
+       * `setTimeout` is allowed in exactly ONE place and for one reason:
+       * aborting a request that never answers. Anywhere else it is a retry,
+       * and a retried issue could put one pair out twice.
+       */
+      const timers = [...code.matchAll(/setTimeout\(/g)].length
+      const isRequestTimeout = rel(path) === 'src/dandiya/dandiya-api.ts' &&
+        timers === 1 && /controller\.abort\(\)/.test(code)
+
+      if (timers > 0 && !isRequestTimeout) {
+        dandiyaProblems.push(`${rel(path)} uses a timer that is not the request timeout`)
+      }
+    }
+  }
+
+  /**
+   * A QUARANTINED PAIR BLOCKS, A PERSON'S PAST LOSS DOES NOT.
+   *
+   * These two warnings look alike on screen and must behave oppositely. A
+   * pair with a stick missing cannot physically be handed over, so Issue is
+   * unavailable. An attendee who lost a stick earlier is simply somebody the
+   * volunteer should know about — refusing them would turn a lending desk
+   * into a debt collector, and the operator has no way to override it.
+   *
+   * Pinned as EXPRESSIONS: the warning copy existing proves nothing about
+   * what the button does.
+   */
+  const issueForm = stripComments(readText(join(ROOT, 'src/components/dandiya/issue-pair-form.tsx')) ?? '')
+
+  if (!/availability\.status === 'available' &&/.test(issueForm)) {
+    dandiyaProblems.push('the issue form no longer refuses an unavailable pair')
+  }
+
+  const readyExpression = issueForm.slice(
+    issueForm.indexOf('const ready ='),
+    issueForm.indexOf('\n\n', issueForm.indexOf('const ready =')),
+  )
+
+  if (/priorLoss/i.test(readyExpression)) {
+    dandiyaProblems.push('a previous loss blocks the attendee from being issued a pair')
+  }
+
+  const picker = stripComments(readText(join(ROOT, 'src/components/dandiya/attendee-picker.tsx')) ?? '')
+
+  for (const line of picker.split('\n')) {
+    if (/disabled=|aria-disabled/.test(line) && /priorLoss/i.test(line)) {
+      dandiyaProblems.push('the attendee picker disables a control on a previous loss')
+    }
+  }
+
+  /**
+   * AND THE ISSUES TAB IS READ-ONLY. Freeing a quarantined pair means
+   * somebody physically repaired or replaced it; that is a decision with a
+   * person behind it, not a button on the floor beside the warning.
+   */
+  const issues = stripComments(readText(join(ROOT, 'src/components/dandiya/pair-issues.tsx')) ?? '')
+
+  if (issues === '') {
+    dandiyaProblems.push('src/components/dandiya/pair-issues.tsx could not be read')
+  }
+
+  for (const control of ['onResolve', 'onIssue', 'Restore', 'Release', 'fetch(', '<Button']) {
+    if (issues.includes(control)) {
+      dandiyaProblems.push(`the dandiya issues tab offers a mutation: ${control}`)
+    }
+  }
+
+  if (/queue|retry\(|navigator\.onLine/.test(stripComments(dandiyaApi))) {
+    dandiyaProblems.push('src/dandiya/dandiya-api.ts queues or retries a mutation')
+  }
+
+  if (!dandiyaApi.includes('Dandiya requires an internet connection.')) {
+    dandiyaProblems.push('the offline copy is not the agreed sentence')
+  }
+
+  /** D3 changes no stored contract of any earlier phase. */
+  const dexieForDandiya = readText(join(ROOT, 'src/db/database.ts'))
+
+  if (dexieForDandiya === null || !/DATABASE_VERSION = 1\b/.test(dexieForDandiya)) {
+    dandiyaProblems.push('the IndexedDB version is no longer pinned at 1')
+  }
+
+  for (const path of ['api/sync-registration.ts', 'api/device-auth.ts', 'api/prizes.ts']) {
+    if (/dandiya\//.test(readText(join(ROOT, path)) ?? '')) {
+      dandiyaProblems.push(`${path} now depends on the dandiya module`)
+    }
+  }
+
+  /**
+   * AUTHENTICATED DEVICE TRAFFIC GETS NO FIREWALL RULE. A rule would throttle
+   * a desk's ordinary board reads while protecting nothing.
+   */
+  if (/\*\*Condition — Path\*\* \| `\/api\/dandiya`/.test(firewallDoc)) {
+    dandiyaProblems.push('docs/VERCEL_FIREWALL.md rate-limits the authenticated dandiya endpoint')
+  }
+}
+
+/**
+ * THE REAL-DATABASE PROOF EXISTS, AND REFUSES EVERYTHING BUT DEVELOPMENT.
+ *
+ * The stand-in database cannot test PostgreSQL visibility, so the lock's
+ * EFFECT is proved only by a live concurrent run. A missing or ungated script
+ * would leave that resting on structure alone — and an ungated one that wrote
+ * to Production would be far worse than no script at all.
+ */
+const dandiyaSmoke = readText(join(ROOT, 'scripts/dandiya-concurrency-smoke.mjs'))
+
+if (dandiyaSmoke === null) {
+  dandiyaProblems.push('scripts/dandiya-concurrency-smoke.mjs is missing')
+} else {
+  for (const interlock of [
+    "process.env.ALLOW_DANDIYA_DB_SMOKE_WRITES !== 'true'",
+    "process.env.VERCEL_ENV !== 'development'",
+    "allowedEnv !== 'development'",
+  ]) {
+    if (!dandiyaSmoke.includes(interlock)) {
+      dandiyaProblems.push(`the dandiya smoke lost an interlock: ${interlock}`)
+    }
+  }
+
+  if (!dandiyaSmoke.includes('--confirm')) {
+    dandiyaProblems.push('the dandiya smoke runs without an explicit confirmation')
+  }
+
+  /** It cleans up only its own rows, and touches no central table. */
+  if (/delete from (events|devices|device_attributes|badge_assignments|prize_awards)/i
+    .test(dandiyaSmoke)) {
+    dandiyaProblems.push('the dandiya smoke deletes central state')
+  }
+
+  if (!dandiyaSmoke.includes('SMOKE-D31-')) {
+    dandiyaProblems.push('the dandiya smoke no longer isolates its fixture pair codes')
+  }
+
+  /** And it is never wired into a gate that runs unattended. */
+  const manifest = readText(join(ROOT, 'package.json')) ?? ''
+  const unattended = ['"verify"', '"release:check"', '"build"', '"lint"']
+    .map((name) => {
+      const at = manifest.indexOf(name)
+
+      return at === -1 ? '' : manifest.slice(at, manifest.indexOf('\n', at))
+    })
+    .join('\n')
+
+  if (/dandiya-concurrency-smoke|db:smoke/.test(unattended)) {
+    dandiyaProblems.push('a writing smoke test is wired into an unattended gate')
+  }
+}
+
+addCheck(
+  'dandiya-ledger',
+  'The dandiya ledger holds no attendee PII, and the database owns one-pair-one-loan',
+  dandiyaProblems,
 )
 
 // --- L. db:check knows about every migrated table -------------------------
@@ -3908,6 +4792,167 @@ if (dbCheckSource === null) {
     }
   }
 
+  /**
+   * AND THE DANDIYA MIGRATION'S OWN GUARANTEES. Scoped the same way the prize
+   * ones are: every constraint and index 0005 creates must be verified by
+   * `db:check`, and both column sets must be declared — because "the tables
+   * exist" says nothing about whether a pair can be issued twice.
+   */
+  const dandiyaMigrationSql = readText(join(ROOT, 'drizzle/0005_dandiya_checkout.sql'))
+
+  if (dandiyaMigrationSql === null) {
+    dbCheckProblems.push('drizzle/0005_dandiya_checkout.sql could not be read')
+  } else {
+    // SQL only: the header names these in prose, which is not a declaration.
+    const statements = dandiyaMigrationSql.replace(/^--.*$/gm, '')
+
+    const createdDandiya = [
+      ...statements.matchAll(/(?:ADD )?CONSTRAINT "([a-z_0-9]+)"/g),
+      ...statements.matchAll(/CREATE (?:UNIQUE )?INDEX "([a-z_0-9]+)"/g),
+    ].map((match) => match[1])
+
+    if (createdDandiya.length === 0) {
+      dbCheckProblems.push('no dandiya constraint or index could be read from 0005')
+    }
+
+    const expectedDandiya = [
+      dbCheckList(dbCheckSource, 'EXPECTED_DANDIYA_CONSTRAINTS'),
+      dbCheckList(dbCheckSource, 'EXPECTED_DANDIYA_INDEXES'),
+    ]
+
+    if (expectedDandiya.some((list) => list === null)) {
+      dbCheckProblems.push('db:check no longer declares its dandiya expectation lists')
+    }
+
+    const expectedDandiyaText = expectedDandiya.filter((list) => list !== null).join('\n')
+
+    /**
+     * The plain btree indexes are read-path optimisations rather than
+     * guarantees, so they are exempt by name — but anything UNIQUE, and every
+     * constraint, has to be verified.
+     */
+    const readPathIndexes = [
+      'dandiya_loans_event_id_idx',
+      'dandiya_loans_issued_by_device_id_idx',
+      'dandiya_loan_holders_loan_id_idx',
+      'dandiya_loan_holders_event_id_idx',
+    ]
+
+    for (const name of new Set(createdDandiya)) {
+      if (!readPathIndexes.includes(name) && !expectedDandiyaText.includes(name)) {
+        dbCheckProblems.push(`db:check does not verify the dandiya guarantee ${name}`)
+      }
+    }
+
+    /**
+     * And the PREDICATES, each inside ITS OWN index entry.
+     *
+     * Joining both expectation lists and searching for the predicate anywhere
+     * was not enough: `returned_at is null` also appears in the
+     * `dandiya_loans_return_paired` CHECK expectation, so deleting it from
+     * the pair INDEX left the guard satisfied by an unrelated entry. A canary
+     * found that — searching a haystack proves nothing about the needle's
+     * position.
+     */
+    /**
+     * And the CANONICAL check, by its definition. Verified by name alone it
+     * could be renamed to anything and still pass, while the index it
+     * underwrites would quietly stop meaning one-pair-one-loan.
+     */
+    const constraintExpectations =
+      dbCheckList(dbCheckSource, 'EXPECTED_DANDIYA_CONSTRAINTS') ?? ''
+
+    if (!constraintExpectations.includes('pair_code = upper(btrim(pair_code))')) {
+      dbCheckProblems.push('db:check does not verify that pair codes are stored canonical')
+    }
+
+    const indexExpectations = dbCheckList(dbCheckSource, 'EXPECTED_DANDIYA_INDEXES') ?? ''
+
+    for (const [index, predicate] of [
+      ['dandiya_loans_one_unreleased_per_pair', 'pair_released_at is null'],
+      ['dandiya_loan_holders_one_unresolved_per_badge', 'resolved_at is null'],
+    ]) {
+      const start = indexExpectations.indexOf(`'${index}'`)
+      const entry = start === -1
+        ? ''
+        : indexExpectations.slice(start, indexExpectations.indexOf('],', start))
+
+      if (!entry.includes(predicate) || !entry.includes("'where'")) {
+        dbCheckProblems.push(
+          `db:check does not verify ${index} is PARTIAL on ${predicate}`,
+        )
+      }
+
+      /**
+       * AND NOT ON `resolution`, the near-miss that would release an attendee
+       * the moment their stick was recorded LOST. Scoped to this entry for
+       * the same reason the predicate is: the word occurs legitimately in the
+       * constraint expectations a few lines above.
+       */
+      if (/\bresolution is null\b/.test(entry)) {
+        dbCheckProblems.push(`db:check expects ${index} to be partial on resolution`)
+      }
+    }
+
+    /**
+     * THE QUARANTINE RULE, BY ITS DEFINITION in both directions. Verified by
+     * name alone, either constraint could be rewritten to permit a lost pair
+     * to be released — and the pair index's predicate is that same column, so
+     * the pair would go back into circulation with a stick missing.
+     */
+    for (const fragment of [
+      "outcome = 'returned'",
+      "outcome is distinct from 'returned'",
+      'pair_released_at is not null',
+    ]) {
+      if (!constraintExpectations.includes(fragment)) {
+        dbCheckProblems.push(`db:check does not verify the release rule: ${fragment}`)
+      }
+    }
+
+    /** And that a resolution and a close are each all-or-nothing. */
+    for (const name of [
+      'dandiya_loans_close_paired',
+      'dandiya_loan_holders_resolution_paired',
+      'dandiya_loans_outcome_valid',
+      'dandiya_loan_holders_resolution_valid',
+    ]) {
+      if (!constraintExpectations.includes(name)) {
+        dbCheckProblems.push(`db:check does not verify ${name}`)
+      }
+    }
+
+    for (const list of ['DANDIYA_LOAN_COLUMNS', 'DANDIYA_HOLDER_COLUMNS']) {
+      if (!dbCheckSource.includes(`const ${list} = {`)) {
+        dbCheckProblems.push(`db:check no longer declares ${list}`)
+      }
+    }
+
+    const declaredDandiya = [
+      ...statements.matchAll(/^\s*"([a-z_]+)" (?:uuid|integer|smallint|text|timestamp)/gm),
+    ].map((match) => match[1])
+
+    if (declaredDandiya.length !== 17) {
+      dbCheckProblems.push(
+        `expected 17 dandiya columns in 0005, read ${String(declaredDandiya.length)}`,
+      )
+    }
+
+    const dandiyaColumnLists = ['DANDIYA_LOAN_COLUMNS', 'DANDIYA_HOLDER_COLUMNS']
+      .map((name) => {
+        const start = dbCheckSource.indexOf(`const ${name} = {`)
+
+        return start === -1 ? '' : dbCheckSource.slice(start, dbCheckSource.indexOf('\n}', start))
+      })
+      .join('\n')
+
+    for (const column of new Set(declaredDandiya)) {
+      if (!dandiyaColumnLists.includes(`'${column}'`)) {
+        dbCheckProblems.push(`db:check does not verify the dandiya column ${column}`)
+      }
+    }
+  }
+
   // READ-ONLY, and not by convention: no statement may mutate anything.
   const dbCheckCode = stripComments(dbCheckSource)
 
@@ -3938,7 +4983,7 @@ if (dbCheckSource === null) {
 
 addCheck(
   'db-check-coverage',
-  'pnpm db:check verifies every migrated table, and that repeat prizes stay possible',
+  'pnpm db:check verifies every migrated table, the prize rule and the dandiya guarantees',
   dbCheckProblems,
 )
 

@@ -45,6 +45,8 @@ const jiti = createJiti(import.meta.url, { alias: { '@': `${root}/src` }, intero
 const password = await jiti.import(`${root}/server/device-auth/password.ts`)
 const policy = await jiti.import(`${root}/src/shared/device-password.ts`)
 const validation = await jiti.import(`${root}/server/admin/validation.ts`)
+/** The allow-list itself, so the checkbox count is counted against it. */
+const attributeModule = await jiti.import(`${root}/src/shared/device-attributes.ts`)
 
 console.log('=== 1-18. PASSWORD HASHING ===')
 const PLAIN = 'correct horse battery staple'
@@ -382,11 +384,18 @@ check('  because a blank one would be ambiguous',
     read('src/components/admin/device-form-fields.tsx')), true)
 check('  and an existing password is never loaded',
   /password: '',\n  confirmPassword: '',/.test(read('src/components/admin/device-dialog.tsx')), true)
-// RE-SCOPED BY PHASE A1: a third capability, so a third checkbox. 9C-A's own
-// concern is that Edit Device still renders the attribute controls at all —
-// the credential work must not have displaced them.
+/**
+ * RE-SCOPED BY PHASE D3: a fourth capability, so a fourth checkbox. 9C-A's
+ * own concern is that Edit Device still renders the attribute controls at all
+ * — the credential work must not have displaced them.
+ *
+ * Counted against the allow-list rather than a literal, so the next
+ * capability needs no edit here: what matters is ONE CHECKBOX PER CAPABILITY,
+ * which is also what stops a capability becoming ungrantable in Admin.
+ */
 check('  the attribute checkboxes still render, one per capability',
-  checkboxes(editForm).filter((entry) => entry.id.includes('-attribute-')).length, 3)
+  checkboxes(editForm).filter((entry) => entry.id.includes('-attribute-')).length,
+  attributeModule.DEVICE_ATTRIBUTES.length)
 
 console.log('  -- client-side refusal before the request --')
 const deviceDialogSource = stripComments(read('src/components/admin/device-dialog.tsx'))
@@ -465,11 +474,11 @@ check('badge allocation stays local',
    /server\/db|drizzle/.test(read('src/db/registrations.ts'))], [true, false])
 check('  and central Postgres holds no badge counter',
   /next_badge|nextBadge/.test(stripComments(read('server/db/schema.ts'))), false)
-// RE-SCOPED BY PHASE A1, which added `attendees`. What 9C-A needs is that
+// RE-SCOPED BY PHASE D3, which added `dandiya`. What 9C-A needs is that
 // provisioning a credential changed no capability, which the exact list below
 // still proves.
-check('the attribute allow-list is the expected three',
-  /DEVICE_ATTRIBUTES = \['registration', 'prizes', 'attendees'\]/
+check('the attribute allow-list is the expected four',
+  /DEVICE_ATTRIBUTES = \['registration', 'prizes', 'attendees', 'dandiya'\]/
     .test(read('src/shared/device-attributes.ts')), true)
 check('Save Device is still ONE atomic operation',
   [(registrySource.slice(registrySource.indexOf('export const updateDeviceConfiguration'),
@@ -479,21 +488,22 @@ check('Save Device is still ONE atomic operation',
 console.log('\n=== MIGRATION ===')
 const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort()
 /**
- * RE-SCOPED BY THE PRIZE PHASES, which appended `0003_prize_awards.sql` and
- * then `0004_repeat_prize_awards.sql`. 9C-A's own concern is that IT added
- * exactly one and that nothing later edited it, both of which are asserted
- * directly rather than implied by a directory length.
+ * RE-SCOPED BY THE LATER PHASES, which appended the prize and dandiya
+ * migrations. 9C-A's own concern is that IT added exactly one and that
+ * nothing later edited it, both of which are asserted directly rather than
+ * implied by a directory length.
  */
-check('exactly one migration was added',
+check('every migration is accounted for',
   migrations, ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
     '0002_device_credentials.sql', '0003_prize_awards.sql',
-    '0004_repeat_prize_awards.sql'])
+    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
 check('  and 9C-A contributed exactly one of them',
   migrations.filter((file) => /password|credential/i.test(file)),
   ['0002_device_credentials.sql'])
 check('  which no later migration altered',
-  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
-    .some((file) => /password_hash|session_version/.test(read(`drizzle/${file}`))), false)
+  migrations
+    .filter((file) => /^000[345]_/.test(file))
+    .filter((file) => /password_hash|session_version/.test(read(`drizzle/${file}`))), [])
 const migration = read('drizzle/0002_device_credentials.sql')
 check('  it adds a nullable password_hash',
   /ADD COLUMN "password_hash" text;/.test(migration), true)

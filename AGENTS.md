@@ -1358,18 +1358,20 @@ There is NO badge-range edit, replace, release, transfer, extend or reset in
 Admin. Only the first assignment. Changing a range while devices operate
 offline is how two attendees get the same badge.
 
-Device attributes are `registration`, `prizes` and `attendees`. The database
-stores TEXT for future extensibility, but the application owns the allow-list
-and free text is refused. Since Phase P1 `prizes` is a real capability: it
-opens `/prizes` and `/api/prizes`, and it requires no badge range. Since
-Phase A1 `attendees` is too: it opens `/attendees` and `/api/attendees`, and
-it requires no badge range either.
+Device attributes are `registration`, `prizes`, `attendees` and `dandiya`.
+The database stores TEXT for future extensibility, but the application owns
+the allow-list and free text is refused. Since Phase P1 `prizes` is a real
+capability, since Phase A1 `attendees` is, and since Phase D3 `dandiya` is:
+each opens its own route and its own endpoint, and none requires a badge
+range.
 
-THE THREE ARE INDEPENDENT. `prizes` does NOT imply `attendees` and
-`registration` does not either, and no implication may be added. A device may
-hold `attendees` ALONE and be complete. Adding one would also make the Admin
-checkboxes lie: an operator unticking Attendees would expect the directory to
-close.
+THE FOUR ARE INDEPENDENT, and no implication may be added. In particular
+`dandiya` does NOT imply `attendees`: the dandiya desk READS the safe
+attendee register because identifying the two badge holders is part of
+issuing a pair, while browsing the whole register as a directory is a
+separate grant. A device may hold `attendees` ALONE, or `dandiya` ALONE, and
+be complete. Adding an implication would also make the Admin checkboxes lie:
+an operator unticking Attendees would expect the directory to close.
 
 `registration` IS the whole registration-desk workflow, physical badge
 issuance included: attendee entry, hold and resume, payment, owning a
@@ -1778,6 +1780,7 @@ ROUTE POLICY DIFFERS PER MODULE:
 /badge-registration    the same, plus Registration and agreeing badge state
 /prizes                the same, plus Prizes — and NO badge state at all
 /attendees             the same, plus Attendees — NO badge state, NO mutation
+/dandiya               the same, plus Dandiya — NO badge state at all
 /device-registration   RETIRED — a redirect to /device-login
 ```
 
@@ -1919,10 +1922,10 @@ attendee ledger. IndexedDB remains the offline workflow state.
 
 ATTENDEE PII IS NEVER STORED CENTRALLY — no name, phone, age, gender, payment,
 held or completed registration — unless a later explicit architecture change
-says otherwise. Phase P1 added `prize_awards` and did NOT change this, and
-Phase P1.1 did not either: the prize ledger records a badge NUMBER, a prize
-name, a device and a time, and the person behind the badge stays in Google
-Sheets. The prize DIVISION — Boy, Girl, Male, Female — is part of the prize
+says otherwise. Phase P1 added `prize_awards`, Phase P1.1 relaxed it and
+Phase D3 added `dandiya_loans` and `dandiya_loan_holders` — and none of them
+changed this: those tables record badge NUMBERS, a prize name or a pair code,
+devices and times, and the people behind the badges stay in Google Sheets. The prize DIVISION — Boy, Girl, Male, Female — is part of the prize
 name, never a fact recorded about an attendee, and nothing infers one from
 the ledger.
 
@@ -1963,6 +1966,7 @@ screen.
 - `/badge-registration` owns the attendee badge workflow
 - `/prizes` owns prize distribution
 - `/attendees` is the READ-ONLY attendee directory
+- `/dandiya` owns dandiya pair checkout, per-stick return and loss
 - `/device-registration` owns physical device provisioning and readiness
 
 Routing is presentation work. An internal route must NEVER create a new
@@ -2233,6 +2237,7 @@ the retired realm.
 /badge-registration    the same, plus Registration and agreeing badge state
 /prizes                the same, plus Prizes — no range, no binding needed
 /attendees             the same, plus Attendees — read-only, no range needed
+/dandiya               the same, plus Dandiya — a pair of sticks is not a badge
 /device-registration   RETIRED — a redirect to /device-login, nothing more
 ```
 
@@ -2421,20 +2426,21 @@ the build has already succeeded, at "Deploying outputs…". No build step
 reports it, so the budget is a durable check, not something a green build
 proves.
 
-Current inventory: **10 of 12, two slots of headroom.**
+Current inventory: **11 of 12, ONE slot of headroom.**
 
 ```
 admin-auth · admin-badge-assignment · admin-device-password · admin-devices
-admin-events · attendees · device-auth · device-badge-claim · prizes
-sync-registration
+admin-events · attendees · dandiya · device-auth · device-badge-claim
+prizes · sync-registration
 ```
 
 Phase D2 freed three slots by DELETING the operator realm, not by
 consolidating it. Those three names must never reappear under `api/`. Phase P1
 then spent one on `prizes`, which serves the whole prize module through two
-method exports rather than three endpoints, and Phase A1 spent one on
+method exports rather than three endpoints, Phase A1 spent one on
 `attendees`, which serves the directory through a single GET — its other four
-method exports exist only to answer 405.
+method exports exist only to answer 405 — and Phase D3 spent one on
+`dandiya`, which serves the whole checkout desk through GET, POST and PATCH.
 
 A shared helper NEVER belongs under `api/` — it costs a deployment Function
 for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
@@ -2442,7 +2448,9 @@ on an `api/` file that exports no HTTP method, on any file outside the
 expected inventory, and on a headroom other than the one this checkpoint
 expects, so headroom cannot be consumed quietly.
 
-The two spare slots are headroom, not permission to start the next phase.
+THE ONE SPARE SLOT is headroom, not permission to start the next phase. At
+eleven of twelve, the next module that wants a Function has a real decision
+to make rather than a habit to follow.
 
 ### Auth Realms Are Consolidated By HTTP Method
 
@@ -2837,6 +2845,289 @@ registered".
 A1 NEEDED NO MIGRATION. `device_attributes.attribute` is already text and the
 application owns the allow-list, so `attendees` is a new allowed string and
 nothing else. See `docs/ATTENDEES.md`.
+
+## Dandiya Checkout And Return
+
+`/dandiya` issues a physical dandiya PAIR to exactly two registered attendees
+and takes the sticks back. Added in Phase D3; Phase D3.1 gave each stick its
+own ending.
+
+A PAIR GOES OUT AND STAYS OUT until its sticks are accounted for. One
+physical pair may be out at most once; one attendee may hold at most one
+UNRESOLVED stick. After a clean return the pair may go out again, to anyone,
+and either attendee may receive another — fifty times an evening if that is
+what happens.
+
+EACH STICK MOVES INDEPENDENTLY, `OUT` to `RETURNED` or `OUT` to `LOST`. The
+loan stays ACTIVE while any stick is out, so a partial return must never
+close the other attendee's obligation. An attendee is free as soon as THEIR
+OWN holder row is resolved, either way — a lost stick discharges them because
+they have nothing left to give back, and the loss is recorded rather than
+charged to them. Prior losses produce a warning that NEVER blocks: no
+disabled control, no conflict, no override to find.
+
+THE LOAN OUTCOME IS DERIVED, never submitted: `returned` for two returns,
+`partial_loss` for one of each, `lost` for two losses.
+
+A PAIR IS REUSABLE ONLY AFTER BOTH STICKS WERE RETURNED. Only
+`outcome = 'returned'` sets `pair_released_at`; ANY loss quarantines the pair
+permanently for that event. There is no release, restore, repair or reissue
+control anywhere — not in the desk, not in Admin — and there is NO separate
+inventory table: availability is a fact about the pair's last loan, and a
+second place recording it is a second place that can disagree.
+
+TWO PARTIAL UNIQUE INDEXES ARE THE ENTIRE CONCURRENCY STORY:
+
+```
+dandiya_loans_one_unreleased_per_pair
+  UNIQUE(event_id, pair_code)    WHERE pair_released_at IS NULL
+
+dandiya_loan_holders_one_unresolved_per_badge
+  UNIQUE(event_id, badge_number) WHERE resolved_at IS NULL
+```
+
+They are PARTIAL on purpose, and must stay so: uniqueness that also covered
+history would forbid exactly the reuse the event depends on. `db:check`
+verifies each PREDICATE as well as its columns, because an index that kept its
+columns and lost its `WHERE` clause would stop a pair going out a second time
+— the opposite failure, and just as bad.
+
+AND IT VERIFIES WHICH COLUMN EACH PREDICATE NAMES. The attendee index partial
+on `resolution IS NULL` reads almost identically and means something else: it
+would release a holder the moment their stick was recorded LOST, and when it
+was returned too. `resolved_at` is the only column it may be partial on.
+
+THE RELEASE RULE IS A DATABASE CHECK, IN BOTH DIRECTIONS —
+`pair_released_at IS NULL OR outcome = 'returned'` and
+`outcome IS DISTINCT FROM 'returned' OR pair_released_at IS NOT NULL`. That
+column is simultaneously the release and the pair index's predicate, so a
+loss that released it would put a pair with one stick straight back into
+circulation. This is the rule a well-meaning repair would relax first, which
+is why the database holds it rather than the application.
+
+No application check can replace any of them: two desks can each read "that
+pair is free" and both submit, so the endpoint asks the ledger NOTHING before
+inserting and translates the violation instead. The two pair refusals are
+DISTINGUISHED after the refusal — the blocking row is re-read and reported as
+`pair-in-use` while its loan is open and `pair-unavailable` once it is a
+quarantine. Do NOT precheck instead of relying on the index.
+
+HOLDERS ARE ROWS, NOT COLUMNS. Two rows per loan, one per stick-slot, because
+the active-attendee guarantee has to be a unique index over a SINGLE badge
+column — with `badge_one` and `badge_two` columns no index could stop the same
+attendee appearing as `badge_one` here and `badge_two` there.
+`UNIQUE(loan_id, slot)` keeps a loan to two holders and
+`UNIQUE(loan_id, badge_number)` stops one attendee holding both sticks.
+
+ONE TRANSACTION EACH, and both matter. Issuing writes the loan and BOTH
+holders in one `db.batch`, so a holder conflict rolls the loan back rather
+than leaving a pair marked out with one holder. A resolution writes the holder
+AND, when it was the last stick, the loan's close in one batch on ONE server
+timestamp.
+
+EVERY HOLDER RESOLUTION IS A COMPARE-AND-SET on `resolved_at IS NULL`. That
+makes a resolution FINAL — returned never becomes lost and lost never becomes
+returned, however often the request is repeated — and it is what lets
+`Return Whole Pair` resolve only the sticks still out while preserving a
+loss. Two desks resolving the same stick cannot both win; the loser matches
+no row and is told `holder-already-resolved`, or `loan-already-closed` for a
+shortcut.
+
+THE LOAN ROW IS LOCKED FIRST, AND THAT IS THE SERIALISATION.
+`SELECT ... FOR UPDATE` on the owning loan — scoped to the event and to
+`closed_at IS NULL` — is the FIRST statement of every resolution transaction,
+and `lockOpenLoan` has exactly one call site.
+
+COMPARE-AND-SET ALONE IS NOT ENOUGH HERE, and assuming it was is a mistake
+this project actually made. Two desks resolving DIFFERENT sticks of one pair
+write different holder rows, so they never conflict with each other. Under
+READ COMMITTED every statement takes a fresh snapshot and sees its own
+transaction's writes but NOT another's uncommitted ones, so each close query
+would see the other stick still out, neither close would match, neither
+`UPDATE dandiya_loans` would touch a row — so no lock would ever be taken —
+and both would commit, leaving every stick resolved and the loan OPEN for the
+rest of the event. That state must be impossible. The shared loan row is the
+only natural serialisation point.
+
+THE ORDER IS LOAD-BEARING. A lock taken after the holder update protects
+nothing, and a lock taken in a transaction of its own is released before the
+work it was meant to guard. It must be the first statement IN THE SAME batch.
+
+Never substitute an application mutex, a browser lock, a process-local Map, a
+pre-read, sleep-and-retry timing, or an advisory lock. Do not perform
+SELECT-then-trust without database compare-and-set protection, and do not
+mistake compare-and-set for serialisation between rows that do not conflict.
+
+THE FINAL OUTCOME IS THEN DERIVED TRANSACTIONALLY. Three mutually exclusive
+compare-and-sets travel in the SAME batch, each requiring `closed_at IS NULL`,
+that no holder is still unresolved, and a specific number of lost ones — and
+all three count the holders AFTER the resolution above them. The lock makes
+"after" mean after the OTHER desk too; the compare-and-sets keep the loan from
+closing twice or closing early.
+
+ALL FOUR ACTIONS SHARE THAT WRITER — `resolve-holder` returned,
+`resolve-holder` lost, `return-pair` and `lost-pair`. There is NO alternate
+close path, and a second one would be unserialised however carefully the first
+is written.
+
+THE STAND-IN DATABASE CANNOT PROVE THIS. It is single-threaded and its batch
+applies statements against live state, so a scripted concurrent writer has
+already committed before the first statement — exactly the world the lock
+creates. It shows correct behaviour with or without the lock. `verify:d3` and
+`release:check` therefore pin the lock's PRESENCE, its POSITION and its
+single writer, and `scripts/dandiya-concurrency-smoke.mjs` proves the EFFECT
+against a real database with genuinely concurrent transactions. That script
+WRITES, so it is gated on `--confirm`, `ALLOW_DANDIYA_DB_SMOKE_WRITES` exactly
+`true`, `VERCEL_ENV` exactly `development` and a `SYNC_ALLOWED_VERCEL_ENV`
+that is not another environment — every one checked before a connection is
+opened. It creates only `SMOKE-D31-` pair codes with badge fixtures from
+#9901, never creates or deletes an event, device, attribute, badge assignment,
+prize award or registration, cleans up only its own rows, and must never be
+wired into `verify`, `build`, `lint` or `release:check`.
+
+NOTHING EXPIRES. A loan is closed by a person and by nothing else. There is no
+timer, no nightly job and NO DATE ARITHMETIC ON ANY MUTATION PATH, which
+`release:check` enforces: neither `server/dandiya/loans.ts` nor
+`api/dandiya.ts` may read the calendar. Midnight changes which rows a screen
+calls "today" and nothing more — it never returns a pair, releases a holder,
+frees a badge or resets availability. A pair still out from yesterday stays in
+Active, labelled OUTSTANDING so somebody chases it.
+`src/shared/event-time.ts` owns the one definition of which event-local day an
+instant falls in, shared because the server counts and the browser filters.
+
+NO ATTENDEE PII. Neither table has a column for a name, phone, age, gender,
+WhatsApp link or payment, and none may be added. A loan records a pair code,
+two badge NUMBERS and two device ids; the names on screen are READ from the
+Badge Register per request through `server/attendees/register.ts` — the SAME
+reader `/api/prizes` and `/api/attendees` use, and the only Badge Register
+parser outside `server/sync/`. A Sheet row edited away does NOT erase a loan:
+the pair, the badges, the times and the devices are the ledger's own facts and
+the attendee detail is nullable beside them.
+
+AUTHORIZATION IS `dandiya` AND NOTHING ELSE of the badge world. A pair of
+sticks is not a badge, so `authorizeEventModule('dandiya', …)` does NOT
+consult `checkBadgeOwnership` — running it would close the desk because a
+REGISTRATION desk's ledger disagreed about physical badges this device was
+never given. `dandiya` does NOT imply `attendees`: the desk reads the register
+to identify the two holders, which is not the same as being granted the
+standalone directory.
+
+A LOAN'S HISTORICAL DAY IS `issued_at`, IN THE EVENT TIMEZONE, AND NOTHING
+ELSE. Not `closed_at`, not `resolved_at`, not when somebody looked. A pair
+handed out at 11:50 PM and brought back at 12:20 AM belongs to the night it
+went OUT on and says it closed on the next day. Grouping by the close would
+move a loan between days as it was resolved, so "what did we hand out last
+night" could never be answered twice the same way — and the rows that matter
+most, the ones still out, have no close at all and would belong to no day.
+
+A DAY'S HISTORY INCLUDES OPEN LOANS. Those rows are in `active` too; nothing
+is moved out of either list to build the other, and midnight moves neither.
+
+THERE IS NO STORED DAY. No `event_day` column, no copied date, no nightly
+snapshot, no rollover mutation — the day is derived from the timestamp the
+ledger already holds.
+
+MIDNIGHT CHANGES THE DAY LABEL AND THE COUNTERS ONLY.
+IT MUST NEVER MUTATE OR CLOSE A LOAN. `release:check` fails on a rollover
+writer, and `verify:d3` composes the same ledger either side of a midnight
+and requires every holder, outcome and release to be identical.
+
+A DAY KEY BECOMES INSTANTS BEFORE IT REACHES SQL. `eventDayWindow` in
+`src/shared/event-time.ts` — the ONE definition of the event's clock, read by
+both sides — turns `YYYY-MM-DD` into `[start, next start)` and the query
+compares `issued_at` against those timestamps. `DATE(issued_at)` and `::date`
+are forbidden: they are evaluated in the database session's timezone and
+would group the ninety minutes either side of IST midnight into the wrong day,
+which is the window a dandiya evening actually lives in. An impossible day is
+a 400, NEVER a silent fall back to today.
+
+THE SERVER DECIDES THE DAY. `historyDay` and `eventDay` travel in the
+response, and the browser labels the screen from them rather than from its own
+clock. PREVIOUS-DAY CARRYOVER is likewise derived from the OPEN loans the
+board already carries, compared against the server's `eventDay`: a projection,
+never a stored figure, silent at zero, and counting pairs and sticks
+separately because they are different jobs.
+
+THE END-OF-NIGHT LIST AND THE CARRYOVER LIST ARE DIFFERENT QUESTIONS, and
+documentation must not conflate them. DURING the event day, the sticks that
+have not come back are TODAY's, and the closing-up list is
+History -> Today -> Outstanding. AFTER midnight those loans are still open,
+still in Active, and have become carryover — which the banner reports and
+`Active -> Carryover` lists. That transition is a change of LABEL ONLY: no
+loan moves, closes or releases, and nothing is written at 00:00.
+
+`selectActiveLoans` is the only Active view selector and `outstandingBeforeDay`
+the only definition of "issued before today", so the banner's count and the
+rows behind it cannot describe different pairs. The filter is CLIENT-SIDE over
+rows already loaded — choosing it issues no request — and an emptied Carryover
+view offers the way back to All rather than switching by itself.
+
+THE CALENDAR IS A READ-PATH CONCERN ONLY. `openDandiyaLoan`,
+`resolveDandiyaHolders`, `lockOpenLoan`, `POST` and `PATCH` must contain no
+day, window or timezone reference at all — a pair is issued and returned by a
+person, never by a clock — and `release:check` checks those five bodies
+individually rather than the file, because the read path legitimately needs
+the calendar.
+
+ONE FUNCTION, dispatched by method: `GET /api/dandiya?historyDate=YYYY-MM-DD`
+returns `{ attendees, active, issues, history, historyDay, eventDay, today }`
+for ONE day; `POST` issues; `PATCH` resolves. Separate active, history, issue, return and search endpoints would
+cost five of twelve deployment Functions for one screen. The roster travels
+WITH the board because a dandiya-only device does not hold `attendees` and
+must not need it.
+
+ACTIVE IS OLDEST FIRST, holds EVERY open loan with no day scoping, and keeps
+a partially resolved loan for as long as either stick is out. ISSUES is the
+quarantine list — closed with a loss, never released — newest first, and it is
+also the complete record of every loss the event has seen, which is why the
+prior-loss warning reads `active` and `issues` rather than the day's history.
+HISTORY is ONE DAY, NEWEST ISSUED FIRST — ordered by issue time so a day's
+list cannot reshuffle itself as pairs come back.
+
+THE SIX COUNTERS ANSWER TWO DIFFERENT QUESTIONS, in Asia/Kolkata. `issued`
+counts by ISSUE day; `fullyReturned`, `partialLosses` and `lostPairs` count
+by CLOSE day; `activeLoans` and `sticksOut` carry NO DATE AT ALL, because
+yesterday's unreturned pair is still a stick somebody is holding. `sticksOut`
+counts unresolved HOLDER ROWS, so a partially resolved loan contributes one.
+Midnight changes counters only. Never changes holder or pair state.
+
+The issue body is `pairCode` and `badgeNumbers` and nothing else. PATCH takes
+`loanId` plus `action` — `resolve-holder` with `badgeNumber` and `resolution`,
+or the shortcuts `return-pair` and `lost-pair`, which name no stick and
+REFUSE a `badgeNumber` or `resolution` rather than ignoring it, because
+`{ action: 'return-pair', resolution: 'lost' }` must not read as either.
+`eventId`, `eventSlug`, `deviceId`, `loginName`, `issuedAt`, `closedAt`,
+`closedBy`, `outcome`, `pairReleasedAt`, `resolvedAt`, `resolvedBy`,
+`attendees`, `name`, `age` and `gender` are REFUSED rather than ignored.
+
+PAIR CODES ARE CANONICALISED: outer whitespace trimmed, then UPPERCASED, and
+bounded at 32. ` d-014 `, `D-014` and `d-014` are all the same physical pair
+and all store as `D-014`.
+
+THAT IS A SAFETY RULE, NOT TIDINESS. The only protection against one pair
+going out twice is
+`UNIQUE(event_id, pair_code) WHERE pair_released_at IS NULL`,
+and an index compares BYTES — two volunteers typing the same label with
+different shift keys would each hold an open loan on one set of sticks.
+Canonicalising before the insert is what makes the index mean what it says,
+and `dandiya_loans_pair_code_canonical` is the database's own floor so a
+future writer cannot store a code that would slip past it. Nothing else is
+rewritten: separators and internal characters are left exactly as typed.
+
+THE SERVER IS THE AUTHORITY. The form may uppercase a field on blur for
+comfort, but `parsePairCode` runs on the request and its result is what is
+stored, displayed and searched.
+
+ONLINE ONLY, and the screen says so: *"Dandiya requires an internet
+connection."* While offline there is no board, no form and no resolution
+control at all. No IndexedDB dandiya state, no offline queue, no optimistic
+issue, no optimistic resolution, no polling and no heartbeat — two
+disconnected desks must never be able to issue the same physical pair or the
+same attendee.
+
+`server/dandiya/loans.ts` is the ONLY module that reads or writes
+`dandiya_loans` and `dandiya_loan_holders`. Do not add a second writer. See
+`docs/DANDIYA.md`.
 
 ### Google Sheets Client
 

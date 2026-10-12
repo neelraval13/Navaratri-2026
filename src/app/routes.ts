@@ -21,6 +21,11 @@ export const ROUTES = {
    */
   attendees: '/attendees',
   /**
+   * The dandiya desk. An event module authorized by its OWN attribute,
+   * requiring no badge range: a pair of sticks is not a badge.
+   */
+  dandiya: '/dandiya',
+  /**
    * RETIRED by Phase D2 and kept only so an old bookmark still lands
    * somewhere useful. It redirects to Device Sign-In and owns no workflow:
    * there is no local device registration any more.
@@ -50,9 +55,10 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES]
  * the registration workflow or ask for event authority. Unknown paths are
  * absent too, so Not Found is reachable without any of it.
  *
- * `/prizes` and `/attendees` ARE here. Both are event modules on the same
- * origin, so they share the one database gate, the one authorization provider
- * and the one SyncManager — a desk that also registers attendees must not
- * restart the sync processor by walking between the screens.
+ * `/prizes`, `/attendees` and `/dandiya` ARE here. All are event modules on
+ * the same origin, so they share the one database gate, the one authorization
+ * provider and the one SyncManager — a desk that also registers attendees
+ * must not restart the sync processor by walking between the screens.
  */
-export const EVENT_ROUTE_PATTERN = /^\/(?:badge-registration|prizes|attendees)?$/
+export const EVENT_ROUTE_PATTERN =
+  /^\/(?:badge-registration|prizes|attendees|dandiya)?$/

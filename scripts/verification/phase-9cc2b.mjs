@@ -257,10 +257,25 @@ seedCentral({ attributes: ['prizes'] })
 check('  and one without Registration',
   await registry.assignBadgeRange(EVENT_ID, DEVICE_ID, { rangeStart: 1, rangeEnd: 2 }),
   { ok: false, blocked: 'device-not-registration' })
+/**
+ * RE-SCOPED BY PHASE D3, which introduced a second table with a
+ * `released_at` column: a dandiya holder is released on every return, which
+ * is the whole point of that column and has nothing to do with badge ranges.
+ *
+ * The assertion now names the TABLE, so it still catches the thing C2B cared
+ * about — nothing may release a central BADGE range — without firing on
+ * unrelated code. An over-broad guard that fails on correct work is a guard
+ * somebody eventually deletes.
+ */
 check('5. release/history semantics are unchanged: nothing releases a range',
   walk(join(root, 'server')).concat(walk(join(root, 'api')))
-    .filter((file) => /releasedAt:\s*(new Date|sql)|releaseBadgeRange|\.set\(\{\s*releasedAt/
-      .test(stripComments(readFileSync(file, 'utf8')))), [])
+    .filter((file) => {
+      const code = stripComments(readFileSync(file, 'utf8'))
+
+      return /releaseBadgeRange/.test(code) ||
+        (/\.update\(badgeAssignments\)/.test(code) && /releasedAt:/.test(code))
+    })
+    .map((file) => file.replace(`${root}/`, '')), [])
 check('  and `released_at IS NULL` is still what active means',
   /isNull\(badgeAssignments\.releasedAt\)/.test(read('server/badge-assignments/reserve.ts')), true)
 check('7. only the AUTHORIZATION layers differ',
@@ -512,18 +527,24 @@ check('37. no attendee data reaches Postgres',
 check('  and the schema still has no attendee table',
   /attendee|registrations|holds/i.test(stripComments(read('server/db/schema.ts'))), false)
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
-/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
-const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+/**
+ * Every migration later phases appended: the two prize ones and D3's dandiya
+ * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each
+ * assertion below needs is that NONE of the later migrations reaches into the
+ * phase it belongs to.
+ */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql',
+  '0005_dandiya_checkout.sql']
 check('  and the prize migration does not touch badge assignments',
   PRIZE_MIGRATIONS.some((file) => /badge_assignments|range_start|range_end/i.test(read(`drizzle/${file}`))),
   false)
@@ -1159,8 +1180,8 @@ check('  and the claim still added no route of its own',
    // No claim route anywhere: it is a section of Device Sign-In.
    /claim|badge-range/.test(read('src/app/routes.ts'))],
   [true,
-   ["'/'", "'/admin'", "'/attendees'", "'/badge-registration'", "'/device-login'",
-    "'/device-registration'", "'/prizes'"],
+   ["'/'", "'/admin'", "'/attendees'", "'/badge-registration'", "'/dandiya'",
+    "'/device-login'", "'/device-registration'", "'/prizes'"],
    false])
 check('    and none of them is a claim route',
   [...read('src/app/routes.ts').matchAll(/'\/[a-z-]*'/g)]
@@ -1217,16 +1238,16 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // RE-SCOPED BY PHASE P1, which added `prizes`. C2B's own entry remains, and
 // the assertions below still pin it by name.
-check('46. the Function inventory is exactly ten', budget.actual.length, 10)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('46. the Function inventory is exactly eleven', budget.actual.length, 11)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  the C2B entry is still device-badge-claim',
   budget.actual.includes('device-badge-claim'), true)
 check('  and every Function that should remain does',
   budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
-  'sync-registration',
+  'admin-events', 'attendees', 'dandiya', 'device-auth', 'device-badge-claim',
+  'prizes', 'sync-registration',
 ])
 check('  and nothing unexpected', budget.problems, [])
 check('  no helper was placed under api/',

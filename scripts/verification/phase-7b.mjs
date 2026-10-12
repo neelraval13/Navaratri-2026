@@ -332,11 +332,11 @@ const dbTouching = HEADER_COMPONENTS.filter((file) =>
     readFileSync(join(root, file), 'utf8')))
 check('no header component reads the database', dbTouching, [])
 /**
- * RE-SCOPED BY PHASE A1, which added `/attendees` as a fifth consumer.
+ * RE-SCOPED BY PHASE D3, which added `/dandiya` as a sixth consumer.
  *
  * The inventory is pinned so a component cannot start reading the database
  * from OUTSIDE the gate unnoticed, and each entry earns its place below: the
- * assertions that follow prove both event pages render inside the one
+ * assertions that follow prove every event page renders inside the one
  * `<EventAppGate>`, which is `<DatabaseGate>`. A name added to this list
  * without that proof would be a name added to a list.
  */
@@ -344,14 +344,17 @@ check('  every useEventConfig consumer is inside DatabaseGate',
   spawnSync('grep', ['-rl', 'useEventConfig', join(root, 'src/components'), join(root, 'src/pages')], { encoding: 'utf8' })
     .stdout.trim().split('\n').map((f) => f.replace(`${root}/src/`, '')).sort(),
   ['components/device/device-label.tsx', 'components/registration/registration-form.tsx',
-   'pages/attendees-page.tsx', 'pages/home-page.tsx', 'pages/prizes-page.tsx'].sort())
-check('    and both are gated event routes inside the one DatabaseGate',
+   'pages/attendees-page.tsx', 'pages/dandiya-page.tsx', 'pages/home-page.tsx',
+   'pages/prizes-page.tsx'].sort())
+check('    and each is a gated event route inside the one DatabaseGate',
   [/<EventAccessGate module="prizes">[\s\S]{0,120}<PrizesPage \/>/.test(shell),
    /<EventAccessGate module="attendees">[\s\S]{0,140}<AttendeesPage \/>/.test(shell),
+   /<EventAccessGate module="dandiya">[\s\S]{0,140}<DandiyaPage \/>/.test(shell),
    /<DatabaseGate>/.test(stripComments(readFileSync(join(root, 'src/components/event-app-gate.tsx'), 'utf8')))],
-  [true, true, true])
-check('    and neither reports badge state, which neither device has',
-  ['src/pages/prizes-page.tsx', 'src/pages/attendees-page.tsx']
+  [true, true, true, true])
+check('    and none reports badge state, which none of those devices has',
+  ['src/pages/prizes-page.tsx', 'src/pages/attendees-page.tsx',
+   'src/pages/dandiya-page.tsx']
     .filter((file) => /DeviceReadiness|DeviceLabel|isBadgeDistributionConfigured/
       .test(stripComments(readFileSync(join(root, file), 'utf8')))), [])
 

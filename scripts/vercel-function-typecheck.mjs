@@ -66,6 +66,8 @@ export const EXPECTED_FUNCTIONS = [
   'admin-events',
   // Phase A1's read-only attendee directory. GET only; everything else 405s.
   'attendees',
+  // Phase D3's dandiya desk. GET the board, POST an issue, PATCH a return.
+  'dandiya',
   'device-auth',
   'device-badge-claim',
   'prizes',

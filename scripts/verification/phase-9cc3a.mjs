@@ -487,21 +487,33 @@ check('41. stores unchanged',
 check('  and this phase did not touch the schema',
   /offline|Offline/.test(dexieSource), false)
 /**
- * RE-SCOPED BY PHASE P1.1. The prize phases appended
- * `0003_prize_awards.sql` and then `0004_repeat_prize_awards.sql`. This
- * phase still added none, and the assertion below keeps the real guarantee:
- * neither later migration reaches into this phase's subject.
+ * RE-SCOPED BY PHASE D3. Later phases appended the two prize migrations
+ * and `0005_dandiya_checkout.sql`. This phase still added none, and the
+ * assertion below keeps the real guarantee: no later migration reaches into
+ * this phase's subject.
  */
 check('NO migration was added',
   readdirSync(join(root, 'drizzle')).filter((file) => file.endsWith('.sql')).sort(),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
-   '0004_repeat_prize_awards.sql'])
-/** Both prize migrations: P1 created the ledger, P1.1 relaxed it. */
-const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
-check('  and the prize migration does not touch the offline lease',
-  PRIZE_MIGRATIONS.some((file) => /offline|lease|public_key|private_key/i.test(read(`drizzle/${file}`))),
-  false)
+   '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql'])
+/**
+ * Every migration later phases appended: the two prize ones and D3's dandiya
+ * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each
+ * assertion below needs is that NONE of the later migrations reaches into the
+ * phase it belongs to.
+ */
+const PRIZE_MIGRATIONS = ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql',
+  '0005_dandiya_checkout.sql']
+/**
+ * `lease` needs a WORD BOUNDARY. Without one it matches `re-lease-d_at`, the
+ * column Phase D3 uses to mark a dandiya holder as no longer holding — so a
+ * correct migration failed an assertion about signed offline authorization,
+ * which it has nothing to do with.
+ */
+check('  and no later migration touches the offline lease',
+  PRIZE_MIGRATIONS.filter((file) =>
+    /offline|\blease\b|public_key|private_key/i.test(read(`drizzle/${file}`))), [])
 check('  and no server file stores a lease',
   /centralDeviceOfflineAuthorization/.test(
     walk(join(root, 'server')).map((file) => readFileSync(file, 'utf8')).join('\n')), false)
@@ -613,9 +625,9 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 // RE-SCOPED BY PHASE P1, which added one. C3A still added none, and the
 // assertion below is C3A's own concern: no endpoint issues or reads a lease.
-check('44. the Function inventory is ten', budget.actual.length, 10)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('44. the Function inventory is eleven', budget.actual.length, 11)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and the prize Function neither issues nor reads an offline lease',
   /offline-authorization|offlineAuthorization|issueDeviceOffline/
     .test(read('api/prizes.ts')), false)

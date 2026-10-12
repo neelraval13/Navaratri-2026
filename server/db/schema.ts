@@ -7,6 +7,7 @@ import {
   integer,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   unique,
@@ -298,6 +299,231 @@ export const prizeAwards = pgTable(
   ],
 )
 
+/**
+ * A PHYSICAL DANDIYA PAIR, OUT ON LOAN. Which pair, to whom, by whom, when,
+ * and how it ended.
+ *
+ * ATTENDEE PII IS STILL NEVER STORED CENTRALLY. A loan records a pair code,
+ * two badge NUMBERS and device ids. The people behind those badges live in
+ * the Google Sheet, which the Dandiya screen joins per request — exactly as
+ * the prize desk and the attendee directory do.
+ *
+ * A LOAN CLOSES WHEN BOTH STICKS ARE RESOLVED, and its `outcome` is derived
+ * from them rather than chosen: two returns are a `returned`, one loss is a
+ * `partial_loss`, two losses are a `lost`. Phase D3.1 made the two sticks
+ * move independently, so a loan with one stick back and one still out is
+ * still open and the pair is still unavailable.
+ *
+ * `pair_released_at` IS THE PHYSICAL PAIR'S FREEDOM, and it is set ONLY on a
+ * clean return. A loss leaves it null, and that null is what keeps the pair
+ * out of circulation:
+ *
+ *   UNIQUE(event_id, pair_code) WHERE pair_released_at IS NULL
+ *
+ * occupies the slot for an OPEN loan and for a CLOSED loan that lost a stick
+ * alike. There is deliberately no pair-inventory table: the last loan's null
+ * is the quarantine, and a future Restore Pair workflow would be the only
+ * thing that clears it.
+ *
+ * NOTHING EXPIRES AT MIDNIGHT. A stick is resolved by a person and by nothing
+ * else — no timer, no nightly job, no date arithmetic anywhere near this
+ * table.
+ *
+ * PAIR CODES ARE CANONICAL — trimmed and uppercased, enforced by
+ * `dandiya_loans_pair_code_canonical`. The index above compares bytes, so a
+ * stored `d-014` beside an open `D-014` would be two pairs and one set of
+ * sticks.
+ */
+export const dandiyaLoans = pgTable(
+  'dandiya_loans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'restrict' }),
+    pairCode: text('pair_code').notNull(),
+    issuedByDeviceId: uuid('issued_by_device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'restrict' }),
+    issuedAt: timestamp('issued_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** All three null while any stick is out; all three set once none is. */
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    closedByDeviceId: uuid('closed_by_device_id').references(() => devices.id, {
+      onDelete: 'restrict',
+    }),
+    /** `returned` | `partial_loss` | `lost`. Derived, never chosen. */
+    outcome: text('outcome'),
+    /** Set only by a clean return. Null is the pair's quarantine. */
+    pairReleasedAt: timestamp('pair_released_at', { withTimezone: true }),
+  },
+  (table) => [
+    /**
+     * The same cross-event integrity badge assignments and prize awards use:
+     * a loan cannot pair one event with a device belonging to another.
+     *
+     * A composite foreign key with any NULL column is not enforced (MATCH
+     * SIMPLE, the default), which is precisely the behaviour wanted for the
+     * CLOSING device: no closing device yet, nothing to check.
+     */
+    foreignKey({
+      name: 'dandiya_loans_issued_device_event_fk',
+      columns: [table.issuedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'dandiya_loans_closed_device_event_fk',
+      columns: [table.closedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    /** So a holder row can be tied to its loan AND its event in one key. */
+    unique('dandiya_loans_id_event_id_key').on(table.id, table.eventId),
+    /**
+     * ONE UNAVAILABLE LOAN PER PHYSICAL PAIR — the pair authority.
+     *
+     * Partial on `pair_released_at IS NULL`, which is true for an open loan
+     * AND for a closed loan that lost a stick. So the index blocks reissuing
+     * a pair that is out, and keeps blocking one that came back incomplete,
+     * while a cleanly returned pair frees its slot and may go out again.
+     */
+    uniqueIndex('dandiya_loans_one_unreleased_per_pair')
+      .on(table.eventId, table.pairCode)
+      .where(sql`${table.pairReleasedAt} is null`),
+    index('dandiya_loans_event_id_idx').on(table.eventId),
+    index('dandiya_loans_issued_by_device_id_idx').on(table.issuedByDeviceId),
+    /**
+     * The application trims, uppercases and bounds the pair code at its
+     * boundary; these are the database's own floor, so a future writer cannot
+     * store a blank, unbounded or non-canonical code whatever it believes it
+     * validated.
+     */
+    check('dandiya_loans_pair_code_not_empty', sql`length(btrim(${table.pairCode})) > 0`),
+    check('dandiya_loans_pair_code_max_length', sql`length(${table.pairCode}) <= 32`),
+    check(
+      'dandiya_loans_pair_code_canonical',
+      sql`${table.pairCode} = upper(btrim(${table.pairCode}))`,
+    ),
+    /**
+     * A CLOSE IS ONE FACT, so its three columns move together. A row with a
+     * close time and no outcome — or an outcome and no closing device — would
+     * be a loan nobody could account for.
+     */
+    check(
+      'dandiya_loans_close_paired',
+      sql`(${table.closedAt} is null) = (${table.outcome} is null)
+          and (${table.closedAt} is null) = (${table.closedByDeviceId} is null)`,
+    ),
+    check(
+      'dandiya_loans_outcome_valid',
+      sql`${table.outcome} is null or ${table.outcome} in ('returned', 'partial_loss', 'lost')`,
+    ),
+    /**
+     * THE PAIR IS FREED BY A CLEAN RETURN AND BY NOTHING ELSE, in both
+     * directions: a release requires `outcome = 'returned'`, and a
+     * `returned` close requires the release. A loss can therefore never
+     * quietly free the pair, and a clean return can never quietly keep it.
+     */
+    check(
+      'dandiya_loans_release_requires_returned',
+      sql`${table.pairReleasedAt} is null or ${table.outcome} = 'returned'`,
+    ),
+    check(
+      'dandiya_loans_returned_requires_release',
+      sql`${table.outcome} is distinct from 'returned' or ${table.pairReleasedAt} is not null`,
+    ),
+  ],
+)
+
+/**
+ * WHO IS HOLDING ONE STICK, and how it ended.
+ *
+ * Two rows per loan, one per stick-slot — because the active-attendee
+ * guarantee has to be a unique index over a SINGLE badge column. With
+ * `badge_one` and `badge_two` columns there is no index that could stop the
+ * same attendee appearing as `badge_one` here and `badge_two` there. Phase
+ * D3.1 makes the shape earn its keep twice over: each row now carries its own
+ * resolution, so one stick can come back while the other stays out.
+ *
+ * A BADGE NUMBER, A SLOT AND AN ENDING. No name, phone, age, gender,
+ * WhatsApp link or payment column, and none may be added: the person behind
+ * the badge stays in the Google Sheet.
+ *
+ * `resolved_at IS NULL` MEANS STILL HOLDING, whatever the pair is doing. A
+ * stick that came back and a stick reported lost both FREE the attendee —
+ * they are resolved either way — which is why the active-attendee index is
+ * partial on `resolved_at` and not on the resolution itself.
+ */
+export const dandiyaLoanHolders = pgTable(
+  'dandiya_loan_holders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    loanId: uuid('loan_id')
+      .notNull()
+      .references(() => dandiyaLoans.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'restrict' }),
+    badgeNumber: integer('badge_number').notNull(),
+    /** 1 or 2. Which stick of the pair, not a ranking. */
+    slot: smallint('slot').notNull(),
+    /** `returned` | `lost`. All three resolution columns move together. */
+    resolution: text('resolution'),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolvedByDeviceId: uuid('resolved_by_device_id').references(() => devices.id, {
+      onDelete: 'restrict',
+    }),
+  },
+  (table) => [
+    /** A holder cannot belong to a loan from a different event. */
+    foreignKey({
+      name: 'dandiya_loan_holders_loan_event_fk',
+      columns: [table.loanId, table.eventId],
+      foreignColumns: [dandiyaLoans.id, dandiyaLoans.eventId],
+    }).onDelete('cascade'),
+    /** Nor be resolved by a device from one. Unenforced while null. */
+    foreignKey({
+      name: 'dandiya_loan_holders_resolved_device_event_fk',
+      columns: [table.resolvedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    /** Two slots, filled once each: no loan has three holders or two slot 1s. */
+    unique('dandiya_loan_holders_loan_id_slot_key').on(table.loanId, table.slot),
+    /** And the same attendee cannot hold both sticks of one pair. */
+    unique('dandiya_loan_holders_loan_id_badge_number_key').on(
+      table.loanId,
+      table.badgeNumber,
+    ),
+    /**
+     * ONE UNRESOLVED STICK PER ATTENDEE — the attendee authority.
+     *
+     * Partial on `resolved_at IS NULL`, so an attendee is free again the
+     * moment their own stick is resolved, whether it came back or was lost,
+     * and without waiting for the other holder.
+     */
+    uniqueIndex('dandiya_loan_holders_one_unresolved_per_badge')
+      .on(table.eventId, table.badgeNumber)
+      .where(sql`${table.resolvedAt} is null`),
+    index('dandiya_loan_holders_loan_id_idx').on(table.loanId),
+    index('dandiya_loan_holders_event_id_idx').on(table.eventId),
+    check('dandiya_loan_holders_badge_number_positive', sql`${table.badgeNumber} > 0`),
+    check('dandiya_loan_holders_slot_valid', sql`${table.slot} in (1, 2)`),
+    /**
+     * A RESOLUTION IS ONE FACT, so its three columns move together — the same
+     * rule the loan's close follows, for the same reason.
+     */
+    check(
+      'dandiya_loan_holders_resolution_paired',
+      sql`(${table.resolution} is null) = (${table.resolvedAt} is null)
+          and (${table.resolution} is null) = (${table.resolvedByDeviceId} is null)`,
+    ),
+    check(
+      'dandiya_loan_holders_resolution_valid',
+      sql`${table.resolution} is null or ${table.resolution} in ('returned', 'lost')`,
+    ),
+  ],
+)
+
 export type Event = typeof events.$inferSelect
 export type NewEvent = typeof events.$inferInsert
 export type Device = typeof devices.$inferSelect
@@ -308,3 +534,7 @@ export type BadgeAssignment = typeof badgeAssignments.$inferSelect
 export type NewBadgeAssignment = typeof badgeAssignments.$inferInsert
 export type PrizeAward = typeof prizeAwards.$inferSelect
 export type NewPrizeAward = typeof prizeAwards.$inferInsert
+export type DandiyaLoan = typeof dandiyaLoans.$inferSelect
+export type NewDandiyaLoan = typeof dandiyaLoans.$inferInsert
+export type DandiyaLoanHolder = typeof dandiyaLoanHolders.$inferSelect
+export type NewDandiyaLoanHolder = typeof dandiyaLoanHolders.$inferInsert

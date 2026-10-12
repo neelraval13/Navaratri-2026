@@ -8,7 +8,7 @@
  * Framework-free: the browser renders the checkboxes from this list and the
  * server validates against the same one, so the two cannot drift.
  */
-export const DEVICE_ATTRIBUTES = ['registration', 'prizes', 'attendees'] as const
+export const DEVICE_ATTRIBUTES = ['registration', 'prizes', 'attendees', 'dandiya'] as const
 
 export type DeviceAttribute = (typeof DEVICE_ATTRIBUTES)[number]
 
@@ -16,6 +16,7 @@ export const DEVICE_ATTRIBUTE_LABELS: Record<DeviceAttribute, string> = {
   registration: 'Registration',
   prizes: 'Prizes',
   attendees: 'Attendees',
+  dandiya: 'Dandiya',
 }
 
 /**
@@ -33,6 +34,7 @@ export const DEVICE_ATTRIBUTE_DESCRIPTIONS: Record<DeviceAttribute, string> = {
     'Full registration desk: attendee entry, payment and issuing physical badges.',
   prizes: 'May use Prize functionality.',
   attendees: 'Read-only attendee directory. Views registrations; changes nothing.',
+  dandiya: 'Dandiya desk: issue a physical pair to two attendees, and take it back.',
 }
 
 /**
@@ -84,6 +86,22 @@ export const PRIZE_REQUIRED_ATTRIBUTE: DeviceAttribute = 'prizes'
  * binding, because reading a register consumes and changes nothing.
  */
 export const ATTENDEE_DIRECTORY_REQUIRED_ATTRIBUTE: DeviceAttribute = 'attendees'
+
+/**
+ * The attribute the Dandiya desk requires.
+ *
+ * Shared for the same reason the others are: the route gate, the page and
+ * `GET`/`POST`/`PATCH /api/dandiya` all ask the same question, and the
+ * endpoint is the one that decides. A device holding only `dandiya` is a
+ * complete dandiya desk — it needs no `registration`, no `prizes`, no
+ * `attendees`, no badge range and no central badge binding, because issuing a
+ * pair of sticks consumes no badge number.
+ *
+ * It does NOT imply `attendees`. The dandiya workflow reads the safe attendee
+ * register because identifying the two badge holders is part of issuing the
+ * pair; browsing the whole register as a directory is a separate grant.
+ */
+export const DANDIYA_REQUIRED_ATTRIBUTE: DeviceAttribute = 'dandiya'
 
 export const isDeviceAttribute = (value: unknown): value is DeviceAttribute => {
   return (

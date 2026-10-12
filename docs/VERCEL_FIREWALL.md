@@ -102,6 +102,7 @@ So:
 | `/api/device-badge-claim` | Authenticated, and the database is what protects it. See below. |
 | `/api/prizes` | Authenticated device traffic. See below. |
 | `/api/attendees` | Authenticated device traffic, and read-only. See below. |
+| `/api/dandiya` | Authenticated device traffic. See below. |
 
 ### Why the claim endpoint gets no rule
 
@@ -133,6 +134,21 @@ the current `prizes` attribute, and that the prize name must be one of eight
 allow-listed values — a flood from a real prize desk would produce real award
 rows a human can see and remove, not an exploit. An IP-keyed rule would not
 help with that and would throttle a volunteer pressing Refresh.
+
+### Why the dandiya endpoint gets no rule
+
+`/api/dandiya` is authenticated device traffic too, refused without a device
+session carrying the current `dandiya` attribute.
+
+`GET` is a board read a desk performs on opening the page, on reconnect and on
+every explicit Refresh — ordinary, bursty, harmless. `POST` and `PATCH` are
+protected by the database: two **partial unique indexes** mean one physical
+pair can have only one open loan and one attendee only one open pair, and no
+amount of repetition gets past them. A retry that arrives twice produces one
+loan and one refusal.
+
+Rate-limiting it would throttle a volunteer handing out sticks on a busy
+evening and protect nothing.
 
 ### Why the attendee directory gets no rule
 

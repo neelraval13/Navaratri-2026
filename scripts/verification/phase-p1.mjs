@@ -1016,14 +1016,28 @@ check('0003 is NOT edited, and still creates what it always created',
 check('0004 removes that constraint, and does nothing else',
   migration0004.replace(/^--.*$/gm, '').replace(/\s+/g, ' ').trim(),
   'ALTER TABLE "prize_awards" DROP CONSTRAINT "prize_awards_event_id_badge_number_key";')
+// Positioned rather than last: Phase D3 appended 0005 after these two, and
+// what P1.1 needs is that 0004 follows 0003.
 check('  the journal tracks it, appended after 0003',
-  JSON.parse(read('drizzle/meta/_journal.json')).entries.map((entry) => entry.tag).slice(-2),
+  JSON.parse(read('drizzle/meta/_journal.json')).entries
+    .map((entry) => entry.tag)
+    .filter((tag) => /prize/.test(tag)),
   ['0003_prize_awards', '0004_repeat_prize_awards'])
 check('  and the schema declares no replacement uniqueness over the badge number',
   (() => {
     const schema = read('server/db/schema.ts')
-    const table = schema.slice(schema.indexOf('export const prizeAwards = pgTable('),
-      schema.indexOf('export type Event ='))
+    /**
+     * The prize table block ONLY. The end was once `export type Event =`,
+     * which worked until Phase D3 appended two more tables before it — the
+     * slice then swallowed the dandiya tables, whose partial unique index
+     * over `badge_number` made this assertion fail on correct code. A guard
+     * that audits by slicing text has to slice precisely.
+     */
+    const start = schema.indexOf('export const prizeAwards = pgTable(')
+    const end = Math.min(...['\nexport const ', '\nexport type ']
+      .map((marker) => schema.indexOf(marker, start + 1))
+      .filter((index) => index !== -1))
+    const table = schema.slice(start, end)
     return [...stripComments(table).matchAll(/(unique|uniqueIndex)\(([\s\S]*?)\)\s*\.on\(([^)]*)\)/g)]
       .filter((match) => /badgeNumber|badge_number/.test(match[3]))
       .map((match) => match[2])
@@ -1082,16 +1096,16 @@ const functionChecker = await import('../vercel-function-typecheck.mjs')
 const budget = functionChecker.checkFunctionBudget()
 console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(functionChecker.HOBBY_FUNCTION_LIMIT)}` +
   `   Headroom: ${String(functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length)}`)
-// RE-SCOPED BY PHASE A1, which spent one slot on `api/attendees.ts`. What
+// RE-SCOPED BY PHASE D3, which spent the next slot on `api/dandiya.ts`. What
 // P1 needs is that PRIZES is still exactly one Function, which the two
 // assertions below prove directly.
-check('31. the Function inventory is exactly ten', budget.actual, [
+check('31. the Function inventory is exactly eleven', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
-  'sync-registration',
+  'admin-events', 'attendees', 'dandiya', 'device-auth', 'device-badge-claim',
+  'prizes', 'sync-registration',
 ])
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and prizes is ONE Function, dispatched by method',
   [[...stripComments(read('api/prizes.ts')).matchAll(/export async function ([A-Z]+)\(/g)]
     .map((match) => match[1]).sort(),

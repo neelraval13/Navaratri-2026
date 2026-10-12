@@ -1,26 +1,30 @@
 import { CircleAlert, CircleCheck, Info } from 'lucide-react'
 import type * as React from 'react'
 
-export type PrizeNoticeKind = 'success' | 'error' | 'info'
+export type EventNoticeKind = 'success' | 'error' | 'info'
 
-export interface PrizeNoticeState {
-  kind: PrizeNoticeKind
+export interface EventNoticeState {
+  kind: EventNoticeKind
   message: string
 }
 
-interface PrizeNoticeProps {
-  notice: PrizeNoticeState
+interface EventNoticeProps {
+  notice: EventNoticeState
 }
 
 /**
- * The outcome of the last award attempt.
+ * The outcome of the last desk action.
  *
- * Semantic colours only, per the design system: green for a prize that was
- * actually recorded, red for a refusal, amber for the one case that is
- * neither — another device got there first, which is ordinary operational
- * news rather than an error anyone did wrong.
+ * Semantic colours only, per the design system: green for something that
+ * actually happened, red for a refusal, amber for the cases that are neither
+ * — another device got there first, which is ordinary operational news rather
+ * than an error anyone did wrong.
+ *
+ * SHARED, because every event desk needs the same three. Phase P1 wrote it
+ * for prizes; Phase D3 moved it here rather than copying a colour map, since
+ * the two would drift into saying the same thing differently.
  */
-const PrizeNotice: React.FC<PrizeNoticeProps> = ({ notice }) => {
+const EventNotice: React.FC<EventNoticeProps> = ({ notice }) => {
   if (notice.kind === 'success') {
     return (
       <div className="rounded-2xl border border-green-600/30 bg-green-600/10 px-4 py-3">
@@ -53,4 +57,4 @@ const PrizeNotice: React.FC<PrizeNoticeProps> = ({ notice }) => {
   )
 }
 
-export default PrizeNotice
+export default EventNotice

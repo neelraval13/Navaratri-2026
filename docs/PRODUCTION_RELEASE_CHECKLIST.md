@@ -73,6 +73,7 @@ real deployment, then is disabled manually.
 | 3.12 | `0002_device_credentials.sql` reviewed and applied to Development first, then Production, by hand | ☐ |
 | 3.12a | `0003_prize_awards.sql` reviewed and applied the same way — Development first, Production by hand, never from a build | ☐ |
 | 3.12b | `0004_repeat_prize_awards.sql` applied **immediately after** 0003, same way. It removes the one-prize-per-badge constraint; P1.1 code awarding a repeat prize against a database that still has it fails with an unexpected error | ☐ |
+| 3.12c | `0005_dandiya_checkout.sql` reviewed and applied the same way — Development first, Production by hand, never from a build. Without it `/dandiya` cannot issue anything | ☐ |
 | 3.13 | Device passwords recorded wherever the organizer keeps operational secrets — they are never shown again | ☐ |
 | 3.14 | No device password provisioned on a shared or reused passphrase | ☐ |
 | 3.15 | `EVENT_DEVICE_SESSION_SECRET` set, 32+ chars, generated independently of the other two secrets | ☐ |
@@ -309,6 +310,53 @@ It needs **no migration** — `device_attributes.attribute` is already text.
 the event; a register that could not be read is an error with Try again. If
 somebody reports an empty directory during the event, that is a registration
 or sync question, not a directory one.
+
+### Dandiya checkout (Phases D3 and D3.1)
+
+`/dandiya` issues a physical dandiya pair to two registered attendees and
+takes the sticks back, for a device holding the `dandiya` attribute. It reads
+the SAME Badge Register the prize desk and the directory read, through the
+same reader, and stores a pair code, two badge NUMBERS, devices and
+timestamps.
+
+**Each stick ends on its own** — RETURNED or LOST — and the loan closes when
+the last one does, as `returned`, `partial_loss` or `lost`. A pair is
+available again only after **both** sticks were returned; any loss keeps it
+out of circulation for the rest of the event, with no release control
+anywhere in the application.
+
+It is **online only**, and it needs the sync interlock on: the desk reads the
+Sheet, so a deployment that may not write that ledger may not read it either.
+
+**Two partial unique indexes are the only thing preventing a pair going out
+twice**, so `0005` must be applied before the event.
+
+| # | Step | Pass |
+|---|---|---|
+| 3.75 | `0005_dandiya_checkout.sql` applied to Production by hand (3.12c), verified with `pnpm db:check` | ☐ |
+| 3.76 | `pnpm db:check` output includes `one unavailable dandiya loan per pair, and reuse after a clean return` **and** `one unresolved dandiya stick per attendee, whether it came back or not`. If either FAILS, do not open the dandiya desk | ☐ |
+| 3.76a | `pnpm db:check` output includes `only a fully returned dandiya loan may release its pair` **and** `a fully returned dandiya loan must release its pair`. Without both, a pair with a stick missing can be handed out again | ☐ |
+| 3.76b | After `0005` is applied to **Development**, `pnpm db:smoke:dandiya --confirm` passed there (needs `ALLOW_DANDIYA_DB_SMOKE_WRITES=true` and `VERCEL_ENV=development`). It proves two desks resolving the two sticks at the same instant cannot leave the loan open — the one thing no schema check can test. **Never run it against Production** | ☐ |
+| 3.77 | Every dandiya desk has a central Device with `dandiya`, a provisioned password, and NO badge range | ☐ |
+| 3.78 | Confirmed `dandiya` was not added to a registration, prize or viewer device by habit — it is a separate grant | ☐ |
+| 3.79 | Confirmed a device without `dandiya` is refused at `/dandiya`, and that a `dandiya`-only device cannot open the other three modules | ☐ |
+| 3.80 | Each dandiya desk's browser is CONVERGED — its local identity is the central Device's — or `/dandiya` will refuse it | ☐ |
+| 3.81 | Physical pairs are labelled, and the labels match what volunteers will type. Case does **not** matter — `d-014`, `D-014` and ` D-014 ` are the same pair, stored and shown as `D-014` | ☐ |
+| 3.81a | `pnpm db:check` output includes `dandiya pair codes are stored canonical (trimmed, uppercase)`. Without that CHECK the pair uniqueness index can be bypassed by typing a label in a different case | ☐ |
+| 3.82 | `/api/dandiya` has NO firewall rule, and nobody has added one | ☐ |
+| 3.83 | Volunteers briefed that a pair stays OUT until returned — including across midnight — and that anything left over appears as **OUTSTANDING** rather than disappearing | ☐ |
+| 3.84 | Volunteers briefed that each stick is returned or marked lost SEPARATELY, that an attendee is free as soon as their own stick is resolved either way, and that **Return Whole Pair** / **Report Pair Lost** only affect sticks still out | ☐ |
+| 3.84a | Volunteers briefed that a pair with a stick LOST appears under **Issues** and can never be issued again this event, and that there is no way to release it from the app — a missing stick is replaced physically or the pair is retired | ☐ |
+| 3.84b | Volunteers briefed that a dancer with a previous loss **may** be given another pair: the warning is information, not a refusal, and there is no override to look for | ☐ |
+| 3.84c | Volunteers briefed that **History is one event day at a time**, that a pair belongs to the day it was **issued** even when it came back after midnight, and that anything still out appears in that day's **Outstanding** filter as well as in Active | ☐ |
+| 3.84d | Volunteers briefed on **where the end-of-night list is**: while the event day is still running, the sticks that have not come back are **History → Today → Outstanding**. The previous-day **carryover banner** is not that list — it appears only after midnight | ☐ |
+| 3.84e | Volunteers briefed that after midnight an unresolved pair stays in **Active** and becomes **carryover**: the banner is the next-day reminder, and **Active → Carryover** lists exactly those pairs. Nothing is reset at midnight — a pair stops being outstanding only when somebody resolves its sticks | ☐ |
+| 3.85 | The venue has connectivity at the dandiya table, and volunteers know the desk stops working without it | ☐ |
+
+**Midnight returns nothing.** The counters and the history filter roll over in
+event time; open loans, stick resolutions and pair availability do not. If somebody
+reports a pair "still showing from last night", that is correct behaviour and
+the pair genuinely has not come back.
 
 ### Device identity convergence (Phase D1)
 

@@ -32,6 +32,16 @@ export const prizeAwards = tableOf('prize_awards', [
   'id', 'eventId', 'badgeNumber', 'prizeName', 'awardedByDeviceId', 'awardedAt',
 ])
 
+export const dandiyaLoans = tableOf('dandiya_loans', [
+  'id', 'eventId', 'pairCode', 'issuedByDeviceId', 'issuedAt',
+  'closedAt', 'closedByDeviceId', 'outcome', 'pairReleasedAt',
+])
+
+export const dandiyaLoanHolders = tableOf('dandiya_loan_holders', [
+  'id', 'loanId', 'eventId', 'badgeNumber', 'slot',
+  'resolution', 'resolvedAt', 'resolvedByDeviceId',
+])
+
 /**
  * `left` is always a column. `value` may be a LITERAL or, in a join
  * condition, another column — `eq(devices.id, prizeAwards.awardedByDeviceId)`
@@ -43,6 +53,23 @@ export const eq = (left, value) => ({
 })
 export const isNull = (left) => ({ op: 'isNull', table: left.table, column: left.column })
 export const and = (...parts) => ({ op: 'and', parts: parts.filter(Boolean) })
+export const or = (...parts) => ({ op: 'or', parts: parts.filter(Boolean) })
+/**
+ * HALF-OPEN RANGE COMPARISONS, which the day-scoped history read needs.
+ *
+ * `gte`/`lt` rather than a `between`, because the day window is
+ * `[start, end)` — an inclusive upper bound would either lose a millisecond
+ * or claim one twice.
+ */
+export const gte = (left, value) => ({
+  op: 'gte', table: left.table, column: left.column, value,
+})
+export const lt = (left, value) => ({
+  op: 'lt', table: left.table, column: left.column, value,
+})
+export const inArray = (left, values) => ({
+  op: 'inArray', table: left.table, column: left.column, values: [...values],
+})
 export const asc = (left) => ({ op: 'asc', column: left.column })
 
 /** A tagged template captured as a descriptor, never as real SQL. */

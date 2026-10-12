@@ -238,16 +238,16 @@ for (const [label, over] of [['blank name', { name: ' ' }], ['bad login shape', 
   check(`  rejected: ${label}`, dev(over).ok, false)
 check('  enabled defaults true', dev({}).value.enabled, true)
 
-// RE-SCOPED BY PHASE A1, which added the read-only attendee directory as a
-// third INDEPENDENT capability. Still an exact list: the database stores plain
-// text, so this allow-list is the only thing standing between Admin and an
+// RE-SCOPED BY PHASE D3, which added the dandiya desk as a fourth
+// INDEPENDENT capability. Still an exact list: the database stores plain text,
+// so this allow-list is the only thing standing between Admin and an
 // arbitrary string, and a value added without a decision is a value nothing
 // authorizes.
-check('the allow-list is exactly the three capabilities',
-  [...attributes.DEVICE_ATTRIBUTES], ['registration', 'prizes', 'attendees'])
+check('the allow-list is exactly the four capabilities',
+  [...attributes.DEVICE_ATTRIBUTES], ['registration', 'prizes', 'attendees', 'dandiya'])
 check('  each is labelled',
   attributes.DEVICE_ATTRIBUTES.map((a) => attributes.DEVICE_ATTRIBUTE_LABELS[a]),
-  ['Registration', 'Prizes', 'Attendees'])
+  ['Registration', 'Prizes', 'Attendees', 'Dandiya'])
 check('  and each is described',
   attributes.DEVICE_ATTRIBUTES
     .filter((a) => (attributes.DEVICE_ATTRIBUTE_DESCRIPTIONS[a] ?? '').trim() === ''), [])
@@ -261,7 +261,9 @@ check('  no dependency machinery survives',
 check('attribute allow-list accepts known values',
   attributes.parseAttributeSet(['prizes', 'registration']).attributes, ['registration', 'prizes'])
 check('  duplicates collapse', attributes.parseAttributeSet(['prizes', 'prizes']).attributes, ['prizes'])
-check('  unknown value rejected', attributes.parseAttributeSet(['dandiya']).ok, false)
+// Phase D3 made `dandiya` real, so the unknown-value case needs a value that
+// genuinely is not one — the point was never this particular word.
+check('  unknown value rejected', attributes.parseAttributeSet(['checkin']).ok, false)
 check('  free text rejected', attributes.parseAttributeSet(['anything']).ok, false)
 check('  non-array rejected', attributes.parseAttributeSet('registration').ok, false)
 check('  empty set is valid (a device may do none of them)', attributes.parseAttributeSet([]).attributes, [])
@@ -277,11 +279,20 @@ check('  prizes alone is fine', attributes.parseAttributeSet(['prizes']).ok, tru
 // A1: a viewer device may hold `attendees` and nothing else, and that is a
 // complete and useful device rather than a half-configured one.
 check('  attendees alone is fine', attributes.parseAttributeSet(['attendees']).ok, true)
+// D3: a dandiya desk holds this and nothing else, and is complete.
+check('  dandiya alone is fine', attributes.parseAttributeSet(['dandiya']).ok, true)
 check('  every valid combination passes',
-  [[], ['registration'], ['prizes'], ['attendees'], ['registration', 'prizes'],
-   ['registration', 'attendees'], ['prizes', 'attendees'],
-   ['registration', 'prizes', 'attendees']]
-    .every((set) => attributes.parseAttributeSet(set).ok), true)
+  (() => {
+    const all = [...attributes.DEVICE_ATTRIBUTES]
+    const combinations = []
+
+    for (let mask = 0; mask < 2 ** all.length; mask += 1) {
+      combinations.push(all.filter((_, index) => (mask & (1 << index)) !== 0))
+    }
+
+    return [combinations.length,
+      combinations.filter((set) => !attributes.parseAttributeSet(set).ok)]
+  })(), [16, []])
 
 const edit = (body) => validation.parseDeviceConfigurationInput(body)
 check('the edit parser refuses createdAt', edit({ createdAt: 'x', name: 'y' }).ok, false)
@@ -295,7 +306,7 @@ check('  eventId is a scope assertion, never a field to write',
   [edit({ eventId: 'e1', name: 'A' }).ok, 'eventId' in edit({ eventId: 'e1', name: 'A' }).value.fields],
   [true, false])
 check('  an invalid attribute rejects the WHOLE edit',
-  edit({ name: 'A', attributes: ['dandiya'] }).ok, false)
+  edit({ name: 'A', attributes: ['checkin'] }).ok, false)
 check('  absent attributes means leave them alone', edit({ name: 'A' }).value.attributes, null)
 check('  an empty array means clear them', edit({ attributes: [] }).value.attributes, [])
 check('  attributes alone is a valid edit', edit({ attributes: ['prizes'] }).ok, true)
@@ -930,8 +941,8 @@ console.log(`  Vercel Functions: ${String(budget.actual.length)} / ${String(func
 for (const [index, name] of budget.actual.entries()) console.log(`    ${String(index + 1).padStart(2)}  ${name}`)
 
 /**
- * RE-SCOPED BY PHASE A1, which spent one slot on `api/attendees.ts` beside
- * P1's `api/prizes.ts`.
+ * RE-SCOPED BY PHASE D3, which spent one slot on `api/dandiya.ts` beside
+ * P1's `api/prizes.ts` and A1's `api/attendees.ts`.
  *
  * 9B's own concern is unchanged and is asserted separately below: the Admin
  * realm is five Functions and consolidated three of its own into one. The
@@ -939,15 +950,15 @@ for (const [index, name] of budget.actual.entries()) console.log(`    ${String(i
  * decision, and the headroom stays pinned because the Hobby limit is enforced
  * at DEPLOY time, after a green build.
  */
-check('the inventory is exactly the expected ten', budget.actual, [
+check('the inventory is exactly the expected eleven', budget.actual, [
   'admin-auth', 'admin-badge-assignment', 'admin-device-password', 'admin-devices',
-  'admin-events', 'attendees', 'device-auth', 'device-badge-claim', 'prizes',
-  'sync-registration',
+  'admin-events', 'attendees', 'dandiya', 'device-auth', 'device-badge-claim',
+  'prizes', 'sync-registration',
 ])
 check('  which is within the Hobby limit',
   budget.actual.length <= functionChecker.HOBBY_FUNCTION_LIMIT, true)
-check('  with two slots of headroom',
-  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 2)
+check('  with one slot of headroom',
+  functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
 check('  and the Admin realm is still exactly five of them',
   budget.actual.filter((name) => name.startsWith('admin-')).length, 5)
 check('  and nothing unexpected', budget.problems, [])
@@ -1001,16 +1012,16 @@ check('badge allocation remains local',
   [/nextBadge/.test(read('src/db/registrations.ts')), /server\/db|drizzle/.test(read('src/db/registrations.ts'))], [true, false])
 const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort()
 /**
- * Phase 9B needed no migration of its own. 0002 belongs to Phase 9C-A, and
- * 0003 and 0004 to the prize phases, so they are excluded by name rather than
- * by trimming the expectation — the point is that 9B contributed nothing, not
- * that the directory has a particular length.
+ * Phase 9B needed no migration of its own. 0002 belongs to Phase 9C-A, 0003
+ * and 0004 to the prize phases and 0005 to dandiya, so they are excluded by
+ * name rather than by trimming the expectation — the point is that 9B
+ * contributed nothing, not that the directory has a particular length.
  */
 check('9B added no migration',
-  migrations.filter((file) => !/^000[234]_/.test(file)),
+  migrations.filter((file) => !/^000[2345]_/.test(file)),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
 check('  and no later migration touched an Admin table',
-  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql']
+  ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql']
     .some((file) => /ALTER TABLE "(devices|device_attributes|events)"/.test(read(`drizzle/${file}`))),
   false)
 const schemaSource = stripComments(read('server/db/schema.ts'))

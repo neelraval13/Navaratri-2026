@@ -132,10 +132,14 @@ const ModuleCard: React.FC<ModuleCardProps> = ({
  * separately granted.
  *
  * The card is still not the security boundary — every module authorizes
- * itself at its own route, and `/badge-registration`, `/prizes` and
- * `/attendees` each refuse a device that lacks their attribute whatever Home
- * drew. What this avoids is inviting a volunteer into a screen that will turn
- * them away.
+ * itself at its own route, and `/badge-registration`, `/prizes`,
+ * `/attendees` and `/dandiya` each refuse a device that lacks their attribute
+ * whatever Home drew. What this avoids is inviting a volunteer into a screen
+ * that will turn them away.
+ *
+ * Since Phase D3 every card is a real module: there is no `coming-soon` card
+ * left, and the state survives only because the next module to be designed
+ * will need it again.
  *
  * The grant comes from the ONE provider that already owns the session check.
  * Home performs no request of its own, and an absent grant simply means
@@ -217,8 +221,8 @@ const HomePage: React.FC = () => {
         <ModuleCard
           icon={<Music className="size-5" />}
           title="Dandiya"
-          description="Dandiya operations for the event."
-          access={{ kind: 'coming-soon' }}
+          description="Issue a dandiya pair to two attendees, and take it back."
+          access={moduleAccess('dandiya', ROUTES.dandiya)}
         />
       </div>
 

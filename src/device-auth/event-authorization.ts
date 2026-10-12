@@ -93,7 +93,7 @@ export const grantFromOfflineClaims = (
   expiresAt: claims.exp,
 })
 
-export type EventModule = 'home' | 'registration' | 'prizes' | 'attendees'
+export type EventModule = 'home' | 'registration' | 'prizes' | 'attendees' | 'dandiya'
 
 /**
  * Device authority is absent or insufficient, but nothing is WRONG.
@@ -339,8 +339,9 @@ const localRangeOf = (
  *
  * Steps 5 and 6 are per module. Home needs only a permission of some kind,
  * Prizes needs `prizes` and no badge state at all, Attendees needs
- * `attendees` and no badge state at all, and Registration needs
- * `registration` plus badge ownership that agrees with central.
+ * `attendees` and no badge state at all, Dandiya needs `dandiya` and no badge
+ * state at all, and Registration needs `registration` plus badge ownership
+ * that agrees with central.
  *
  * The badge-safety checks run BEFORE the permission check, so a browser whose
  * local badge state disagrees with central is blocked even when the device
@@ -447,6 +448,25 @@ export const authorizeEventModule = (
    */
   if (module === 'attendees') {
     return grant.attributes.includes('attendees')
+      ? { outcome: 'authorized', source: grant.source }
+      : { outcome: 'unavailable', gap: 'not-permitted' }
+  }
+
+  /**
+   * THE DANDIYA DESK NEEDS NO BADGES EITHER. A pair of sticks is not a badge:
+   * issuing one consumes no badge number, advances no counter and touches no
+   * range, so `checkBadgeOwnership` is deliberately not consulted — running
+   * it would close the dandiya desk because a REGISTRATION desk's ledger
+   * disagreed about physical badges this device was never given.
+   *
+   * `dandiya` is required ON ITS OWN. Neither `registration`, nor `prizes`,
+   * nor `attendees` is accepted in its place. The desk DOES read the safe
+   * attendee register — identifying the two badge holders is part of issuing
+   * the pair — but that is not the same as being granted the standalone
+   * directory, and granting one must never grant the other.
+   */
+  if (module === 'dandiya') {
+    return grant.attributes.includes('dandiya')
       ? { outcome: 'authorized', source: grant.source }
       : { outcome: 'unavailable', gap: 'not-permitted' }
   }

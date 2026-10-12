@@ -17,12 +17,12 @@ One origin, real pathnames, one storage namespace:
 | `/badge-registration` | Attendee badge workflow |
 | `/attendees` | Read-only attendee directory |
 | `/prizes` | Prize distribution |
+| `/dandiya` | Dandiya pair checkout and return |
 | `/device-registration` | Provision and inspect this physical device |
 
-Dandiya is shown on Home as **Coming soon** and is inert — there is no route
-behind it yet. Prizes is a real module as of Phase P1, with repeat winners and
-a fixed prize catalog as of Phase P1.1. The attendee directory is real as of
-Phase A1.
+Every module on Home is real as of **Phase D3**: Prizes since P1 (with repeat
+winners and a fixed catalog since P1.1), the attendee directory since A1, and
+the dandiya desk since D3. There is no **Coming soon** card left.
 
 Routing is presentation only. Changing the pathname creates no second database
 or storage namespace: IndexedDB, the trusted-device marker, the operator
@@ -56,9 +56,12 @@ not by an operational rule. `/admin` does not sit behind event access.
 Admin manages **devices, not attendees**, and is online-only: registry data is
 never cached in IndexedDB.
 
-Device capabilities are `registration`, `prizes` and `attendees`, and the
-three are **independent**: `prizes` does not grant the attendee directory and
-`registration` does not either. A device may hold `attendees` alone.
+Device capabilities are `registration`, `prizes`, `attendees` and `dandiya`,
+and the four are **independent**: each grants exactly one module. In
+particular `dandiya` does not grant the attendee directory — the dandiya desk
+reads the register to identify the two badge holders, which is not the same as
+being trusted to browse it. A device may hold `attendees` alone, or `dandiya`
+alone.
 
 **Registration includes physical badge issuance** — issuing is the last step
 of registering an attendee, so it is one permission, not two. The badge range
@@ -165,6 +168,7 @@ wins whenever the server answers.
 /badge-registration    the same, plus Registration and agreeing badge state
 /prizes                the same, plus Prizes — and no badge state at all
 /attendees             the same, plus Attendees — read-only, no badge state
+/dandiya               the same, plus Dandiya — a pair is not a badge
 /device-registration   retired — redirects to /device-login
 ```
 
@@ -205,8 +209,9 @@ session, no unlock screen and no **Lock Device** control: `/api/operator-login`,
 `/api/operator-session` and `/api/operator-logout` were deleted, along with
 `server/auth/`, `src/auth/` and `src/components/operator/`. The Function
 budget fell from 11 to **8 of 12**. Phase P1 then spent one slot on
-`api/prizes.ts` and Phase A1 one on `api/attendees.ts`, so it now stands at
-**10 of 12**. Phase P1.1 added no Function.
+`api/prizes.ts`, Phase A1 one on `api/attendees.ts` and Phase D3 one on
+`api/dandiya.ts`, so it now stands at **11 of 12** with one slot left. Phase
+P1.1 added no Function.
 
 Event operations are authorized by a **central device grant** — a live
 session, or a cryptographically verified offline lease — and by nothing else.
@@ -393,6 +398,91 @@ Search by badge or name, an age window with either bound optional, and gender
 — the **same** filter functions the prize desk uses, so the two screens cannot
 disagree about which query finds somebody. A1 needed **no migration**. See
 **[docs/ATTENDEES.md](docs/ATTENDEES.md)**.
+
+## Phases D3 and D3.1 — dandiya checkout, return and loss
+
+`/dandiya` issues a physical dandiya **pair** to exactly two registered
+attendees and takes the sticks back, for a device holding the **`dandiya`**
+attribute. It needs no `registration`, no `prizes`, no `attendees`, no badge
+range and no badge binding — a pair of sticks is not a badge.
+
+**Each stick ends on its own.** One attendee hands their stick back and
+leaves while the other is still dancing, so each holder moves independently
+from `OUT` to **RETURNED** or **LOST**. The loan stays active while either
+stick is out, and an attendee is free as soon as **their own** stick is
+resolved — a loss discharges them too, because they have nothing left to give
+back.
+
+**A pair comes back only if both sticks do.**
+
+| Resolutions | Outcome | The pair afterwards |
+|---|---|---|
+| returned + returned | `returned` | available again |
+| returned + lost | `partial_loss` | **unavailable for the event** |
+| lost + lost | `lost` | **unavailable for the event** |
+
+Any loss quarantines the pair permanently, and there is no release, restore or
+reissue control anywhere — a missing stick is replaced physically or the pair
+is retired. A dancer's previous loss, by contrast, blocks nothing: the screen
+warns the volunteer and that is all.
+
+**Two partial unique indexes are the whole concurrency story:**
+
+```sql
+UNIQUE(event_id, pair_code)    WHERE pair_released_at IS NULL
+UNIQUE(event_id, badge_number) WHERE resolved_at IS NULL
+```
+
+They are partial on purpose: uniqueness over history would forbid the reuse
+the event depends on. No application check can replace them, so the endpoint
+asks the ledger nothing before inserting — two desks can each read "free" and
+both submit, and the database decides. Two database CHECKs hold the release
+rule in both directions, so a loss can never free a pair and a clean return
+can never fail to.
+
+Issuing writes the loan and both holders in **one transaction**. Every stick
+resolution is a **compare-and-set** on `resolved_at IS NULL`, so a resolution
+is final and two volunteers cannot both win.
+
+Closing is subtler. Two desks resolving *different* sticks write different
+rows and never conflict, so compare-and-set does not order them — under READ
+COMMITTED each would see the other stick still out, neither would close, and
+the loan would stay open with both sticks back. Every resolution therefore
+begins by taking `SELECT ... FOR UPDATE` on the owning loan, and the close is
+then derived by three mutually exclusive compare-and-sets in the same
+transaction. The row lock is proved against a real database by
+`pnpm db:smoke:dandiya`, a gated Development-only script.
+
+**Nothing expires.** A loan is closed by a person resolving its last stick and
+by nothing else — no timer, no nightly job, no date arithmetic on any mutation
+path. Midnight moves the "today" counters and the history filter and nothing
+more. A pair still out from yesterday stays in **Active**, labelled
+**OUTSTANDING**.
+
+**No attendee PII.** The two tables hold a pair code, two badge **numbers**,
+two devices and two timestamps. The names on screen are read from the Badge
+Register per request, through the same reader `/api/prizes` and
+`/api/attendees` use — and a Sheet row edited away does not erase a loan.
+
+**Online only.** Offline, `/dandiya` says *"Dandiya requires an internet
+connection."* and shows no board, no form and no resolution control at all.
+Two disconnected desks must never be able to issue the same pair, or the same
+attendee.
+
+Four tabs — **Issue Pair**, **Active (N)**, **Issues (N)**, **History** —
+where **Issues** is the quarantine list. Six counters above them: sticks out
+and active loans with no date at all, and issued, fully returned, partial
+losses and pairs lost for today.
+
+**History is day-wise**, and a loan belongs to the day it went **out** on —
+`issued_at` in event time, never the close. A pair issued at 11:50 PM and
+returned at 12:20 AM stays in that night's history and says it closed on the
+next day. Each day shows what was issued, fully returned, outstanding, partly
+lost and wholly lost, filterable and searchable; anything still out appears
+there **and** in Active until a person resolves it. When something is
+outstanding from an earlier day the main screen says so, derived from the open
+loans themselves — nothing is written or reset at midnight. See
+**[docs/DANDIYA.md](docs/DANDIYA.md)**.
 
 ## Central database (Phase 9A — foundation only)
 
@@ -633,6 +723,8 @@ Three documents cover event-device setup:
   record of which range belongs to which device, plus the reserve-range policy
 - **[docs/DEVICE_PROVISIONING.md](docs/DEVICE_PROVISIONING.md)** — the
   per-device workflow, including the offline test
+- **[docs/DANDIYA.md](docs/DANDIYA.md)** — dandiya checkout and return, its
+  two partial unique indexes and its day behaviour
 - **[docs/ATTENDEES.md](docs/ATTENDEES.md)** — the read-only attendee
   directory, its permission model and the shared Badge Register reader
 - **[docs/PRIZES.md](docs/PRIZES.md)** — the prize module, its privacy

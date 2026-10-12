@@ -225,6 +225,60 @@ compared for **equality**, so a column being ADDED — an `attendee_name` for
 the convenience of one screen — fails the check: central Postgres holds no
 attendee PII.
 
+**Two dandiya guarantees are PARTIAL, and the PREDICATE is checked.**
+`0005_dandiya_checkout.sql` adds
+
+```sql
+UNIQUE(event_id, pair_code)    WHERE pair_released_at IS NULL
+UNIQUE(event_id, badge_number) WHERE resolved_at IS NULL
+```
+
+so one physical dandiya pair can be out only once and one attendee can hold
+only one unresolved stick — while both may be reused as often as the evening
+needs. An index that kept its columns and lost its `WHERE` clause would
+forbid that reuse entirely, which is why `db:check` verifies the predicate
+and not just the columns. Dropping the index is the opposite failure, and is
+caught the same way.
+
+**And it checks WHICH column each predicate names.** The attendee index
+partial on `resolution IS NULL` reads almost identically and means something
+else: it would release a holder the moment their stick was recorded **lost**,
+which is precisely when their obligation was not discharged by a returned
+stick. `resolved_at` is the one column it may be partial on.
+
+**The release rules are their own CHECKs, in both directions.**
+
+```sql
+pair_released_at IS NULL OR outcome = 'returned'
+outcome IS DISTINCT FROM 'returned' OR pair_released_at IS NOT NULL
+```
+
+A dandiya stick ends `returned` or `lost`, independently of the other, and a
+pair is freed only when **both** came back. Because `pair_released_at` is
+simultaneously the release and the pair index's predicate, a loss that
+released it would put a pair with one stick back into circulation — so the
+database holds the rule rather than the application, and `db:check` verifies
+both definitions.
+
+Nothing in that schema expires. A dandiya loan is closed by a person
+resolving its last stick and by nothing else: there is no timer, no nightly
+job and no date arithmetic anywhere near those tables.
+
+**A CONSTRAINT IS NOT A SERIALISER, and dandiya is where that distinction
+bites.** Two desks resolving different sticks of one pair write different
+`dandiya_loan_holders` rows, so they never conflict and nothing orders them.
+Under READ COMMITTED each statement takes a fresh snapshot, so each one's
+close query sees the other's stick still out, neither close matches, and both
+commit with the loan left open. The resolution writer therefore takes
+`SELECT ... FOR UPDATE` on the owning `dandiya_loans` row as the FIRST
+statement of the transaction, and the row lock — not a constraint and not a
+compare-and-set — is what serialises them.
+
+That is a claim about transaction visibility, which `db:check` cannot test and
+the stand-in database in `scripts/verification/` cannot either. It is proved
+by `pnpm db:smoke:dandiya`, a gated Development-only script that runs the real
+writer concurrently against a live branch. See `docs/DANDIYA.md`.
+
 **One prize check proves an ABSENCE.** `0004_repeat_prize_awards.sql` dropped
 P1's `UNIQUE(event_id, badge_number)` because repeat winners became the event
 rule, so `db:check` reports
@@ -257,11 +311,15 @@ journaled migration (`0001_range_guards_and_touch.sql`) generated with
 | `0002_device_credentials.sql` | `devices.password_hash`, `devices.session_version` and its `>= 1` check |
 | `0003_prize_awards.sql` | `prize_awards` — the prize ledger, its `UNIQUE(event_id, badge_number)`, three checks, both foreign keys and the same-event composite key |
 | `0004_repeat_prize_awards.sql` | Removes that `UNIQUE`, so one attendee may receive several prizes. Nothing replaces it |
+| `0005_dandiya_checkout.sql` | `dandiya_loans` and `dandiya_loan_holders` — the dandiya lending ledger, its two PARTIAL unique indexes, the per-stick resolution and loan-close pairing checks, both release rules, the outcome and resolution value checks, the canonical pair-code check, the slot check and every cross-event foreign key |
 
 `0002` is **additive only**: two `ADD COLUMN`s and two `ADD CONSTRAINT`s. It
 drops nothing, deletes nothing and rewrites no row. Every existing device keeps
 its data and comes out with `password_hash = NULL` — unprovisioned, which is
 the correct starting state — and `session_version = 1`.
+
+`0005` is additive: two new tables, their constraints and their indexes. It
+alters only the tables it created, to attach their foreign keys.
 
 `0004` is the one migration that **removes** something, and it removes only a
 constraint — no table, no column, no row. It exists as its own file because
