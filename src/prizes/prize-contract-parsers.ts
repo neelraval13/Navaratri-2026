@@ -1,3 +1,7 @@
+import {
+  parseCngMemberList,
+  parseCngPrizeAwardList,
+} from '@/cng/cng-contract-parsers'
 import { parseAttendeeList, parseEventAttendee } from '@/shared/attendee-contract'
 import type { PrizeAttendee, PrizeAward, PrizeRosterResponse } from '@/shared/prize-contract'
 
@@ -88,6 +92,13 @@ export const parsePrizeAward = (value: unknown): PrizeAward | null => {
  * ONE bad entry rejects the WHOLE response rather than being dropped. A prize
  * desk working from a silently shortened attendee list would conclude an
  * attendee is not registered, and that is worse than an honest error.
+ *
+ * FOUR LISTS, each validated by the module that owns its shape: attendees by
+ * the shared contract, attendee awards here, and the CNG group and CNG awards
+ * by `src/cng/cng-contract-parsers.ts`. A malformed list rejects the WHOLE
+ * response rather than yielding an empty one — a desk told the group is empty
+ * would add every volunteer a second time, and an empty award history would
+ * under-report what the event has given out.
  */
 export const parsePrizeRosterResponse = (
   body: unknown,
@@ -97,8 +108,10 @@ export const parsePrizeRosterResponse = (
   }
 
   const attendees = parseAttendeeList(body.attendees)
+  const cng = parseCngMemberList(body.cng)
+  const cngAwards = parseCngPrizeAwardList(body.cngAwards)
 
-  if (attendees === null) {
+  if (attendees === null || cng === null || cngAwards === null) {
     return null
   }
 
@@ -117,5 +130,5 @@ export const parsePrizeRosterResponse = (
     awards.push(award)
   }
 
-  return { attendees, awards }
+  return { attendees, awards, cng, cngAwards }
 }

@@ -1922,10 +1922,13 @@ attendee ledger. IndexedDB remains the offline workflow state.
 
 ATTENDEE PII IS NEVER STORED CENTRALLY — no name, phone, age, gender, payment,
 held or completed registration — unless a later explicit architecture change
-says otherwise. Phase P1 added `prize_awards`, Phase P1.1 relaxed it and
-Phase D3 added `dandiya_loans` and `dandiya_loan_holders` — and none of them
-changed this: those tables record badge NUMBERS, a prize name or a pair code,
-devices and times, and the people behind the badges stay in Google Sheets. The prize DIVISION — Boy, Girl, Male, Female — is part of the prize
+says otherwise. Phase P1 added `prize_awards`, Phase P1.1 relaxed it, Phase D3
+added `dandiya_loans` and `dandiya_loan_holders`, and Phase CNG1 added
+`cng_members` — and none of them changed this: those tables record badge
+NUMBERS, a prize name or a pair code, devices and times, and the people behind
+the badges stay in Google Sheets. `cng_members` is the one most exposed to it,
+because the organiser supplies their volunteers as NAMES; names are resolved
+to badges in the BROWSER and only the badge number is ever sent. The prize DIVISION — Boy, Girl, Male, Female — is part of the prize
 name, never a fact recorded about an attendee, and nothing infers one from
 the ledger.
 
@@ -1964,7 +1967,7 @@ screen.
 
 - `/` is Home, the module launcher
 - `/badge-registration` owns the attendee badge workflow
-- `/prizes` owns prize distribution
+- `/prizes` owns prize distribution and the CNG volunteer group
 - `/attendees` is the READ-ONLY attendee directory
 - `/dandiya` owns dandiya pair checkout, per-stick return and loss
 - `/device-registration` owns physical device provisioning and readiness
@@ -2436,11 +2439,17 @@ prizes · sync-registration
 
 Phase D2 freed three slots by DELETING the operator realm, not by
 consolidating it. Those three names must never reappear under `api/`. Phase P1
-then spent one on `prizes`, which serves the whole prize module through two
-method exports rather than three endpoints, Phase A1 spent one on
+then spent one on `prizes`, which serves the whole prize module through
+method exports rather than separate endpoints — two at the time, four since
+Phase CNG1 — Phase A1 spent one on
 `attendees`, which serves the directory through a single GET — its other four
 method exports exist only to answer 405 — and Phase D3 spent one on
 `dandiya`, which serves the whole checkout desk through GET, POST and PATCH.
+
+PHASE CNG1 SPENT NONE. The CNG volunteer group became two more method exports
+on `api/prizes.ts` — PUT and DELETE — rather than an `api/cng.ts`, because it
+is the same screen, the same roster read and the same Badge Register join. The
+inventory and the headroom are both unchanged, and `release:check` pins both.
 
 A shared helper NEVER belongs under `api/` — it costs a deployment Function
 for nothing. Helpers live in `server/` or `src/shared/`. `release:check` fails
@@ -2728,11 +2737,26 @@ A `registration`-only device is refused. A device with both may use both. An
 Admin cookie authorizes nothing here, and `api/prizes.ts` imports no Admin
 code.
 
-ONE FUNCTION, dispatched by method: `GET /api/prizes` returns the attendees
-and the history, `POST /api/prizes` awards. Separate list, history and award
-endpoints would cost three of twelve deployment Functions for one screen.
+ONE FUNCTION, dispatched by method, and since Phase CNG1.1 by five of them:
 
-The body is `badgeNumber` and `prizeName` and nothing else. `eventId`,
+```
+GET    /api/prizes   the attendees, both award histories, and the CNG group
+POST   /api/prizes   award one prize to one badge
+PUT    /api/prizes   add one CNG member, by name
+DELETE /api/prizes   soft-remove one CNG member
+PATCH  /api/prizes   award one prize to one CNG member
+```
+
+Separate list, history, award and membership endpoints would cost five of
+twelve deployment Functions for one screen. The METHOD is the dispatcher,
+never `?action=` and never an `action` field in a body.
+
+THE THREE VOLUNTEER METHODS ARE NOT BADGE METHODS. A CNG member is a NAME and
+a row id, never a badge number or a subset of the attendees — see CNG
+Volunteers for their exact contracts, and for why PUT carries a
+client-generated id. `badgeNumber` in one of those bodies is REFUSED.
+
+The POST body is `badgeNumber` and `prizeName` and nothing else. `eventId`,
 `eventSlug`, `deviceId`, `loginName`, `awardedAt`, `awardedBy`, `attendee`,
 `name`, `age` and `gender` are REFUSED rather than ignored — the session
 identifies the device and the event, the database stamps the time, and an
@@ -2780,6 +2804,200 @@ unless `--confirm` is passed, `VERCEL_ENV` is exactly `development`,
 `SYNC_ALLOWED_VERCEL_ENV` is exactly `development`, and the real interlock
 agrees. It is idempotent, its cleanup blanks only its own rows in place, and
 it never deletes a row. See `docs/PRIZES.md`.
+
+## CNG Volunteers
+
+`/prizes` carries a third tab — the event's volunteer group — and the Awards
+tab groups both ledgers' history by date. Added in Phase CNG1; Phase CNG1.1
+corrected the domain model.
+
+```
+Attendees (45)   CNG (23)   Awards (79)
+```
+
+A CNG MEMBER IS A VOLUNTEER, IDENTIFIED BY NAME. CNG1 modelled them as a
+registered attendee keyed by BADGE NUMBER and resolved pasted names against
+the Badge Register. THAT WAS WRONG: CNG members do not wear the numbered
+attendee badges and most never pass the registration desk, so most are not in
+the register and there is no badge to key them by. Representing them under
+that model would have meant INVENTING one — a fake, negative or synthetic
+badge that sorts, matches a badge search and collides with a real attendee's,
+or a synthetic registration for somebody who never registered.
+
+```
+cng_members   event_id · name · added_by_device_id · added_at
+                       · removed_at? · removed_by_device_id?
+```
+
+STORING THE NAME CENTRALLY IS DELIBERATE, and an explicit product-required
+change to the privacy boundary rather than an erosion of it. It is the ONE
+person field either CNG table holds: no phone, age, gender, WhatsApp link or
+payment, and none may be added — none of them are needed to hand somebody a
+prize. THE BADGE REGISTER IS NOT READ when a member is added, and
+`badgeNumber` in any CNG body is REFUSED rather than ignored.
+
+THE NAME IS NOT UNIQUE AND MUST NOT BE MADE SO. Two volunteers may genuinely
+share one, and refusing the second would refuse a real person. The row's UUID
+is the identity; the name is what a human reads. It is TEXT, trimmed before
+storage, non-empty after trimming and bounded at 120 characters, through one
+shared rule in `src/shared/cng-contract.ts` that the Add form and the server
+both read.
+
+REMOVAL IS SOFT, AND THAT IS A REQUIREMENT. `cng_prize_awards` references
+these rows with `ON DELETE restrict`, so a volunteer who has received a prize
+CANNOT be deleted — and history has to say who received it. A removal stamps
+`removed_at` with the removing device, as ONE fact enforced by
+`cng_members_removal_paired`, and the ACTIVE roster is `removed_at IS NULL`.
+It removes NOTHING else: not an attendee, not a registration, not a badge, not
+an award. `server/cng/members.ts` imports none of those tables.
+
+### The CNG Prize Ledger
+
+```
+cng_prize_awards   event_id · cng_member_id · prize_name
+                            · awarded_by_device_id · awarded_at
+```
+
+SEPARATE FROM `prize_awards`, AND THAT SEPARATION IS THE POINT. The attendee
+ledger is keyed by BADGE NUMBER and is Production-live with real history.
+Recording a volunteer's prize there would have meant making `badge_number`
+nullable, putting a fake value in it, or overloading it with an identity it
+does not describe. `prize_awards` is therefore UNTOUCHED — still six columns,
+still badge-based — and volunteers get their own table.
+
+ONE COPY OF A PERSON'S NAME. The award row holds a member REFERENCE; the name
+lives once on `cng_members` and is joined per request.
+
+REPEAT PRIZES ARE LEGAL, as they are for attendees since Phase P1.1. There is
+NO uniqueness here of any kind and none may be added. The ledger is
+APPEND-ONLY: no undo, no delete, no edit, so no `updated_at`. The prize itself
+comes from the SAME eight-label catalog attendees use.
+
+A REMOVED MEMBER MAY NOT RECEIVE A NEW PRIZE, and the DATABASE decides it. The
+insert is an `INSERT ... SELECT` whose source is the member row filtered to
+this event and `removed_at IS NULL`; when the member is gone or removed the
+select yields nothing, no row is written, and the EMPTY `RETURNING` is the
+verdict. A `SELECT` then `INSERT` would only move the race — the mistake this
+project already made once on the dandiya issuance path.
+
+`server/cng/members.ts` is the ONLY module that WRITES `cng_members`, and
+`server/cng/awards.ts` the only one that touches `cng_prize_awards`. The
+award writer may READ the membership — its guarded insert selects from it and
+the name join needs it — but may not write one. Neither prize writer can
+reach the other's table.
+
+### The CNG API
+
+ONE FUNCTION, five methods. `api/` holds eleven of twelve and this phase
+spends none: there is no `api/cng.ts`.
+
+```
+GET    /api/prizes   the attendees, both award histories, the ACTIVE group
+POST   /api/prizes   { badgeNumber, prizeName }   attendees — UNCHANGED
+PUT    /api/prizes   { cngMemberId, name }        add a CNG member
+DELETE /api/prizes   { cngMemberId }              soft-remove a member
+PATCH  /api/prizes   { cngMemberId, prizeName }   award a CNG prize
+```
+
+EACH METHOD HAS AN EXACT CONTRACT, not a shared deny-list. A key outside the
+method's own set is refused BY NAME, which is the only way `name` can be
+legal on PUT and refused on DELETE and PATCH. `name` is therefore NOT in the
+shared forbidden list; `badgeNumber`, `badge`, `eventId`, `eventSlug`,
+`deviceId`, `loginName`, the timestamps, the acting devices, `id`, and every
+attendee fact are.
+
+PUT IS IDEMPOTENT ON A CLIENT-GENERATED ROW UUID, and it has to be. A
+volunteer list is added one request at a time, so a lost response must be
+safe to repeat — and the NAME cannot be the key, because two volunteers may
+genuinely share one and refusing the second would refuse a real person. The
+BROWSER mints `cngMemberId` once, when the add is prepared: once per open Add
+dialog, once per previewed name in Bulk Add, never per submission. The server
+accepts it ONLY as the idempotency key — it still stamps the time and the
+acting device itself — and the insert is `ON CONFLICT DO NOTHING` TARGETED at
+the primary key, never bare.
+
+```
+same id, same name       200 already-member   the retry of a lost response
+same id, different name  409 cng-id-in-use    REFUSED, never overwritten
+two ids, same name       201 twice            two real people
+```
+
+PATCH IS DELIBERATELY SEPARATE FROM POST. One carries a badge and appends to
+the attendee ledger; the other carries a member id and appends to the
+volunteer one. No body shape could be read as either, so the live badge-based
+semantics cannot drift and no path lets a volunteer's identity reach
+`prize_awards`.
+
+A NAME IS NOT AN IDENTITY FOR REMOVAL OR AWARDING. Both take the row's UUID,
+and `name` in those bodies is refused: two members may share one, and acting
+on "whoever is called that" could act on the wrong person.
+
+AUTHORIZATION IS `prizes` AND NOTHING NEW — a live device session with the
+CURRENT attribute, re-read from Postgres on every request. No new device
+attribute, and therefore no migration for one.
+
+### The Volunteer List Is Pasted, Never Compiled In
+
+The organiser's list arrives as NAMES. **Bulk Add Names** takes a paste and
+every non-empty line becomes a member — it RESOLVES NOTHING. There is no
+Badge Register read, no fuzzy matching, no badge, age or gender lookup. Lines
+split on `\r\n`, `\r` and `\n`, each is trimmed, blanks are dropped, a
+duplicate is KEPT, and a numbered preview shows exactly what will be added
+before anything is.
+
+THE PASTED TEXT LIVES IN COMPONENT MEMORY AND NOWHERE ELSE — never Postgres
+as text, the Sheet, IndexedDB, `localStorage`, `sessionStorage`, a URL or
+query parameter, a log line or an analytics call. Each confirmed name is ONE
+`PUT /api/prizes { cngMemberId, name }`, sent sequentially through the same
+call the single Add makes; THERE IS NO BULK ENDPOINT. The ids are minted with
+the PREVIEW and stay stable while the dialog is open, so a run that failed
+part-way through can simply be repeated: the members already added answer
+`already-member` and nobody is added twice. Closing the dialog DISCARDS the
+list, and that is structural: the desk renders it conditionally rather than
+behind an `open` flag, so closing it unmounts the component.
+
+NO REAL VOLUNTEER NAME MAY BE HARD-CODED in client source, server source, a
+migration, a documentation fixture, a test fixture or a production bundle.
+CNG1 first shipped the list as a constant in `src/cng/`, reasoning that client
+source is browser-only — THAT WAS WRONG, and the reason must stay written
+down: client source is COMPILED INTO THE BROWSER BUNDLE, so the list would
+have been downloadable by anyone who opened the page. `release:check` fails on
+a name-list module or constant being imported or declared anywhere.
+
+### The CNG Screen
+
+Cards show a NAME and `CNG Member` — NO badge, age or gender, because a
+volunteer has none of those. Add is one typed name, shown back trimmed before
+the row exists. Give Prize opens the same eight prizes with NO demographic
+suggestion, because there is nothing to derive one from.
+
+`server/cng/members.ts` and `server/cng/awards.ts` are the only modules that
+touch their tables. Do not add a second writer. See `docs/CNG.md`.
+
+### Prize History Is Grouped By The Event's Day
+
+The Awards tab groups by EVENT-LOCAL calendar date, newest date first, newest
+award first within a date, the latest date expanded and older ones collapsed.
+Every date heading is a button carrying its own award count, and a card shows
+the TIME ONLY — the date is the heading above it.
+
+THE DAY IS ASIA/KOLKATA, through the ONE shared definition. `eventDayKey` in
+`src/shared/event-time.ts` is the same one the dandiya counters and the
+server's own history window use. NEVER the browser's timezone and never the
+server's: a tablet set to UTC would file an 11:30 PM IST award under the
+previous night, and two tablets would then show two different histories of the
+same ledger. `23:59` and `00:01` IST are different groups, which is the whole
+point. `release:check` fails on `getDate`, `getMonth`, `getFullYear`,
+`toLocaleDateString`, `getTimezoneOffset`, a hardcoded `Asia/Kolkata` or
+`+05:30`, and on reading the clock at all, in the grouping module or the tab.
+
+IT IS PRESENTATION ONLY. No award is moved between days, merged, counted
+twice, reordered within its day or altered in any field; `awarded_at` is read
+and never written, and the grouping is PURE — no `Date.now()`, so the same
+input always produces the same output. The invariant is checked directly:
+flattening the groups reproduces the input array exactly, field for field. An
+award whose timestamp cannot be read keeps its row and sorts last rather than
+being dropped. History stays append-only: no undo, no delete, no edit.
 
 ## Attendee Directory
 

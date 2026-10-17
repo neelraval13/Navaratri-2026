@@ -35,6 +35,8 @@ different places on purpose.
 |---|---|---|
 | **Google Sheets** — `Badge Register` | badge, name, phone, age, gender, payment | — |
 | **Postgres** — `prize_awards` | event, badge number, prize name, awarding device, timestamp | any attendee data at all |
+| **Postgres** — `cng_members` | event, volunteer **name**, adding device, timestamps | phone, age, gender, payment, WhatsApp |
+| **Postgres** — `cng_prize_awards` | event, CNG member reference, prize name, awarding device, timestamp | any person data at all |
 
 The prize screen needs a name beside a badge number, so the name is **read**
 from the Sheet on every request and joined to the ledger in the response. It
@@ -45,6 +47,14 @@ is how two sources of truth begin to disagree.
 
 The phone number and the WhatsApp link are not merely unstored — they are
 never read. The prize desk identifies an attendee by the badge in their hand.
+
+**Phase CNG1.1 moved that line for CNG members, deliberately.** A volunteer
+has no badge and no Sheet row, so their NAME is stored centrally — it is the
+only thing that can identify them, and it is the one person field either CNG
+table holds. Everything else is still refused: no phone, age, gender, payment
+or WhatsApp, and no badge in any form. The organiser's actual list is still
+not part of the application — it is pasted at runtime and discarded when the
+dialog closes. See `docs/CNG.md`.
 
 ---
 
@@ -99,14 +109,19 @@ the moment.
 
 ## The screen
 
-Two tabs, counting different things:
+Three tabs since Phase CNG1, counting different things:
 
 ```
 Attendees (45)   every registered attendee, winners included
+CNG (23)         the volunteer group: named people with no attendee badge
 Awards (2)       every award RECORD, so one badge may appear twice
 ```
 
 The attendee count does not move when a prize is given; the award count does.
+The CNG tab lists DIFFERENT people: event volunteers, who do not wear the
+numbered attendee badges and are mostly not in the register at all. They
+receive prizes through their own ledger, `cng_prize_awards`, so the attendee
+ledger never has to describe somebody without a badge. See `docs/CNG.md`.
 
 ```
 Before award        After one award to #9005      After another
@@ -119,14 +134,42 @@ badge already holds prizes. Search, the age window, the gender filter and
 Clear filters all work over **every** registered attendee: searching `9005`
 after #9005 has won three times still returns #9005.
 
-The history tab is newest-first and lists one row per award, so repeated badge
-numbers are expected and are never grouped.
+The history tab lists one row per award, from BOTH ledgers, so repeated badge
+numbers are expected and are never collapsed into one entry. An attendee row
+leads with the badge; a volunteer row leads with `CNG` and their name, and no
+badge is fabricated for them. Since Phase CNG1 the rows are
+GROUPED BY EVENT-LOCAL DATE — newest night first, newest award first within a
+night, the latest night expanded and older ones collapsed behind a clickable
+heading that carries its own award count. A card shows the TIME only; the date
+is the heading above it.
+
+The day is Asia/Kolkata, through the one shared `eventDayKey` the dandiya
+counters use — never the browser's zone, so two tablets cannot disagree about
+which night a prize was given on. The grouping is presentation only: nothing
+is moved between days, reordered within a day or altered in any field.
 
 ---
 
 ## The API
 
-One Function, dispatched by method.
+One Function, dispatched by method — five of them since Phase CNG1.1:
+
+```
+GET    /api/prizes   the attendees, both award histories, the CNG group
+POST   /api/prizes   award one prize to one BADGE      (attendees)
+PUT    /api/prizes   add one CNG member, by NAME
+DELETE /api/prizes   soft-remove one CNG member, by ID
+PATCH  /api/prizes   award one prize to one CNG member
+```
+
+`PUT`, `DELETE` and `PATCH` belong to the CNG volunteer group and are
+documented in `docs/CNG.md`, including the exact body each one takes and why
+`PUT` carries a client-generated `cngMemberId` as its idempotency key. **`PATCH` awards a prize to a volunteer and
+writes `cng_prize_awards`, a separate table** — a volunteer has no badge, so
+recording it here would have meant making `badge_number` nullable or
+inventing a value. None of the three reaches any prize-ledger code:
+`prize_awards` stays append-only and badge-based, and `recordPrizeAward`
+still has exactly one call site.
 
 ### `GET /api/prizes`
 
@@ -451,6 +494,10 @@ chooser and previous-prize warning — the last two rendered with
 produces nothing at all server-side.
 
 Postgres, the Sheets API and HTTP are stood in for. It never opens a socket.
+
+Phase CNG1's own suite is `pnpm verify:cng1`, which proves the CNG group
+stores only badge numbers and that prize history survives the regrouping
+verbatim. Both run inside `pnpm verify`.
 
 The P1 assertions that proved a second prize was *refused* were rewritten
 rather than deleted: the same situations, with the opposite expected outcome.

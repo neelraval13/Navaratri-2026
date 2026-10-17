@@ -364,6 +364,32 @@ twice**, so `0005` must be applied before the event.
 | 3.84e | Volunteers briefed that after midnight an unresolved pair stays in **Active** and becomes **carryover**: the banner is the next-day reminder, and **Active → Carryover** lists exactly those pairs. Nothing is reset at midnight — a pair stops being outstanding only when somebody resolves its sticks | ☐ |
 | 3.85 | The venue has connectivity at the dandiya table, and volunteers know the desk stops working without it | ☐ |
 
+### CNG volunteers and date-grouped prize history (Phase CNG1 / CNG1.1)
+
+| # | Item | ✔ |
+|---|---|---|
+| 3.86 | `0007_cng_members.sql` and `0008_cng_named_members.sql` reviewed, then applied **in that order** to Production by hand — never from a build. Development has already had 0007 and needs **only 0008** | ☐ |
+| 3.86a | Before migrating, confirm `cng_members` is **empty** in the target database. 0008 raises and refuses otherwise: it changes what a membership MEANS, from a badge number to a name, and there is no honest conversion | ☐ |
+| 3.86b | `pnpm db:check` output includes `table cng_members`, `table cng_prize_awards`, `CNG member name non-empty`, `CNG member name length bounded`, `a CNG removal records its time and its device together`, `CNG prize belongs to a CNG member, who cannot then be deleted`, `two CNG members may share a name` and `repeated CNG prize awards are allowed` | ☐ |
+| 3.86c | `pnpm db:check` still reports `repeated prize awards are allowed` and `prize ledger holds exactly its 6 columns, all NOT NULL`. **`prize_awards` is sacred** and 0008 must not have touched it | ☐ |
+| 3.86d | On `/prizes` the tab bar reads **Attendees (N) · CNG (N) · Awards (N)**, and the Awards count equals attendee + CNG records | ☐ |
+| 3.86e | A CNG card shows a **name** and `CNG Member` — and **no badge, age or gender**, because a volunteer has none. If a badge appears anywhere on that tab, stop and report it | ☐ |
+| 3.86f | The organiser's volunteer list **pasted at runtime** into **Bulk Add Names** — it is not built into the application and must never be. One name per line; blank lines ignored; the preview shows exactly what will be added | ☐ |
+| 3.86g | Volunteers briefed that a CNG name is **not matched against the attendee register** — a volunteer need not be registered, and nothing is looked up | ☐ |
+| 3.86h | Two CNG members with the **same name** confirmed to be accepted as two separate people, and removable independently | ☐ |
+| 3.86i | **Remove from CNG** confirmed to take the member off the list while their prize history stays, still showing their name. Nothing about any attendee, registration or badge changes | ☐ |
+| 3.86j | A **removed** member confirmed to receive no new prize — the desk says they are no longer in the group — while an active member still can | ☐ |
+| 3.86k | Give Prize from a CNG card confirmed to record against the volunteer, and the attendee prize workflow confirmed unchanged: badge in, badge row out, repeats still allowed | ☐ |
+| 3.86l | The Awards tab checked across **two different nights**: the latest night expanded, older nights collapsed, each heading showing its own count, each card showing a **time** with no date, and attendee and CNG awards interleaved by time under the same heading | ☐ |
+| 3.86m | Date grouping confirmed in **event time** — an award given after 11:30 PM IST appears under the night it was given on, on every tablet whatever its own timezone | ☐ |
+| 3.86n | Existing prize history checked after the upgrade: every attendee award still present, with its badge, prize, person and awarding device unchanged | ☐ |
+
+**Nothing is seeded, and no name is compiled in.** No migration and no script
+inserts a CNG membership, and the organiser's real list exists only in the
+paste that creates it — closing the dialog discards it.
+
+
+
 **Midnight returns nothing.** The counters and the history filter roll over in
 event time; open loans, stick resolutions and pair availability do not. If somebody
 reports a pair "still showing from last night", that is correct behaviour and

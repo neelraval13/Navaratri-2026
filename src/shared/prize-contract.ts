@@ -20,6 +20,7 @@
  */
 
 import type { AttendeeGender, EventAttendee } from './attendee-contract.js'
+import type { CngMember, CngPrizeAward } from './cng-contract.js'
 
 /**
  * The attendee shape, from the ONE module that owns it.
@@ -62,7 +63,15 @@ export interface PrizeAward {
   attendee: PrizeAttendee | null
 }
 
-export interface PrizeRosterResponse {
+/**
+ * The two lists the PRIZE module itself owns.
+ *
+ * Separated from the response below because `composePrizeRoster` produces
+ * exactly these and knows nothing about the CNG group — which is the honest
+ * shape: the prize composer must not be able to touch membership, and a
+ * single interface would have given it a field to fill.
+ */
+export interface PrizeRosterLists {
   /**
    * EVERY registered attendee in the Badge Register, badge-ascending.
    *
@@ -73,6 +82,33 @@ export interface PrizeRosterResponse {
   attendees: PrizeAttendee[]
   /** Every award record, newest first. Repeated badge numbers are normal. */
   awards: PrizeAward[]
+}
+
+export interface PrizeRosterResponse extends PrizeRosterLists {
+  /**
+   * THE ACTIVE CNG VOLUNTEER GROUP, oldest first — Phase CNG1, corrected by
+   * Phase CNG1.1.
+   *
+   * NOT a subset of `attendees`. CNG1 modelled a member as a badge number on
+   * the assumption that a volunteer was a registered attendee; they are not,
+   * so a member is now a NAME and the two lists describe different people
+   * entirely. A volunteer has no badge, no age and no gender here.
+   *
+   * It travels with the roster because it is the same screen, loaded in the
+   * one request it already makes. See `src/shared/cng-contract.ts`.
+   */
+  cng: CngMember[]
+  /**
+   * EVERY CNG PRIZE, newest first, including those of members who have since
+   * been removed — removal is soft precisely so history can still name its
+   * recipient.
+   *
+   * A SEPARATE LIST FROM `awards`, and separate on the wire deliberately:
+   * they are different ledgers with different identities, a badge number and
+   * a member id. The client combines them for DISPLAY; merging them here
+   * would mean inventing a field one of them does not have.
+   */
+  cngAwards: CngPrizeAward[]
 }
 
 /* -------------------------------------------------------- the prize catalog */

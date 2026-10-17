@@ -16,7 +16,7 @@ One origin, real pathnames, one storage namespace:
 | `/` | Home — event operations launcher |
 | `/badge-registration` | Attendee badge workflow |
 | `/attendees` | Read-only attendee directory |
-| `/prizes` | Prize distribution |
+| `/prizes` | Prize distribution and the CNG volunteer group |
 | `/dandiya` | Dandiya pair checkout and return |
 | `/device-registration` | Provision and inspect this physical device |
 
@@ -356,6 +356,68 @@ env VERCEL_ENV=development node scripts/seed-prizes-development.mjs --cleanup --
 It cannot seed Production: `--confirm`, `VERCEL_ENV=development`,
 `SYNC_ALLOWED_VERCEL_ENV=development` and the real release interlock must all
 agree. See **[docs/PRIZES.md](docs/PRIZES.md)**.
+
+## Phase CNG1 / CNG1.1 — CNG volunteers, and date-grouped prize history
+
+`/prizes` carries a third tab — **CNG**, the event's volunteer group — and the
+Awards tab groups both ledgers by date.
+
+```
+Attendees (45)   CNG (23)   Awards (79)
+```
+
+**A CNG member is a volunteer, identified by name.** CNG1 modelled them as a
+registered attendee keyed by a badge number; CNG1.1 corrected that. Volunteers
+do not wear the numbered attendee badges and most never pass the registration
+desk, so there is no badge to key them by — and inventing one, fake, negative
+or synthetic, would sort, match a badge search and collide with a real
+attendee's.
+
+`cng_members` holds the event, the **name**, the adding device, the time, and
+a soft-removal stamp. **Storing the name is deliberate** and it is the one
+person field either CNG table holds: no phone, age, gender, WhatsApp link or
+payment, and the Badge Register is **not read** when a member is added. The
+name is **not unique** — two volunteers may genuinely share one — so the row's
+UUID is the identity.
+
+**Removal is soft**, because `cng_prize_awards` points at those rows with
+`ON DELETE restrict`: a volunteer who has received a prize cannot be deleted,
+and history has to be able to name them. A removal takes them off the active
+list and changes nothing else.
+
+**Volunteers get their own prize ledger.** `cng_prize_awards` records a member
+reference, a prize, a device and a time — so `prize_awards` stays exactly what
+it was: six columns, badge-based, `badge_number` NOT NULL. Repeat prizes are
+legal in both, and both are append-only. A removed member receives no new
+prize, decided by the database as a predicate on the write rather than a read
+above it.
+
+Three more methods on the existing Function, so **no deployment Function was
+spent** — `api/` still holds eleven of twelve:
+
+```
+PUT    /api/prizes   { name }                     add a CNG member
+DELETE /api/prizes   { cngMemberId }              soft-remove a member
+PATCH  /api/prizes   { cngMemberId, prizeName }   award a CNG prize
+```
+
+`PATCH` is separate from `POST` on purpose: no body shape could be read as
+either, so the live badge-based award contract cannot drift.
+
+**The organiser's list is pasted at runtime, never compiled in.** **Bulk Add
+Names** takes one name per line and resolves nothing — no register read, no
+matching, no badge. The text lives in component memory and nowhere else, each
+confirmed name is one ordinary `PUT`, and closing the dialog unmounts it so
+React discards the list. CNG1 first shipped the names as a constant in client
+source, which is bundled to the browser; that is why they are not.
+
+Award history is grouped by **event-local date**, newest night first, with
+attendee and volunteer prizes interleaved by time under the same headings. An
+attendee row leads with the badge; a volunteer row leads with `CNG` and their
+name, and **no badge is fabricated**. Search covers an attendee badge, an
+attendee name, a CNG name or a prize.
+
+See **[docs/CNG.md](docs/CNG.md)**.
 
 ## Phase A1 — read-only attendee directory
 
@@ -729,6 +791,8 @@ Three documents cover event-device setup:
   directory, its permission model and the shared Badge Register reader
 - **[docs/PRIZES.md](docs/PRIZES.md)** — the prize module, its privacy
   boundary, and the Development fixture procedure
+- **[docs/CNG.md](docs/CNG.md)** — the CNG volunteer group, how organiser
+  names are resolved to badges, and the date-grouped award history
 - **[docs/VERCEL_FIREWALL.md](docs/VERCEL_FIREWALL.md)** — the device and
   admin sign-in rate-limit rules
 

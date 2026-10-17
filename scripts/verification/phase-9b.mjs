@@ -1013,16 +1013,17 @@ check('badge allocation remains local',
 const migrations = readdirSync(join(root, 'drizzle')).filter((f) => f.endsWith('.sql')).sort()
 /**
  * Phase 9B needed no migration of its own. 0002 belongs to Phase 9C-A, 0003
- * and 0004 to the prize phases and 0005 to dandiya, so they are excluded by
- * name rather than by trimming the expectation — the point is that 9B
- * contributed nothing, not that the directory has a particular length.
+ * and 0004 to the prize phases, 0005 and 0006 to dandiya and 0007 to the CNG
+ * group, so they are excluded by name rather than by trimming the expectation
+ * — the point is that 9B contributed nothing, not that the directory has a
+ * particular length.
  */
 check('9B added no migration',
-  migrations.filter((file) => !/^000[23456]_/.test(file)),
+  migrations.filter((file) => !/^000[2345678]_/.test(file)),
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql'])
 check('  and no later migration touched an Admin table',
   ['0003_prize_awards.sql', '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
-   '0006_dandiya_badgeless_issuance.sql']
+   '0006_dandiya_badgeless_issuance.sql', '0007_cng_members.sql']
     .some((file) => /ALTER TABLE "(devices|device_attributes|events)"/.test(read(`drizzle/${file}`))),
   false)
 const schemaSource = stripComments(read('server/db/schema.ts'))

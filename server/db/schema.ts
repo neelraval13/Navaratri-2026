@@ -300,6 +300,190 @@ export const prizeAwards = pgTable(
 )
 
 /**
+ * CNG MEMBERSHIP — Phase CNG1, corrected by Phase CNG1.1. The event's
+ * volunteer group, recorded BY NAME.
+ *
+ * CNG1 MODELLED A MEMBER AS A BADGE NUMBER, AND THAT WAS WRONG. It assumed a
+ * volunteer was a registered attendee who could be found in the Badge
+ * Register. They are not: CNG members are event volunteers, they do not wear
+ * the numbered attendee badges, and most of them never pass the registration
+ * desk at all. A badge-keyed membership could not represent them without
+ * inventing a badge — and a fake, negative or synthetic badge number would
+ * sort, match a search and collide with a real attendee's.
+ *
+ * SO THE NAME IS THE IDENTITY, AND STORING IT CENTRALLY IS DELIBERATE. This
+ * is an explicit, product-required change to the privacy boundary rather than
+ * an erosion of it: `name` is the ONE person field this table may hold.
+ * There is no phone, age, gender, WhatsApp link or payment column, and none
+ * may be added — those facts are not needed to hand somebody a prize, and the
+ * Badge Register is not read when a member is added.
+ *
+ * `name` IS NOT UNIQUE, and must not be made so. Two volunteers may genuinely
+ * share a name, and refusing the second one would be refusing a real person.
+ * The row's UUID is the identity; the name is what a human reads.
+ *
+ * REMOVAL IS SOFT, because the award ledger below points at these rows. A
+ * `cng_prize_awards` row must still be able to say WHO received the prize
+ * months later, so a member who leaves the group is marked `removed_at`
+ * rather than deleted — and `ON DELETE restrict` on the award's foreign key
+ * makes a hard delete impossible anyway. The ACTIVE roster is
+ * `removed_at IS NULL`.
+ *
+ * A REMOVAL IS ONE FACT, so its two columns move together, and the removing
+ * device must belong to the same event as the membership — the same
+ * cross-event integrity every other ledger here has.
+ */
+export const cngMembers = pgTable(
+  'cng_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'restrict' }),
+    /**
+     * THE VOLUNTEER'S NAME, AS THE OPERATOR TYPED IT, trimmed.
+     *
+     * The one attendee-identifying value this table holds, and the only one
+     * it may ever hold. Bounded at 120 characters by the CHECK below: the
+     * application trims and bounds at its boundary, and this is the
+     * database's own floor so a future writer cannot store a blank or
+     * unbounded name whatever it believes it validated.
+     */
+    name: text('name').notNull(),
+    addedByDeviceId: uuid('added_by_device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'restrict' }),
+    addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Null means ACTIVE. Set together with the removing device, or neither. */
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+    removedByDeviceId: uuid('removed_by_device_id').references(() => devices.id, {
+      onDelete: 'restrict',
+    }),
+  },
+  (table) => [
+    /**
+     * The same cross-event integrity the badge assignments, the prize awards
+     * and the dandiya loans use: a membership cannot be recorded for one
+     * event by a device belonging to another.
+     */
+    foreignKey({
+      name: 'cng_members_device_event_fk',
+      columns: [table.addedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    /**
+     * Nor removed by one. A composite foreign key with any NULL column is not
+     * enforced (MATCH SIMPLE, the default), which is precisely the behaviour
+     * wanted for an ACTIVE member: nobody has removed them, so there is no
+     * removing device to check.
+     */
+    foreignKey({
+      name: 'cng_members_removed_device_event_fk',
+      columns: [table.removedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    /** So an award row can be tied to its member AND its event in one key. */
+    unique('cng_members_id_event_id_key').on(table.id, table.eventId),
+    index('cng_members_event_id_idx').on(table.eventId),
+    index('cng_members_added_by_device_id_idx').on(table.addedByDeviceId),
+    /**
+     * THERE IS DELIBERATELY NO UNIQUENESS OVER THE NAME. Two volunteers may
+     * share one, and the second person is not a duplicate of the first.
+     */
+    check('cng_members_name_not_empty', sql`length(btrim(${table.name})) > 0`),
+    check('cng_members_name_max_length', sql`length(${table.name}) <= 120`),
+    /**
+     * A REMOVAL IS ONE FACT, so its columns move together — the same rule a
+     * dandiya close and a stick resolution follow, for the same reason. A row
+     * with a removal time and no removing device is a membership nobody can
+     * account for.
+     */
+    check(
+      'cng_members_removal_paired',
+      sql`(${table.removedAt} is null) = (${table.removedByDeviceId} is null)`,
+    ),
+  ],
+)
+
+/**
+ * THE CNG PRIZE LEDGER — Phase CNG1.1. Which volunteer received which prize,
+ * from which device, when.
+ *
+ * SEPARATE FROM `prize_awards`, AND THAT SEPARATION IS THE POINT. The
+ * attendee ledger is keyed by BADGE NUMBER and is Production-live with real
+ * history. A volunteer has no badge, so recording their prize there would
+ * mean one of three things, all of them wrong: making `badge_number`
+ * nullable, putting a fake value in it, or overloading it with an identity it
+ * does not describe. `prize_awards` is therefore untouched — still six
+ * columns, still badge-based, still exactly what it was — and volunteers get
+ * their own table.
+ *
+ * NO ATTENDEE PII, AND NO VOLUNTEER PII EITHER. The row holds a member
+ * reference, a prize name, a device and a time; the volunteer's NAME lives
+ * once, on `cng_members`, and is joined per request. One copy of a person's
+ * name, in one place.
+ *
+ * REPEAT PRIZES ARE LEGAL, exactly as they are for attendees since Phase
+ * P1.1. There is NO uniqueness here of any kind and none may be added: a
+ * volunteer may win Best Dance and Best Dress, or the same prize twice.
+ *
+ * APPEND-ONLY from the product. No undo, no delete, no edit, so the row needs
+ * no `updated_at` and gets no `set_updated_at` trigger — `awarded_at` is the
+ * only time that means anything.
+ *
+ * `ON DELETE restrict` ON THE MEMBER IS LOAD-BEARING. It is what makes the
+ * soft removal above a requirement rather than a preference: history must
+ * still be able to name its recipient, so a member row with awards cannot be
+ * deleted at all.
+ */
+export const cngPrizeAwards = pgTable(
+  'cng_prize_awards',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'restrict' }),
+    cngMemberId: uuid('cng_member_id')
+      .notNull()
+      .references(() => cngMembers.id, { onDelete: 'restrict' }),
+    prizeName: text('prize_name').notNull(),
+    awardedByDeviceId: uuid('awarded_by_device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'restrict' }),
+    awardedAt: timestamp('awarded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    /** An award cannot pair one event's member with another event's row. */
+    foreignKey({
+      name: 'cng_prize_awards_member_event_fk',
+      columns: [table.cngMemberId, table.eventId],
+      foreignColumns: [cngMembers.id, cngMembers.eventId],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'cng_prize_awards_device_event_fk',
+      columns: [table.awardedByDeviceId, table.eventId],
+      foreignColumns: [devices.id, devices.eventId],
+    }).onDelete('restrict'),
+    index('cng_prize_awards_event_id_idx').on(table.eventId),
+    index('cng_prize_awards_cng_member_id_idx').on(table.cngMemberId),
+    index('cng_prize_awards_awarded_by_device_id_idx').on(table.awardedByDeviceId),
+    /**
+     * The same floor the attendee ledger has, and the same bound: the
+     * application validates the name against the shared eight-prize catalog,
+     * and these are the database's own guarantees underneath it.
+     */
+    check(
+      'cng_prize_awards_prize_name_not_empty',
+      sql`length(btrim(${table.prizeName})) > 0`,
+    ),
+    check(
+      'cng_prize_awards_prize_name_max_length',
+      sql`length(${table.prizeName}) <= 80`,
+    ),
+  ],
+)
+
+/**
  * A PHYSICAL DANDIYA PAIR, OUT ON LOAN. Which pair, to whom, by whom, when,
  * and how it ended.
  *
@@ -656,6 +840,10 @@ export type BadgeAssignment = typeof badgeAssignments.$inferSelect
 export type NewBadgeAssignment = typeof badgeAssignments.$inferInsert
 export type PrizeAward = typeof prizeAwards.$inferSelect
 export type NewPrizeAward = typeof prizeAwards.$inferInsert
+export type CngMember = typeof cngMembers.$inferSelect
+export type NewCngMember = typeof cngMembers.$inferInsert
+export type CngPrizeAward = typeof cngPrizeAwards.$inferSelect
+export type NewCngPrizeAward = typeof cngPrizeAwards.$inferInsert
 export type DandiyaLoan = typeof dandiyaLoans.$inferSelect
 export type NewDandiyaLoan = typeof dandiyaLoans.$inferInsert
 export type DandiyaLoanHolder = typeof dandiyaLoanHolders.$inferSelect

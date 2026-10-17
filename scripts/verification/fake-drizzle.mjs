@@ -32,6 +32,15 @@ export const prizeAwards = tableOf('prize_awards', [
   'id', 'eventId', 'badgeNumber', 'prizeName', 'awardedByDeviceId', 'awardedAt',
 ])
 
+export const cngMembers = tableOf('cng_members', [
+  'id', 'eventId', 'name', 'addedByDeviceId', 'addedAt',
+  'removedAt', 'removedByDeviceId',
+])
+
+export const cngPrizeAwards = tableOf('cng_prize_awards', [
+  'id', 'eventId', 'cngMemberId', 'prizeName', 'awardedByDeviceId', 'awardedAt',
+])
+
 export const dandiyaLoans = tableOf('dandiya_loans', [
   'id', 'eventId', 'pairCode', 'issuedByDeviceId', 'issuedAt',
   'closedAt', 'closedByDeviceId', 'outcome', 'pairReleasedAt',

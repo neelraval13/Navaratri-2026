@@ -44,18 +44,25 @@ const schemaSource = read('server/db/schema.ts')
 console.log('=== 1-17. SCHEMA ===')
 /**
  * RE-SCOPED BY PHASE D3, which added the two dandiya tables beside P1's prize
- * ledger.
+ * ledger, and again by PHASE CNG1.1, which added the CNG volunteer group and
+ * its own prize ledger — a volunteer has no badge, so their prizes cannot go
+ * in `prize_awards`.
  *
  * The inventory is pinned, not bounded, so a table cannot appear without a
  * decision. What 9A was really protecting is the PRIVACY boundary, and that
  * is asserted directly below rather than implied by a count: whatever tables
- * exist, NONE of them may hold attendee PII.
+ * exist, NONE of them may hold attendee PII — with ONE deliberate exception
+ * since Phase CNG1.1: `cng_members.name`. A volunteer has no badge and no
+ * Sheet row, so the name is the only thing that can identify them, and it is
+ * the one person field either CNG table holds. `verify:cng1` proves both
+ * column sets and `db:check` compares them for equality.
  */
-check('exactly seven central tables', Object.keys(schema).filter((k) => typeof schema[k] === 'object' && schema[k] !== null).sort(),
-  ['badgeAssignments', 'dandiyaLoanHolders', 'dandiyaLoans', 'deviceAttributes',
-   'devices', 'events', 'prizeAwards'])
+check('exactly nine central tables', Object.keys(schema).filter((k) => typeof schema[k] === 'object' && schema[k] !== null).sort(),
+  ['badgeAssignments', 'cngMembers', 'cngPrizeAwards', 'dandiyaLoanHolders',
+   'dandiyaLoans', 'deviceAttributes', 'devices', 'events', 'prizeAwards'])
 for (const t of ['events', 'devices', 'device_attributes', 'badge_assignments',
-  'prize_awards', 'dandiya_loans', 'dandiya_loan_holders'])
+  'prize_awards', 'dandiya_loans', 'dandiya_loan_holders', 'cng_members',
+  'cng_prize_awards'])
   check(`  migration creates ${t}`, new RegExp(`CREATE TABLE "${t}"`).test(migrations), true)
 /**
  * NO ATTENDEE PII IN THE PRIZE LEDGER, checked against the MIGRATION — the
@@ -191,18 +198,20 @@ check('  no disabled message leaks a value',
   Object.values(dbEnv.DATABASE_DISABLED_MESSAGES).some((m) => /postgres|:\/\/|@/.test(m)), false)
 
 console.log('\n=== 29-35. MIGRATIONS ===')
-// RE-SCOPED BY PHASE D3: three appended migrations now. Earlier files stay
-// byte-for-byte as they were, which the next assertion keeps proving.
+// RE-SCOPED BY PHASE D3 and again by PHASE CNG1: four appended migrations
+// now. Earlier files stay byte-for-byte as they were, which the next
+// assertion keeps proving.
 check('migration files are version controlled', migrationFiles,
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
-   '0006_dandiya_badgeless_issuance.sql'])
+   '0006_dandiya_badgeless_issuance.sql', '0007_cng_members.sql', '0008_cng_named_members.sql'])
 check('  the journal tracks every one',
   JSON.parse(read('drizzle/meta/_journal.json')).entries.map((e) => e.tag),
   ['0000_central_foundation', '0001_range_guards_and_touch', '0002_device_credentials',
    '0003_prize_awards', '0004_repeat_prize_awards', '0005_dandiya_checkout',
-   '0006_dandiya_badgeless_issuance'])
+   '0006_dandiya_badgeless_issuance', '0007_cng_members',
+   '0008_cng_named_members'])
 check('  and the earlier files were never edited',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql']
     .map((file) => /password|session_version/.test(read(`drizzle/${file}`))), [false, false])

@@ -264,6 +264,49 @@ Nothing in that schema expires. A dandiya loan is closed by a person
 resolving its last stick and by nothing else: there is no timer, no nightly
 job and no date arithmetic anywhere near those tables.
 
+**A MIGRATION MAY REFUSE TO RUN, and `0008_cng_named_members.sql` does.**
+
+Phase CNG1 keyed a CNG membership by BADGE NUMBER, on the assumption that a
+volunteer was a registered attendee. They are not — volunteers do not wear
+the numbered badges and most never pass the registration desk — so 0008
+changes what a membership *means*, from a badge to a NAME.
+
+0007 had already been applied to Development, so it is history and is
+appended to rather than edited. But there is **no honest conversion** from a
+badge number to a name: inventing one would invent people. So 0008 opens with
+
+```sql
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM "cng_members") THEN
+		RAISE EXCEPTION 'cng_members is not empty: …';
+	END IF;
+END
+$$;
+```
+
+as its **first** statement, before anything is altered. The feature has not
+been released and Development holds no memberships, so in practice it is a
+no-op — and if it ever is not, a human reconciles the rows by hand rather
+than the migration guessing.
+
+**There is deliberately NO uniqueness over the name**, and none may be added:
+two volunteers may genuinely share one, and refusing the second would refuse a
+real person. The row's UUID is the identity. `db:check` proves that absence by
+SHAPE, as it does for repeat prizes, so a replacement under a new name fails
+it.
+
+**Removal is soft, and that is load-bearing.** `cng_prize_awards` references
+`cng_members` with `ON DELETE restrict`, so a volunteer who has received a
+prize cannot be deleted at all — and history has to be able to name its
+recipient. `removed_at` and `removed_by_device_id` move together by CHECK,
+and the active roster is `removed_at IS NULL`.
+
+Both CNG column sets are compared for **equality** like the prize and dandiya
+ledgers'. `cng_members.name` is the one person field either table holds, and
+a surviving `badge_number` means 0008 has not been applied here. See
+`docs/CNG.md`.
+
 **A CONSTRAINT IS NOT A SERIALISER, and dandiya is where that distinction
 bites.** Two desks resolving different sticks of one pair write different
 `dandiya_loan_holders` rows, so they never conflict and nothing orders them.
@@ -313,6 +356,8 @@ journaled migration (`0001_range_guards_and_touch.sql`) generated with
 | `0004_repeat_prize_awards.sql` | Removes that `UNIQUE`, so one attendee may receive several prizes. Nothing replaces it |
 | `0005_dandiya_checkout.sql` | `dandiya_loans` and `dandiya_loan_holders` — the dandiya lending ledger, its two PARTIAL unique indexes, the per-stick resolution and loan-close pairing checks, both release rules, the outcome and resolution value checks, the canonical pair-code check, the slot check and every cross-event foreign key |
 | `0006_dandiya_badgeless_issuance.sql` | Makes `dandiya_loan_holders.badge_number` NULLABLE and widens its positivity check to `IS NULL OR > 0`, so a guest with no badge can hold a stick. Adds `dandiya_loans.contact_phone` with a ten-digit check and `UNIQUE(event_id, contact_phone) WHERE closed_at IS NULL`, and `dandiya_loans.accountability_badge_number` with a positivity check, an exclusivity check against `contact_phone` and `UNIQUE(event_id, accountability_badge_number) WHERE closed_at IS NULL` |
+| `0007_cng_members.sql` | `cng_members` — the CNG volunteer group as Phase CNG1 modelled it: keyed by BADGE NUMBER, with `UNIQUE(event_id, badge_number)`. Superseded by 0008, and kept because it has run |
+| `0008_cng_named_members.sql` | Corrects that model. REFUSES to run if `cng_members` holds a row, then drops the badge column and its two guarantees and adds `name` (NOT NULL, non-empty, ≤ 120), `removed_at`/`removed_by_device_id` with their pairing check and same-event foreign key, and `UNIQUE(id, event_id)`. Creates `cng_prize_awards` — the volunteer prize ledger — with two name checks, four foreign keys and three indexes. Alters nothing outside `cng_members`, and does not name `prize_awards` at all |
 
 `0002` is **additive only**: two `ADD COLUMN`s and two `ADD CONSTRAINT`s. It
 drops nothing, deletes nothing and rewrites no row. Every existing device keeps

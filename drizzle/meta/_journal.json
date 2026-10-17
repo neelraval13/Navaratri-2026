@@ -50,6 +50,20 @@
       "when": 1791795028203,
       "tag": "0006_dandiya_badgeless_issuance",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792219679461,
+      "tag": "0007_cng_members",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792225916447,
+      "tag": "0008_cng_named_members",
+      "breakpoints": true
     }
   ]
 }

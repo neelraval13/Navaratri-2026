@@ -800,9 +800,17 @@ check('16. with the date and time, in the EVENT timezone',
 check('17. and the awarding device, by name',
   [withPrevious.includes('Awarded by Prize Test Desk'),
    withPrevious.includes('Awarded by Prize Test Desk B')], [true, true])
+/**
+ * RE-WORDED BY PHASE CNG1.1, which gave volunteers the same warning. The
+ * component is now shared by both ledgers, so the sentence says "They" rather
+ * than "This attendee" — the same fact about the same eight prizes, stated
+ * for whichever kind of recipient is on screen. The COUNT and the
+ * "you can still award another" promise are unchanged, and those are what
+ * this assertion is really about.
+ */
 check('  it says how many, and that another is still allowed',
-  [withOne.includes('This attendee has already received 1 prize.'),
-   withPrevious.includes('This attendee has already received 2 prizes.'),
+  [withOne.includes('They have already received 1 prize.'),
+   withPrevious.includes('They have already received 2 prizes.'),
    withOne.includes('You can still award another.')], [true, true, true])
 check('19. a never-awarded attendee gets NO warning at all',
   [withNone.includes('Previous prizes'), withNone.includes('already received')],
@@ -871,6 +879,80 @@ check('  the demographic suggestion is marked, once per group',
       // The two Girl buttons, one in each group, are the marked ones.
       marked.length, chooser.includes('Best Dance - Girl')]
   })(), [2, 8, true])
+/**
+ * REACT KEYS IDENTIFY THE ITEM, NEVER THE CURRENT UI STATE.
+ *
+ * `renderToStaticMarkup` CANNOT prove this: React 19's server renderer emits
+ * no warning for two siblings sharing a key — only the client reconciler
+ * does, which is why a duplicate reached a browser console rather than a
+ * gate. The component is therefore INVOKED for its element tree and the
+ * child arrays are read directly, one sibling group per array.
+ *
+ * A null key is legal and positional, so the rule asserted is React's own:
+ * no DUPLICATE NON-NULL key within one sibling group.
+ */
+const siblingKeyGroups = (node) => {
+  const groups = []
+
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      groups.push(value.map((child) =>
+        child !== null && typeof child === 'object' ? child.key : null))
+      value.forEach(visit)
+
+      return
+    }
+
+    if (value === null || typeof value !== 'object') {
+      return
+    }
+
+    visit(value.props?.children)
+  }
+
+  visit(node)
+
+  return groups
+}
+
+const duplicateKeyGroups = (node) =>
+  siblingKeyGroups(node)
+    .map((group) => group.filter((key) => key !== null && key !== undefined))
+    .filter((keys) => new Set(keys).size !== keys.length)
+
+const chooserKeys = async (suggestedDivision) => {
+  const imported = await uiJiti.import(`${root}/src/components/prizes/prize-chooser.tsx`)
+  const Chooser = imported.default ?? imported
+
+  /** Hook-free, so its element tree is available without a renderer. */
+  return Chooser({ value: null, suggestedDivision, disabled: false, onChange: noop })
+}
+
+/**
+ * THE CNG CASE. A volunteer has no age or gender, so the desk passes
+ * `suggestedDivision={null}` — and a key built from that value would be the
+ * same literal for every sibling.
+ */
+check('  every chooser key is a catalog identity, with suggestedDivision null',
+  await (async () => {
+    const tree = await chooserKeys(null)
+    const keys = siblingKeyGroups(tree).flat().filter((key) => key !== null)
+
+    return [duplicateKeyGroups(tree), keys.filter((key) => /^none$|^null$|^\d+$/.test(key)),
+      [...keys].sort().join(' ')]
+  })(), [[], [],
+  [...contract.PRIZE_CATEGORIES,
+    ...contract.PRIZE_CATALOG.map((entry) => entry.code)].sort().join(' ')])
+check('  and a real suggested division produces exactly the same keys',
+  await (async () => {
+    const withNull = siblingKeyGroups(await chooserKeys(null))
+    const withGirl = siblingKeyGroups(
+      await chooserKeys(contract.suggestedPrizeDivision(MEERA)),
+    )
+
+    return [JSON.stringify(withGirl) === JSON.stringify(withNull),
+      duplicateKeyGroups(await chooserKeys(contract.suggestedPrizeDivision(MEERA)))]
+  })(), [true, []])
 check('23. and nothing is preselected, so nothing is auto-submitted',
   [/aria-checked="true"/.test(withNone), /disabled=""/.test(submitOf(withNone))],
   [false, true])
@@ -907,20 +989,36 @@ check('  the attendee filters count ATTENDEES, not eligibility',
     })
     return [html.includes('45 attendees'), /eligible/i.test(html)]
   })(), [true, false])
+/**
+ * RE-SHAPED BY PHASE CNG1.1. The history now renders the COMBINED list, so
+ * its rows are tagged with the ledger they came from — a badge for an
+ * attendee, `CNG` for a volunteer. What P1.1 needs is unchanged and is still
+ * asserted: one row per AWARD, with repeated badges intact and no way to
+ * change history.
+ */
 check('13. history lists one row per AWARD, with repeated badges intact',
   await (async () => {
+    const attendeeRow = (award) => ({ ...award, source: 'attendee' })
     const html = await renderUi('src/components/prizes/award-history.tsx', {
-      awards: [...PREVIOUS, { ...PREVIOUS[1], id: 'eeeeeeee-0000-4000-8000-000000000001' }],
+      awards: [...PREVIOUS, { ...PREVIOUS[1], id: 'eeeeeeee-0000-4000-8000-000000000001' }]
+        .map(attendeeRow),
       search: '', onSearchChange: noop,
     })
     return [(html.match(/#9005/g) ?? []).length, html.includes('3 awards'),
       (html.match(/Best Dance - Girl/g) ?? []).length, /Undo|Delete|Remove|Edit/.test(html)]
   })(), [3, true, 2, false])
+/**
+ * RE-SCOPED BY PHASE CNG1.1, which added the volunteer ledger. The Awards
+ * count is now attendee + CNG records, because that is how many rows the
+ * history shows; counting one ledger would make the tab disagree with its own
+ * contents. What P1.1 needs is that the ATTENDEE count is the attendee list's
+ * own length and moves for no other reason.
+ */
 check('  and the tabs are Attendees and Awards, counted independently',
   (() => {
     const desk = read('src/components/prizes/prize-desk.tsx')
     return [desk.includes('`Attendees (${String(roster.attendees.length)})`'),
-      desk.includes('`Awards (${String(roster.awards.length)})`'),
+      desk.includes('roster.awards.length + roster.cngAwards.length'),
       /Eligible \(|Awarded \(/.test(desk)]
   })(), [true, true, false])
 check('  an awarded attendee is NEVER removed from the list locally',
@@ -1106,11 +1204,22 @@ check('31. the Function inventory is exactly eleven', budget.actual, [
 ])
 check('  with one slot of headroom',
   functionChecker.HOBBY_FUNCTION_LIMIT - budget.actual.length, 1)
+/**
+ * RE-SCOPED BY PHASE CNG1, which put the CNG volunteer group on this same
+ * Function as PUT and DELETE rather than spending a twelfth deployment slot
+ * on `api/cng.ts`.
+ *
+ * What P1 needs is unchanged and is still asserted here: prizes is ONE file
+ * under `api/`, dispatched by METHOD. The method SET is pinned rather than
+ * bounded, so a fifth operation on the live prize endpoint cannot appear
+ * quietly — and `verify:cng1` proves that neither new method reaches the
+ * prize ledger.
+ */
 check('  and prizes is ONE Function, dispatched by method',
   [[...stripComments(read('api/prizes.ts')).matchAll(/export async function ([A-Z]+)\(/g)]
     .map((match) => match[1]).sort(),
    readdirSync(join(root, 'api')).filter((file) => /prize/.test(file))],
-  [['GET', 'POST'], ['prizes.ts']])
+  [['DELETE', 'GET', 'PATCH', 'POST', 'PUT'], ['prizes.ts']])
 check('  no catalog, list, history or award Function was added',
   readdirSync(join(root, 'api'))
     .filter((file) => /award|eligible|history|roster|catalog/.test(file)), [])
@@ -1192,9 +1301,36 @@ check('there is no offline queue, optimistic award or poll',
    /enqueue|outbox|localStorage|sessionStorage|indexedDB|db\.(config|registrations|transaction)/i
      .test(desk),
    /navigator\.onLine/.test(desk)], [false, false, false])
+/**
+ * RE-SCOPED BY PHASE CNG1, which added two more confirmed writes to this
+ * desk — adding and removing a CNG member — each applying the row the server
+ * returned rather than re-fetching.
+ *
+ * The count is still PINNED, because the property it protects is that every
+ * `setRoster` is downstream of a server answer: six is the mount read, the
+ * attendee award, the CNG award, the add and the removal, plus the error
+ * branch. The AWARD's own placement is asserted separately, and
+ * `verify:cng1` does the same for the other three.
+ */
 check('  the local lists change only AFTER the server confirms',
   [/result\.status === 'awarded'\)\s*\{[\s\S]{0,900}setRoster\(/.test(desk),
-   [...desk.matchAll(/setRoster\(/g)].length], [true, 3])
+   [...desk.matchAll(/setRoster\(/g)].length], [true, 6])
+/**
+ * AND AN AWARD STILL CHANGES ONLY THE AWARD LIST. The attendee roster and
+ * the CNG group are carried through by name, so a prize cannot add, remove or
+ * reorder a volunteer — which is the CNG1 half of the P1.1 rule that nothing
+ * is subtracted after an award.
+ */
+check('  and an attendee award leaves the group and the CNG ledger untouched',
+  (() => {
+    const awarded = desk.slice(desk.indexOf("result.status === 'awarded'"))
+    const applied = awarded.slice(0, awarded.indexOf('setNotice('))
+
+    return [/attendees: roster\.attendees,/.test(applied),
+      /cng: roster\.cng,/.test(applied),
+      /cngAwards: roster\.cngAwards,/.test(applied),
+      /cng:[^,]*\.filter\(|cng: \[/.test(applied)]
+  })(), [true, true, true, false])
 check('  the roster is read on mount and on reconnect, and on nothing else',
   [[...desk.matchAll(/useEffect\(/g)].length, /\[network, readAttempt\]/.test(desk)],
   [1, true])

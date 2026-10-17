@@ -97,7 +97,7 @@ const ATTENDEES = [
   { badge: 9005, name: 'Meera', age: 11, gender: 'female' },
   { badge: 9007, name: 'Arjun', age: 15, gender: 'male' },
   { badge: 9008, name: 'Priya', age: 22, gender: 'female' },
-  { badge: 9009, name: 'Vivek', age: 34, gender: 'male' },
+  { badge: 9009, name: 'Nisha', age: 34, gender: 'male' },
   /** D3.3a's ordinary partner: the badge the spec's own example pairs #9005 with. */
   { badge: 9010, name: 'Kavita', age: 27, gender: 'female' },
 ]
@@ -2720,7 +2720,7 @@ check('  and db:check expects all four of them',
  * `contact-already-holding-pair` fell through to "unexpected", which is an
  * ordinary operational conflict reported as a technical failure.
  */
-const WIRE_DESK = { id: DEVICE_ID, name: 'Anuradha' }
+const WIRE_DESK = { id: DEVICE_ID, name: 'Dandiya Desk A' }
 /** A holder as the WIRE carries one. `null` is a guest with no badge. */
 const wireHolder = (badgeNumber, slot) => ({
   badgeNumber,
@@ -3591,7 +3591,7 @@ const holder = (badgeNumber, slot, name, over = {}) => ({
   ...over,
 })
 const RESOLVED_AT = new Date(Date.now() - 20 * 60 * 1000).toISOString()
-const DESK = { id: DEVICE_ID, name: 'Anuradha' }
+const DESK = { id: DEVICE_ID, name: 'Dandiya Desk A' }
 
 const LOAN = {
   id: 'aaaaaaaa-3333-4333-8333-000000000001',
@@ -3617,7 +3617,7 @@ const PARTIAL = {
   ],
 }
 const closedLoan = (over) => ({
-  ...LOAN, closedAt: RESOLVED_AT, closedBy: { id: DEVICE_ID, name: 'Vivek' },
+  ...LOAN, closedAt: RESOLVED_AT, closedBy: { id: DEVICE_ID, name: 'Dandiya Desk B' },
   outcome: 'returned', pairReleasedAt: RESOLVED_AT, ...over,
 })
 /**
@@ -3645,7 +3645,7 @@ const partialCard = await renderUi('src/components/dandiya/active-loan-card.tsx'
 
 check('an active card names the pair, both holders, the time and the desk',
   [card.includes('Pair D-014'), card.includes('#042'), card.includes('Meera Patel'),
-   card.includes('#081'), card.includes('Arjun Shah'), card.includes('Anuradha')],
+   card.includes('#081'), card.includes('Arjun Shah'), card.includes('Dandiya Desk A')],
   [true, true, true, true, true, true])
 check('  and shows no contact detail or payment',
   ['wa.me', '9000000', 'UPI', 'Cash', 'phone']
@@ -4177,8 +4177,8 @@ const history = await renderUi('src/components/dandiya/loan-history.tsx', {
 
 check('27. history shows all three outcomes, with both devices and times',
   [history.includes('Returned'), history.includes('Partial loss'),
-   history.includes('Pair lost'), history.includes('Issued by Anuradha'),
-   history.includes('Closed by Vivek'), history.includes('D-022')],
+   history.includes('Pair lost'), history.includes('Issued by Dandiya Desk A'),
+   history.includes('Closed by Dandiya Desk B'), history.includes('D-022')],
   [true, true, true, true, true, true])
 check('  and each holder’s own ending, not just the loan’s',
   [(history.match(/Lost/g) ?? []).length > 0,
@@ -4610,17 +4610,35 @@ check('  and none of them mentions dandiya',
  * migrated the redesign on top of the original shape.
  */
 /**
- * 36. THE DANDIYA MIGRATIONS ARE 0005 AND 0006, AND THERE IS NO 0007.
+ * 36. THE DANDIYA MIGRATIONS ARE 0005 AND 0006, AND NOTHING LATER TOUCHES
+ * THOSE TABLES.
  *
  * D3.3 APPENDED rather than edited: 0005 had been applied to Development, and
  * a migration that has run anywhere is history. 0006 is additive or widening
  * throughout, so every existing loan survives it untouched.
+ *
+ * RE-SCOPED BY PHASE CNG1, which appended `0007_cng_members.sql`. The second
+ * half used to assert that no 0007 existed at all, which was a proxy for the
+ * real guarantee: D3 needs no THIRD dandiya migration, and nothing appended
+ * afterwards may reach into the dandiya ledger. Both are now asserted
+ * directly, which is strictly stronger — a future 0008 that altered
+ * `dandiya_loans` would have slipped straight past the old form.
  */
-check('36. the dandiya migrations are 0005 and 0006, and nothing beyond',
+check('36. the dandiya migrations are 0005 and 0006, and nothing later touches them',
   [readdirSync(join(root, 'drizzle'))
-    .filter((file) => file.endsWith('.sql') && /dandiya/i.test(read(`drizzle/${file}`)))
+    /**
+     * STATEMENTS, not prose. `0007_cng_members.sql` explains in its header
+     * why its uniqueness is TOTAL *unlike the dandiya indexes* — which is
+     * commentary about this ledger, not a migration touching it. Matching the
+     * whole file would report that explanation as a third dandiya migration.
+     */
+    .filter((file) => file.endsWith('.sql') &&
+      /dandiya/i.test(read(`drizzle/${file}`).replace(/^--.*$/gm, '')))
     .sort(),
-   readdirSync(join(root, 'drizzle')).filter((file) => file.startsWith('0007'))],
+   readdirSync(join(root, 'drizzle'))
+     .filter((file) => file.endsWith('.sql') && file > '0006_dandiya_badgeless_issuance.sql')
+     .filter((file) => /dandiya_loans|dandiya_loan_holders/
+       .test(read(`drizzle/${file}`).replace(/^--.*$/gm, '')))],
   [['0005_dandiya_checkout.sql', '0006_dandiya_badgeless_issuance.sql'], []])
 check('  0006 only widens, and rewrites no row',
   (() => {
@@ -4641,9 +4659,18 @@ check('  0006 only widens, and rewrites no row',
         .filter((table) => !table.startsWith('dandiya_')),
     ]
   })(), [false, true, true, true, true, []])
-check('  and the journal tracks 0006 last',
-  JSON.parse(read('drizzle/meta/_journal.json')).entries.at(-1)?.tag,
-  '0006_dandiya_badgeless_issuance')
+/**
+ * RE-SCOPED BY PHASE CNG1, which appended `0007_cng_members.sql`. D3's
+ * concern was never that 0006 is the last migration in the repository — it
+ * was that 0006 is the last DANDIYA one, appended after 0005 rather than
+ * edited into it. That is what is asserted now, and it stays true however
+ * many later phases append their own.
+ */
+check('  and the journal tracks 0006 as the last dandiya entry',
+  JSON.parse(read('drizzle/meta/_journal.json')).entries
+    .map((entry) => entry.tag)
+    .filter((tag) => /dandiya/i.test(tag)),
+  ['0005_dandiya_checkout', '0006_dandiya_badgeless_issuance'])
 /**
  * THE TWO PARTIAL UNIQUE INDEXES, WITH THEIR PREDICATES. An index that kept
  * its columns and lost its `WHERE` clause would forbid a pair from ever going

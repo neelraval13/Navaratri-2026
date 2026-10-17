@@ -374,7 +374,7 @@ check('no migration was added',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
-    '0006_dandiya_badgeless_issuance.sql'])
+    '0006_dandiya_badgeless_issuance.sql', '0007_cng_members.sql', '0008_cng_named_members.sql'])
 /**
  * 0003 `ALTER TABLE "prize_awards"`s its own new table to attach the foreign
  * keys, which is how Drizzle emits them, and 0004 drops a constraint from

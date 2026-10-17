@@ -1,7 +1,7 @@
 import type {
   PrizeAttendee,
   PrizeAward,
-  PrizeRosterResponse,
+  PrizeRosterLists,
 } from '../../src/shared/prize-contract.js'
 import type { PrizeAwardRecord } from './awards.js'
 
@@ -26,11 +26,17 @@ import type { PrizeAwardRecord } from './awards.js'
  * exactly the roster it was given, in the order it was given, and NOTHING
  * here can remove an entry from it. The join runs one way only — the Sheet
  * supplies the person, the ledger supplies the prizes.
+ *
+ * IT RETURNS TWO LISTS, NOT THE WHOLE RESPONSE. Phase CNG1 added the CNG
+ * group to `GET /api/prizes`, and this composer deliberately does not produce
+ * it: `PrizeRosterLists` is the half the prize module owns, so a prize
+ * composer cannot touch membership and a membership composer cannot touch
+ * prize history. The endpoint puts the two halves together.
  */
 export const composePrizeRoster = (input: {
   attendees: readonly PrizeAttendee[]
   awards: readonly PrizeAwardRecord[]
-}): PrizeRosterResponse => {
+}): PrizeRosterLists => {
   /**
    * Indexed by badge number so history can name an attendee without a scan
    * per row. SEVERAL AWARDS MAY SHARE A BADGE, and each one looks the

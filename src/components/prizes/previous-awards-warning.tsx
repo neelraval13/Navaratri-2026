@@ -2,10 +2,26 @@ import { TriangleAlert } from 'lucide-react'
 import type * as React from 'react'
 
 import { formatEventDateTime } from '@/lib/datetime'
-import type { PrizeAward } from '@/shared/prize-contract'
+
+/**
+ * EXACTLY THE FIELDS THIS COMPONENT READS, and no more.
+ *
+ * Phase CNG1.1 added a second prize ledger for volunteers, whose rows have a
+ * member id where an attendee's have a badge number. This warning never
+ * looked at either — it shows the prize, the time and the awarding desk — so
+ * the prop is the structural subset both satisfy rather than a union of two
+ * ledgers or, worse, a second copy of the component.
+ */
+interface PreviousAward {
+  id: string
+  prizeName: string
+  /** ISO 8601 UTC. Rendered in the EVENT's timezone. */
+  awardedAt: string
+  awardedBy: { name: string }
+}
 
 interface PreviousAwardsWarningProps {
-  awards: readonly PrizeAward[]
+  awards: readonly PreviousAward[]
 }
 
 /**
@@ -28,6 +44,11 @@ interface PreviousAwardsWarningProps {
  * Newest first, like the history tab, and every record is listed rather than
  * summarised — three prizes is exactly the case somebody needs to see in
  * full.
+ *
+ * SHARED BY BOTH LEDGERS since Phase CNG1.1: an attendee's previous prizes
+ * and a volunteer's are the same warning about the same eight prizes, and the
+ * wording below deliberately says "this recipient" rather than naming a kind
+ * of person.
  */
 const PreviousAwardsWarning: React.FC<PreviousAwardsWarningProps> = ({ awards }) => {
   if (awards.length === 0) {
@@ -61,8 +82,8 @@ const PreviousAwardsWarning: React.FC<PreviousAwardsWarningProps> = ({ awards })
 
       <p className="text-sm leading-relaxed text-amber-700 dark:text-amber-400">
         {awards.length === 1
-          ? 'This attendee has already received 1 prize. You can still award another.'
-          : `This attendee has already received ${String(awards.length)} prizes. You can still award another.`}
+          ? 'They have already received 1 prize. You can still award another.'
+          : `They have already received ${String(awards.length)} prizes. You can still award another.`}
       </p>
     </div>
   )

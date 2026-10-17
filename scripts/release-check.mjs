@@ -9,6 +9,7 @@
  * Usage:
  *   node scripts/release-check.mjs [--root <dir>] [--json]
  */
+import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, resolve, basename, extname } from 'node:path'
 
@@ -24,6 +25,15 @@ const AS_JSON = args.includes('--json')
  */
 const PEM_MARKER = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ')
 const SERVICE_ACCOUNT_TYPE = 'service' + '_account'
+
+/**
+ * The retired compiled-in volunteer name list, named in PARTS for the same
+ * reason the PEM marker is: a guard that contains the string it forbids has
+ * to exempt itself, and an exemption for the scanner is a blind spot. Built
+ * this way, the scan can cover every file including this one.
+ */
+const CNG_NAME_LIST_MODULE = 'cng-initial' + '-names'
+const CNG_NAME_LIST_CONSTANT = ['CNG', 'INITIAL', 'NAMES'].join('_')
 
 const SKIP_DIRECTORIES = new Set([
   'node_modules',
@@ -2888,6 +2898,22 @@ const EXPECTED_MIGRATIONS = [
    * accepts every value already stored.
    */
   '0006_dandiya_badgeless_issuance.sql',
+  /**
+   * Phase CNG1's volunteer group. Appended, and 0000-0006 are untouched.
+   * PURELY ADDITIVE: one new table with its constraints and indexes, and no
+   * ALTER of anything that already exists — `prize_awards` in particular is
+   * not touched, so Production's live prize history cannot be affected by
+   * applying it.
+   */
+  '0007_cng_members.sql',
+  /**
+   * Phase CNG1.1's correction. 0007 modelled a CNG member as a BADGE NUMBER
+   * and had already been applied to Development, so it is history and is
+   * appended to rather than edited. 0008 refuses to run if `cng_members`
+   * holds a row — a badge number is not a name and there is no honest
+   * conversion — and it alters nothing outside `cng_members`.
+   */
+  '0008_cng_named_members.sql',
 ]
 
 if (migrationFiles.join(', ') !== EXPECTED_MIGRATIONS.join(', ')) {
@@ -3161,13 +3187,52 @@ if (
     }
   }
 
+  /**
+   * FOUR METHODS SINCE PHASE CNG1, and the set is pinned rather than bounded.
+   *
+   * GET and POST are the prize desk. PUT and DELETE are CNG membership, which
+   * shares this Function because it shares the screen, the roster read and
+   * the Badge Register join — and because `api/` holds eleven of twelve
+   * deployment Functions. A fifth method appearing here is a new operation on
+   * the live prize endpoint and deserves to be noticed.
+   */
   const methods = [...endpoint.matchAll(/export async function ([A-Z]+)\(/g)]
     .map((match) => match[1])
     .sort()
     .join(',')
 
-  if (methods !== 'GET,POST') {
-    prizeProblems.push(`api/prizes.ts exports ${methods} rather than exactly GET,POST`)
+  if (methods !== 'DELETE,GET,PATCH,POST,PUT') {
+    prizeProblems.push(
+      `api/prizes.ts exports ${methods} rather than exactly DELETE,GET,PATCH,POST,PUT`,
+    )
+  }
+
+  /**
+   * AND NONE OF THE THREE CNG METHODS MAY TOUCH THE ATTENDEE LEDGER.
+   * `prize_awards` is append-only, badge-based and Production-live; the
+   * volunteer ledger is a different table reached by `PATCH`. A method that
+   * learned about both is how a CNG identity would end up in a badge column.
+   */
+  for (const method of ['PUT', 'DELETE', 'PATCH']) {
+    const start = endpoint.indexOf(`export async function ${method}(`)
+
+    if (start === -1) {
+      continue
+    }
+
+    const nextMethod = [...endpoint.matchAll(/export async function [A-Z]+\(/g)]
+      .map((match) => match.index ?? -1)
+      .filter((index) => index > start)
+    const body = endpoint.slice(
+      start,
+      nextMethod.length === 0 ? undefined : Math.min(...nextMethod),
+    )
+
+    for (const forbidden of ['recordPrizeAward', 'readPrizeAwards', 'prizeAwards']) {
+      if (body.includes(forbidden)) {
+        prizeProblems.push(`${method} /api/prizes reaches the prize ledger (${forbidden})`)
+      }
+    }
   }
 
   if (/admin-auth|adminSession|readAdminSessionCookie/.test(endpoint)) {
@@ -3297,8 +3362,43 @@ if (
     }
   }
 
-  if (/status === 409|=== 409|, 409\)/.test(stripComments(prizeEndpoint) + stripComments(prizeApi))) {
-    prizeProblems.push('the prize API still has a 409 conflict path')
+  /**
+   * SCOPED TO THE ATTENDEE AWARD, and it has to be since Phase CNG1.1. The
+   * rule being protected is that ONE-PRIZE-PER-ATTENDEE does not come back as
+   * a refusal — so what must have no 409 is the badge-based award path. CNG
+   * membership legitimately answers 409 when a client reuses an idempotency
+   * key under a different name, which is a different endpoint, a different
+   * ledger and a different question.
+   */
+  /**
+   * SLICED BETWEEN TWO MARKERS THAT MUST BOTH EXIST. A missing marker makes
+   * `indexOf` return -1, and `slice(start, -1)` then quietly takes almost the
+   * whole file — which is how this guard first reported the CNG conflict as
+   * an attendee one. Both ends are therefore located explicitly and a
+   * missing one is its own problem.
+   */
+  const between = (source, from, to, label) => {
+    const start = source.indexOf(from)
+    const end = source.indexOf(to)
+
+    if (start === -1 || end === -1 || end < start) {
+      prizeProblems.push(`the ${label} boundary could not be located`)
+
+      return ''
+    }
+
+    return source.slice(start, end)
+  }
+
+  const attendeeAwardPaths = [
+    between(stripComments(prizeEndpoint), 'export async function POST(',
+      'export async function PUT(', 'attendee award endpoint'),
+    between(stripComments(prizeApi), 'export const awardPrize',
+      'export const addCngMember', 'attendee award client'),
+  ].join('\n')
+
+  if (/status === 409|=== 409|, 409\)/.test(attendeeAwardPaths)) {
+    prizeProblems.push('the attendee prize API has a 409 conflict path again')
   }
 
   /**
@@ -3457,6 +3557,983 @@ addCheck(
   'prize-ledger',
   'The prize ledger holds no attendee PII, and repeat prizes stay possible',
   prizeProblems,
+)
+
+// --- K1b. the CNG volunteer group: a NAME, and no badge anywhere ---------
+/**
+ * PHASE CNG1.1 CORRECTED A DOMAIN ASSUMPTION, AND INVERTED PART OF THIS
+ * CHECK.
+ *
+ * CNG1 modelled a volunteer as a registered attendee keyed by BADGE NUMBER,
+ * and this audit forbade storing a name. Both were wrong: CNG members do not
+ * wear the numbered attendee badges and most never pass the registration
+ * desk, so a badge-keyed membership could only represent them by inventing
+ * one — and a fake, negative or synthetic badge sorts, matches a search and
+ * collides with a real attendee's.
+ *
+ * SO `cng_members.name` IS NOW ALLOWED, DELIBERATELY. It is the ONE person
+ * field either CNG table may hold. What is forbidden has moved:
+ *
+ *   1. ANY OTHER PERSON FIELD. No phone, age, gender, WhatsApp link or
+ *      payment column, and none accepted by any method — none of them are
+ *      needed to hand somebody a prize.
+ *   2. A BADGE, IN ANY FORM. Not a column, not a request field, not a
+ *      synthetic value, and not a nullable `prize_awards.badge_number`.
+ *   3. READING THE BADGE REGISTER TO ADD A MEMBER. There is nothing to
+ *      match: a volunteer is not in it.
+ *   4. A SECOND PRIZE WRITER, or either ledger reaching the other.
+ *   5. A HARD DELETE. Removal is soft so a prize can still name its
+ *      recipient.
+ *   6. A COMPILED-IN LIST OF REAL NAMES. The organiser pastes theirs at
+ *      runtime; client source is bundled to the browser.
+ */
+const cngProblems = []
+
+const cngSchema = readText(join(ROOT, 'server/db/schema.ts'))
+const cngWriter = readText(join(ROOT, 'server/cng/members.ts'))
+const cngAwardWriter = readText(join(ROOT, 'server/cng/awards.ts'))
+const cngRequests = readText(join(ROOT, 'server/cng/requests.ts'))
+const cngComposer = readText(join(ROOT, 'server/cng/roster.ts'))
+const cngContract = readText(join(ROOT, 'src/shared/cng-contract.ts'))
+const cngEndpoint = readText(join(ROOT, 'api/prizes.ts'))
+const cngMigration = readText(join(ROOT, 'drizzle/0008_cng_named_members.sql'))
+const awardGroups = readText(join(ROOT, 'src/prizes/award-groups.ts'))
+const awardHistory = readText(join(ROOT, 'src/components/prizes/award-history.tsx'))
+
+if (
+  cngSchema === null || cngWriter === null || cngAwardWriter === null ||
+  cngRequests === null || cngComposer === null || cngContract === null ||
+  cngEndpoint === null || cngMigration === null ||
+  awardGroups === null || awardHistory === null
+) {
+  cngProblems.push('a CNG module is missing')
+} else {
+  /** The block of one table in the schema, sliced to the next declaration. */
+  const tableBlock = (name) => {
+    const start = cngSchema.indexOf(`export const ${name} = pgTable(`)
+
+    if (start === -1) {
+      return ''
+    }
+
+    const next = ['\nexport const ', '\nexport type ']
+      .map((marker) => cngSchema.indexOf(marker, start + 1))
+      .filter((index) => index !== -1)
+
+    return stripComments(
+      cngSchema.slice(start, next.length === 0 ? undefined : Math.min(...next)),
+    )
+  }
+
+  /* -------------------------- 1. the name, and no other person field */
+
+  for (const table of ['cngMembers', 'cngPrizeAwards']) {
+    const block = tableBlock(table)
+
+    if (block === '') {
+      cngProblems.push(`server/db/schema.ts does not define ${table}`)
+
+      continue
+    }
+
+    const columnsStart = block.indexOf('{')
+    const columns = columnsStart === -1
+      ? ''
+      : block.slice(columnsStart, block.indexOf('\n  },')).toLowerCase()
+
+    /**
+     * `name` IS EXPECTED on the membership and FORBIDDEN on the award, which
+     * is what keeps one copy of a person's name in one place. `prizeName` is
+     * renamed away first so it is not mistaken for one.
+     */
+    const audited = columns
+      .replace(/prizename|prize_name|devicename|device_name/g, 'label')
+    const allowed = table === 'cngMembers' ? ['name'] : []
+
+    for (const field of [
+      ...ATTENDEE_PII_FIELDS, 'name', 'age', 'gender', 'attendee', 'badge',
+    ]) {
+      if (allowed.includes(field)) {
+        continue
+      }
+
+      if (audited.includes(field.toLowerCase())) {
+        cngProblems.push(`${table} declares a forbidden column: ${field}`)
+      }
+    }
+  }
+
+  /** EXACTLY THESE COLUMNS. A seventh is a decision, not a detail. */
+  const declaredMemberColumns = [
+    ...tableBlock('cngMembers').matchAll(/^\s{4}([a-zA-Z]+):/gm),
+  ].map((match) => match[1]).join(',')
+
+  if (declaredMemberColumns !==
+    'id,eventId,name,addedByDeviceId,addedAt,removedAt,removedByDeviceId') {
+    cngProblems.push(`cng_members declares ${declaredMemberColumns}`)
+  }
+
+  const declaredAwardColumns = [
+    ...tableBlock('cngPrizeAwards').matchAll(/^\s{4}([a-zA-Z]+):/gm),
+  ].map((match) => match[1]).join(',')
+
+  if (declaredAwardColumns !==
+    'id,eventId,cngMemberId,prizeName,awardedByDeviceId,awardedAt') {
+    cngProblems.push(`cng_prize_awards declares ${declaredAwardColumns}`)
+  }
+
+  /**
+   * NO UNIQUENESS OVER THE NAME, and none over the member on the award.
+   * Two volunteers may genuinely share a name, and repeat prizes are legal.
+   */
+  for (const [table, forbidden] of [
+    ['cngMembers', /name/],
+    ['cngPrizeAwards', /cngMemberId|prizeName/],
+  ]) {
+    for (const match of tableBlock(table)
+      .matchAll(/(unique|uniqueIndex)\(([\s\S]*?)\)\s*\.on\(([^)]*)\)/g)) {
+      if (forbidden.test(match[3])) {
+        cngProblems.push(`${table} is unique over ${match[3].trim()}, which refuses a real case`)
+      }
+    }
+  }
+
+  /** The removal is one fact, and the award cannot orphan its recipient. */
+  for (const [table, needle, problem] of [
+    ['cngMembers', 'cng_members_removal_paired', 'does not pair its removal columns'],
+    ['cngMembers', 'cng_members_removed_device_event_fk', 'lets another event remove a member'],
+    ['cngMembers', 'cng_members_device_event_fk', 'does not enforce cross-event device integrity'],
+    ['cngPrizeAwards', 'cng_prize_awards_member_event_fk', 'lets an award cross events'],
+    ['cngPrizeAwards', 'cng_prize_awards_device_event_fk', 'lets a device cross events'],
+  ]) {
+    if (!tableBlock(table).includes(needle)) {
+      cngProblems.push(`${table} ${problem}`)
+    }
+  }
+
+  /* -------------------------------------- 2. no badge, in any form */
+
+  for (const directory of ['server/cng', 'src/cng', 'src/components/cng']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      /**
+       * IDENTIFIERS, not the word. The Add dialog legitimately tells the
+       * operator that a volunteer has "no attendee badge", and a scan that
+       * fired on that sentence would delete the one place the correction is
+       * explained to a human.
+       */
+      const code = stripComments(readText(path) ?? '')
+
+      if (rel(path) === 'server/cng/requests.ts') {
+        // The one file that NAMES a badge, in order to refuse it.
+        if (/badgeNumber:|badge_number|formatBadgeNumber/.test(code)) {
+          cngProblems.push('server/cng/requests.ts does more than refuse a badge')
+        }
+
+        for (const refusal of ["'badgeNumber'", "'badge'"]) {
+          if (!code.includes(refusal)) {
+            cngProblems.push(`a CNG body may still carry ${refusal}`)
+          }
+        }
+
+        continue
+      }
+
+      if (/badgeNumber|badge_number|formatBadgeNumber|@\/lib\/badge/.test(code)) {
+        cngProblems.push(`${rel(path)} reads, writes or formats a badge`)
+      }
+
+      if (/badgeNumber:\s*-?\d|badgeNumber = -?\d|GUEST-\d/.test(code)) {
+        cngProblems.push(`${rel(path)} constructs a synthetic badge`)
+      }
+    }
+  }
+
+  /** And the live attendee ledger keeps its NOT NULL badge. */
+  const prizeTable = tableBlock('prizeAwards')
+
+  if (!/badgeNumber: integer\('badge_number'\)\.notNull\(\)/.test(prizeTable)) {
+    cngProblems.push('prize_awards.badge_number is no longer a NOT NULL badge')
+  }
+
+  for (const file of readdirSync(join(ROOT, 'drizzle'))) {
+    if (!file.endsWith('.sql')) {
+      continue
+    }
+
+    if (/ALTER TABLE "prize_awards"[\s\S]{0,120}DROP NOT NULL/
+      .test(readText(join(ROOT, 'drizzle', file)) ?? '')) {
+      cngProblems.push(`${file} makes a prize_awards column nullable`)
+    }
+  }
+
+  /* ------------------- 3. no Badge Register read when adding a member */
+
+  for (const path of walk(join(ROOT, 'server/cng'))) {
+    const code = stripComments(readText(path) ?? '')
+
+    if (/readAttendeeRegister|attendees\/register|google-sheets/.test(code)) {
+      cngProblems.push(`${rel(path)} reads the Badge Register to curate the group`)
+    }
+  }
+
+  const putStart = cngEndpoint.indexOf('export async function PUT(')
+
+  if (putStart === -1) {
+    cngProblems.push('api/prizes.ts exports no PUT')
+  } else {
+    const put = stripComments(cngEndpoint.slice(putStart))
+    const deleteAt = put.indexOf('export async function DELETE(')
+    const putBody = deleteAt === -1 ? put : put.slice(0, deleteAt)
+
+    if (/readAttendeeRegister|readSheetAccess/.test(putBody)) {
+      cngProblems.push('adding a CNG member reads the Badge Register')
+    }
+
+    if (!/PRIZE_REQUIRED_ATTRIBUTE/.test(putBody)) {
+      cngProblems.push('the CNG add does not require the prizes attribute')
+    }
+  }
+
+  for (const method of ['DELETE', 'PATCH']) {
+    const start = cngEndpoint.indexOf(`export async function ${method}(`)
+
+    if (start === -1) {
+      cngProblems.push(`api/prizes.ts exports no ${method}`)
+
+      continue
+    }
+
+    const rest = stripComments(cngEndpoint.slice(start))
+    const next = rest.slice(1).search(/export async function [A-Z]+\(/)
+    const body = next === -1 ? rest : rest.slice(0, next + 1)
+
+    if (!/PRIZE_REQUIRED_ATTRIBUTE/.test(body)) {
+      cngProblems.push(`the CNG ${method} does not require the prizes attribute`)
+    }
+  }
+
+  /* --------------------------------- 4. one writer per ledger, no crossing */
+
+  const tableReaders = (identifier) => {
+    const found = []
+
+    for (const directory of ['api', 'server', 'src']) {
+      for (const path of walk(join(ROOT, directory))) {
+        if (!isTextFile(basename(path))) {
+          continue
+        }
+
+        if (new RegExp(`\\b${identifier}\\b`).test(stripComments(readText(path) ?? ''))) {
+          found.push(rel(path))
+        }
+      }
+    }
+
+    return found.sort()
+  }
+
+  for (const [identifier, allowed] of [
+    ['cngMembers', ['server/db/schema.ts', 'server/cng/members.ts', 'server/cng/awards.ts']],
+    ['cngPrizeAwards', ['server/db/schema.ts', 'server/cng/awards.ts']],
+    ['prizeAwards', ['server/db/schema.ts', 'server/prizes/awards.ts']],
+  ]) {
+    const readers = tableReaders(identifier)
+
+    for (const path of readers) {
+      if (!allowed.includes(path)) {
+        cngProblems.push(`${path} reaches the ${identifier} table directly`)
+      }
+    }
+
+    for (const path of allowed) {
+      if (!readers.includes(path)) {
+        cngProblems.push(`${path} no longer names the ${identifier} table`)
+      }
+    }
+  }
+
+  /**
+   * `server/cng/awards.ts` MAY READ `cng_members` — its guarded insert
+   * selects from it, and the name join needs it — but it may NOT WRITE one.
+   * The one writer rule is about mutation.
+   */
+  for (const [path, source] of [
+    ['server/cng/awards.ts', cngAwardWriter],
+    ['server/cng/roster.ts', cngComposer],
+    ['server/prizes/awards.ts', readText(join(ROOT, 'server/prizes/awards.ts')) ?? ''],
+  ]) {
+    if (/\.(insert|update|delete)\(cngMembers\)/.test(stripComments(source))) {
+      cngProblems.push(`${path} writes cng_members, which has one writer`)
+    }
+  }
+
+  /** And neither prize ledger can reach the other. */
+  if (/cngPrizeAwards|cngMembers/
+    .test(stripComments(readText(join(ROOT, 'server/prizes/awards.ts')) ?? ''))) {
+    cngProblems.push('the attendee prize writer reaches the CNG tables')
+  }
+
+  if (/\bprizeAwards\b/.test(stripComments(cngAwardWriter))) {
+    cngProblems.push('the CNG prize writer reaches the attendee ledger')
+  }
+
+  /** `recordPrizeAward` still has exactly one call site. */
+  const awardCallSites = []
+
+  for (const directory of ['api', 'server']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      const calls = [...stripComments(readText(path) ?? '')
+        .matchAll(/recordPrizeAward\(/g)].length
+
+      if (calls > 0 && rel(path) !== 'server/prizes/awards.ts') {
+        awardCallSites.push(`${rel(path)} (${String(calls)})`)
+      }
+    }
+  }
+
+  if (awardCallSites.join(', ') !== 'api/prizes.ts (1)') {
+    cngProblems.push(
+      `recordPrizeAward is called from ${awardCallSites.join(', ') || 'nowhere'} rather than once in api/prizes.ts`,
+    )
+  }
+
+  /* ---------------------------- 5. removal is soft, and awards append-only */
+
+  const memberWriter = stripComments(cngWriter)
+
+  if (/\.delete\(cngMembers\)/.test(memberWriter)) {
+    cngProblems.push('a CNG member is hard-deleted; removal must be soft')
+  }
+
+  if (!/\.update\(cngMembers\)/.test(memberWriter) ||
+      !/isNull\(cngMembers\.removedAt\)/.test(memberWriter)) {
+    cngProblems.push('the CNG removal is not a compare-and-set on removed_at')
+  }
+
+  if (!/eq\(cngMembers\.eventId/.test(memberWriter)) {
+    cngProblems.push('the CNG removal is not scoped to the event')
+  }
+
+  const awardWriter = stripComments(cngAwardWriter)
+
+  if (/\.update\(cngPrizeAwards\)|\.delete\(cngPrizeAwards\)/.test(awardWriter)) {
+    cngProblems.push('server/cng/awards.ts mutates or deletes CNG prize history')
+  }
+
+  /**
+   * A REMOVED MEMBER MAY NOT RECEIVE A PRIZE, decided by the DATABASE as a
+   * predicate on the write. A `SELECT` then `INSERT` would only move the
+   * race — a mistake this project has already made once, on the dandiya
+   * issuance path.
+   */
+  if (!/\.insert\(cngPrizeAwards\)[\s\S]{0,200}\.select\(/.test(awardWriter) ||
+      !/isNull\(cngMembers\.removedAt\)/.test(awardWriter)) {
+    cngProblems.push('the CNG award does not guard on an ACTIVE member inside the write')
+  }
+
+
+  /* ------------- the exact per-method contracts, and real idempotency ---- */
+
+  /**
+   * EACH METHOD DECLARES ITS OWN KEYS, which is what lets `name` be REQUIRED
+   * on PUT and REFUSED on the other two.
+   *
+   * A single shared deny-list cannot express that. If `name` were in it, PUT
+   * would reject its own required field; if it were not, DELETE and PATCH
+   * would accept a field that cannot identify anybody — two volunteers may
+   * share a name, so acting on "whoever is called that" could act on the
+   * wrong person.
+   */
+  if (/'name',/.test(cngRequests.slice(
+    cngRequests.indexOf('FORBIDDEN_CNG_FIELDS = ['),
+    cngRequests.indexOf('] as const', cngRequests.indexOf('FORBIDDEN_CNG_FIELDS = [')),
+  ))) {
+    cngProblems.push('`name` is globally forbidden, so PUT cannot accept its own field')
+  }
+
+  for (const [contract, keys] of [
+    ['ADD_KEYS', "['cngMemberId', 'name'] as const"],
+    ['REMOVE_KEYS', "['cngMemberId'] as const"],
+    ['AWARD_KEYS', "['cngMemberId', 'prizeName'] as const"],
+  ]) {
+    if (!cngRequests.includes(`const ${contract} = ${keys}`)) {
+      cngProblems.push(`the CNG ${contract} contract is not exactly ${keys}`)
+    }
+  }
+
+  /**
+   * AND THE EXACT-BODY CHECK ITSELF REFUSES A KEY OUTSIDE THAT SET.
+   *
+   * Pinning only that each parser CALLS it would leave the refusal one
+   * `if` away from being a no-op: every parser would still name its own
+   * key set, and every unknown field would still be accepted. The
+   * refusal has to be asserted where it happens.
+   */
+  const exactBodyCheck = cngRequests.slice(
+    cngRequests.indexOf('const parseExactBody'),
+    cngRequests.indexOf('export const parseCngAddInput'),
+  )
+
+  if (!/!allowed\.includes\(key\)/.test(exactBodyCheck)) {
+    cngProblems.push('parseExactBody does not refuse a key outside the method\u2019s own set')
+  }
+
+  /** And every parser goes through the exact-body check, not past it. */
+  for (const parser of [
+    'parseCngAddInput', 'parseCngRemoveInput', 'parseCngAwardInput',
+  ]) {
+    const start = cngRequests.indexOf(`export const ${parser}`)
+    const body = start === -1 ? '' : cngRequests.slice(start, start + 900)
+
+    if (!/parseExactBody\(body, [A-Z_]+_KEYS\)/.test(body)) {
+      cngProblems.push(`${parser} does not enforce an exact key set`)
+    }
+  }
+
+  /**
+   * THE IDEMPOTENCY KEY IS THE ROW ID, AND IT HAS TO BE. A name cannot be
+   * one: two volunteers may genuinely share it, so "already added?" is
+   * unanswerable from a name and de-duplicating by it would merge two people.
+   */
+  const memberWriterCode = stripComments(cngWriter)
+  const addBody = memberWriterCode.slice(
+    memberWriterCode.indexOf('export const addCngMember'),
+    memberWriterCode.indexOf('export const removeCngMember'),
+  )
+
+  if (!/onConflictDoNothing\(\{ target: cngMembers\.id \}\)/.test(addBody)) {
+    cngProblems.push('the CNG add is not idempotent on the row id')
+  }
+
+  if (/onConflictDoNothing\(\)/.test(addBody)) {
+    cngProblems.push('the CNG add swallows every conflict, not just the repeated id')
+  }
+
+  if (!/id: input\.cngMemberId/.test(addBody)) {
+    cngProblems.push('the CNG add does not insert the client-supplied id')
+  }
+
+  /** The read-back happens only AFTER the key has refused the insert. */
+  if (addBody.indexOf('.insert(cngMembers)') > addBody.indexOf('readCngMember(')) {
+    cngProblems.push('the CNG add pre-reads the group instead of letting the key decide')
+  }
+
+  /** Nothing keys idempotency, or anything else, on the name. */
+  if (/eq\(cngMembers\.name/.test(memberWriterCode)) {
+    cngProblems.push('a CNG writer matches on the name, which is not unique')
+  }
+
+  /** The same id under a DIFFERENT name is refused, never overwritten. */
+  for (const outcome of ["'already-member'", "'id-in-use'", "'id-elsewhere'"]) {
+    if (!addBody.includes(outcome)) {
+      cngProblems.push(`the CNG add does not report ${outcome}`)
+    }
+  }
+
+  if (/\.update\(cngMembers\)/.test(addBody)) {
+    cngProblems.push('the CNG add updates an existing member instead of refusing')
+  }
+
+  /** The client mints the id once per member, not per attempt. */
+  const addDialog = readText(
+    join(ROOT, 'src/components/cng/add-cng-member-dialog.tsx'),
+  ) ?? ''
+  const bulkNames = readText(
+    join(ROOT, 'src/components/cng/bulk-add-cng-names-dialog.tsx'),
+  ) ?? ''
+
+  if (!/useState\(\(\) => crypto\.randomUUID\(\)\)/.test(addDialog)) {
+    cngProblems.push('the Add dialog does not mint one stable id for the add')
+  }
+
+  if (!/cngMemberId: crypto\.randomUUID\(\)/.test(bulkNames) ||
+      !/setPreview\(/.test(bulkNames)) {
+    cngProblems.push('Bulk Add does not mint one stable id per previewed name')
+  }
+
+  /**
+   * AND NEITHER MINTS ONE AT SUBMISSION TIME. An id generated as the request
+   * is sent would make every retry a new row — and because duplicate NAMES
+   * are legal, nothing downstream could detect it.
+   */
+  for (const [path, source] of [
+    ['src/components/cng/add-cng-member-dialog.tsx', addDialog],
+    ['src/components/cng/bulk-add-cng-names-dialog.tsx', bulkNames],
+    ['src/components/prizes/prize-desk.tsx',
+      readText(join(ROOT, 'src/components/prizes/prize-desk.tsx')) ?? ''],
+    ['src/prizes/prize-api.ts', readText(join(ROOT, 'src/prizes/prize-api.ts')) ?? ''],
+  ]) {
+    const code = stripComments(source)
+
+    if (/onAdd\([\s\S]{0,80}randomUUID|addCngMember\([\s\S]{0,80}randomUUID/.test(code)) {
+      cngProblems.push(`${path} mints a member id at submission time`)
+    }
+  }
+
+  /* --------------- the member row lock, and what it serialises ----------- */
+
+  /**
+   * THE AWARD LOCKS THE MEMBER ROW AS THE FIRST STATEMENT OF THE SAME
+   * TRANSACTION THAT WRITES.
+   *
+   * A pre-read of `removed_at` followed by an insert is not enough: a process
+   * can pause for any length of time between them and a removal can commit
+   * inside that window. `removeCngMember` updates the SAME row, so
+   * PostgreSQL's row lock is what orders the two — an award that wins commits
+   * while the member is active, and one that loses observes the removal and
+   * refuses.
+   *
+   * A lock taken AFTER the write protects nothing, and a lock taken in a
+   * transaction of its own is released before the work it was meant to guard.
+   */
+  if (!/\.for\('update'\)/.test(awardWriter)) {
+    cngProblems.push('the CNG award does not lock the member row FOR UPDATE')
+  }
+
+  const lockDefinition = awardWriter.slice(
+    awardWriter.indexOf('const lockCngMember'),
+    awardWriter.indexOf('const guardedAwardInsert'),
+  )
+
+  for (const [fragment, problem] of [
+    ['eq(cngMembers.id, input.cngMemberId)', 'is not scoped to the member'],
+    ['eq(cngMembers.eventId, input.eventId)', 'is not scoped to the event'],
+    ['isNull(cngMembers.removedAt)', 'is not scoped to an ACTIVE member'],
+  ]) {
+    if (!lockDefinition.includes(fragment)) {
+      cngProblems.push(`the CNG member lock ${problem}`)
+    }
+  }
+
+  /** ONE definition, ONE call site — and it is the batch's first statement. */
+  if ([...awardWriter.matchAll(/\blockCngMember\b/g)].length !== 2) {
+    cngProblems.push('lockCngMember does not have exactly one definition and one call site')
+  }
+
+  if (!/batch\(\[\s*lockCngMember\(/.test(awardWriter)) {
+    cngProblems.push('the member lock is not the FIRST statement of the award transaction')
+  }
+
+  /** ONE transaction: the lock and the write are one batch, not two awaits. */
+  const recordBody = awardWriter.slice(awardWriter.indexOf('export const recordCngPrizeAward'))
+
+  if ([...recordBody.matchAll(/\.batch\(/g)].length !== 1) {
+    cngProblems.push('the CNG award is not exactly one transaction')
+  }
+
+  if ([...recordBody.matchAll(/\bawait\b/g)].length !== 1) {
+    cngProblems.push('the CNG award awaits more than its own transaction')
+  }
+
+  /**
+   * AND NO READ DECIDES ANYTHING. The guarded insert still carries the
+   * predicate itself, because `db.batch` cannot branch — but nothing above
+   * the batch may consult the member's state.
+   */
+  if (/removedAt[\s\S]{0,200}\.batch\(/.test(recordBody)) {
+    cngProblems.push('the CNG award reads the member state before its transaction')
+  }
+
+  if (!/isNull\(cngMembers\.removedAt\)/.test(
+    awardWriter.slice(awardWriter.indexOf('const guardedAwardInsert')),
+  )) {
+    cngProblems.push('the guarded award insert no longer carries the active-member predicate')
+  }
+
+  /** The removal is the other half of the pair, and stays a compare-and-set. */
+  if (!/isNull\(cngMembers\.removedAt\)/.test(
+    memberWriterCode.slice(memberWriterCode.indexOf('export const removeCngMember')),
+  )) {
+    cngProblems.push('the CNG removal is no longer a compare-and-set on removed_at')
+  }
+
+  /** No timing, no sleeping, no mutex anywhere on either path. */
+  for (const [path, source] of [
+    ['server/cng/awards.ts', awardWriter],
+    ['server/cng/members.ts', memberWriterCode],
+  ]) {
+    for (const shortcut of [
+      'setTimeout', 'setInterval', 'sleep', 'pg_advisory', 'advisory_lock',
+      'Mutex', 'navigator.locks', 'Date.now()',
+    ]) {
+      if (source.includes(shortcut)) {
+        cngProblems.push(`${path} serialises by timing or a lock that is not the row's: ${shortcut}`)
+      }
+    }
+  }
+
+
+  /* ------------------------ the real-DB award/removal smoke -------------- */
+
+  /**
+   * THE LOCK'S EFFECT IS PROVED AGAINST A REAL DATABASE, because nothing else
+   * can. The stand-in is single-threaded, so a scripted writer has always
+   * already committed — the world the lock produces, not the race it closes.
+   *
+   * Gated exactly like the dandiya smokes, and checked PER SCRIPT rather than
+   * across them: searching a haystack proves nothing about one needle.
+   */
+  const cngSmokePath = 'scripts/cng-award-concurrency-smoke.mjs'
+  const cngSmoke = readText(join(ROOT, cngSmokePath))
+
+  if (cngSmoke === null) {
+    cngProblems.push(`${cngSmokePath} is missing`)
+  } else {
+    for (const interlock of [
+      "process.env.ALLOW_CNG_DB_SMOKE_WRITES !== 'true'",
+      "process.env.VERCEL_ENV !== 'development'",
+      "allowedEnv !== 'development'",
+      '--confirm',
+    ]) {
+      if (!cngSmoke.includes(interlock)) {
+        cngProblems.push(`${cngSmokePath} lost an interlock: ${interlock}`)
+      }
+    }
+
+    /**
+     * And each one refuses BEFORE a connection is opened. The marker names
+     * the connection BINDING rather than the driver function, so this audit
+     * does not contain a literal that reads like a call to one.
+     */
+    const firstCngQuery = Math.min(
+      ...['const sql =', 'await sql`']
+        .map((marker) => cngSmoke.indexOf(marker))
+        .filter((index) => index !== -1),
+    )
+
+    for (const interlock of [
+      "process.env.ALLOW_CNG_DB_SMOKE_WRITES !== 'true'",
+      "process.env.VERCEL_ENV !== 'development'",
+      "allowedEnv !== 'development'",
+    ]) {
+      if (cngSmoke.indexOf(interlock) > firstCngQuery) {
+        cngProblems.push(`${cngSmokePath} opens a connection before its interlocks`)
+      }
+    }
+
+    if (!cngSmoke.includes('SMOKE-CNG11-')) {
+      cngProblems.push(`${cngSmokePath} no longer isolates its fixture names`)
+    }
+
+    /** It exercises the REAL writers rather than reimplementing them. */
+    for (const writer of ['recordCngPrizeAward', 'removeCngMember']) {
+      if (!cngSmoke.includes(writer)) {
+        cngProblems.push(`${cngSmokePath} no longer calls ${writer}`)
+      }
+    }
+
+    /** It cleans up only its own rows, and touches no central table. */
+    if (/(insert into|delete from) (events|devices|device_attributes|badge_assignments|prize_awards|dandiya_loans)/i
+      .test(cngSmoke)) {
+      cngProblems.push(`${cngSmokePath} creates or deletes central state`)
+    }
+
+    /** And it is wired into no unattended gate. */
+    const manifest = readText(join(ROOT, 'package.json')) ?? ''
+    const unattended = ['"verify"', '"release:check"', '"build"', '"lint"']
+      .map((name) => {
+        const at = manifest.indexOf(name)
+
+        return at === -1 ? '' : manifest.slice(at, manifest.indexOf('\n', at))
+      })
+      .join('\n')
+
+    if (/cng-award-concurrency-smoke|db:smoke/.test(unattended)) {
+      cngProblems.push('the CNG smoke is wired into an unattended gate')
+    }
+  }
+
+  /* ---------------------- 6. no compiled-in list of real names ----------- */
+
+  for (const retired of [
+    `src/cng/${CNG_NAME_LIST_MODULE}.ts`,
+    `src/shared/${CNG_NAME_LIST_MODULE}.ts`,
+    `src/components/cng/${CNG_NAME_LIST_MODULE}-panel.tsx`,
+  ]) {
+    if (exists(join(ROOT, retired))) {
+      cngProblems.push(`${retired} is back; volunteer names must not be compiled in`)
+    }
+  }
+
+  /**
+   * THE MECHANISM, NOT THE MENTION, and every file including this one — the
+   * two markers are built from parts above so nothing has to be exempt.
+   * Prose explaining why the list was retired is how the next person learns
+   * that "browser-only" was not isolation.
+   */
+  const importsNameList = new RegExp(
+    `(from|require\\()\\s*['"\`][^'"\`]*${CNG_NAME_LIST_MODULE}`,
+  )
+  const declaresNameList = new RegExp(
+    `(const|let|var|export const|export let)\\s+${CNG_NAME_LIST_CONSTANT}\\b` +
+      `|${CNG_NAME_LIST_CONSTANT}\\s*[:=]`,
+  )
+
+  for (const directory of ['api', 'server', 'src', 'scripts', 'docs', 'drizzle']) {
+    for (const path of walk(join(ROOT, directory))) {
+      if (!isTextFile(basename(path))) {
+        continue
+      }
+
+      const text = readText(path) ?? ''
+
+      if (importsNameList.test(text)) {
+        cngProblems.push(`${rel(path)} imports a compiled-in volunteer name list`)
+      }
+
+      if (declaresNameList.test(text)) {
+        cngProblems.push(`${rel(path)} declares a compiled-in volunteer name list`)
+      }
+    }
+  }
+
+  for (const directory of ['src/cng', 'src/components/cng']) {
+    for (const path of walk(join(ROOT, directory))) {
+      const code = stripComments(readText(path) ?? '')
+
+      // `=` and not `=>`: a function RETURNING `string[]` is the paste parser.
+      if (/:\s*(readonly\s+)?string\[\]\s*=(?!>)/.test(code)) {
+        cngProblems.push(`${rel(path)} declares a hard-coded list of names`)
+      }
+    }
+  }
+
+  const bulkDialog = readText(
+    join(ROOT, 'src/components/cng/bulk-add-cng-names-dialog.tsx'),
+  )
+
+  if (bulkDialog === null) {
+    cngProblems.push('missing: src/components/cng/bulk-add-cng-names-dialog.tsx')
+  } else {
+    const code = stripComments(bulkDialog)
+
+    for (const sink of [
+      'localStorage', 'sessionStorage', 'indexedDB', '@/db/database', "from 'dexie'",
+      'URLSearchParams', 'location.search', 'history.pushState', 'history.replaceState',
+      'sendBeacon', 'gtag(', 'analytics', 'console.', 'fetch(', 'XMLHttpRequest',
+      'document.cookie',
+    ]) {
+      if (code.includes(sink)) {
+        cngProblems.push(`the bulk name dialog can leak the pasted list (${sink})`)
+      }
+    }
+
+    const deskSource = readText(join(ROOT, 'src/components/prizes/prize-desk.tsx')) ?? ''
+
+    if (!/isBulkAddingCng \? \(\s*<BulkAddCngNamesDialog/.test(deskSource)) {
+      cngProblems.push('the bulk name dialog is not unmounted when closed, so its list survives')
+    }
+
+    if (/<BulkAddCngNamesDialog[\s\S]{0,400}open=\{/.test(deskSource)) {
+      cngProblems.push('the bulk name dialog is hidden rather than unmounted')
+    }
+
+    if (!/const discard = \(\): void => \{/.test(code) || !/setText\(''\)/.test(code)) {
+      cngProblems.push('the bulk name dialog does not clear the pasted list itself')
+    }
+  }
+
+  /* -------------------------------- the bodies, and no bulk endpoint ----- */
+
+  for (const field of [
+    'badgeNumber', 'badge', 'eventId', 'eventSlug', 'deviceId', 'loginName',
+    'addedAt', 'addedBy', 'removedAt', 'removedBy', 'awardedAt', 'awardedBy',
+    'id', 'attendee', 'normalizedName', 'age', 'gender', 'phone', 'whatsapp',
+    'payment', 'paymentMethod', 'amount',
+  ]) {
+    if (!new RegExp(`'${field}'`).test(cngRequests)) {
+      cngProblems.push(`a CNG body may still carry ${field}`)
+    }
+  }
+
+  const prizeClient = readText(join(ROOT, 'src/prizes/prize-api.ts'))
+
+  if (prizeClient === null) {
+    cngProblems.push('src/prizes/prize-api.ts could not be read')
+  } else {
+    const bodies = [...stripComments(prizeClient).matchAll(
+      /method: '(PUT|DELETE|PATCH)',[\s\S]{0,260}?body: JSON\.stringify\(([\s\S]*?)\),\n/g,
+    )].map((match) => [match[1], match[2].replace(/\s+/g, ' ').trim()])
+
+    const expected = [
+      ['PUT', '{ cngMemberId: input.cngMemberId, name: input.name, }'],
+      ['DELETE', '{ cngMemberId: input.cngMemberId }'],
+      ['PATCH', '{ cngMemberId: input.cngMemberId, prizeName: input.prizeName, }'],
+    ]
+
+    if (JSON.stringify(bodies) !== JSON.stringify(expected)) {
+      cngProblems.push(`the CNG request bodies are ${JSON.stringify(bodies)}`)
+    }
+  }
+
+  for (const path of walk(join(ROOT, 'api'))) {
+    if (/bulk|cng|volunteer|member|names/i.test(basename(path))) {
+      cngProblems.push(`api/${basename(path)} is a CNG or bulk endpoint`)
+    }
+  }
+
+  /* ---------------------------- award grouping is TIMEZONE-SAFE ---------- */
+
+  /**
+   * THE DAY IS ASIA/KOLKATA, THROUGH THE ONE SHARED DEFINITION — unchanged
+   * by CNG1.1, which only widened what the grouping carries.
+   */
+  if (!/from '@\/shared\/event-time'/.test(awardGroups) ||
+      !/eventDayKey\(/.test(awardGroups)) {
+    cngProblems.push('award grouping does not use the shared event-day definition')
+  }
+
+  for (const [path, code] of [
+    ['src/prizes/award-groups.ts', stripComments(awardGroups)],
+    ['src/components/prizes/award-history.tsx', stripComments(awardHistory)],
+  ]) {
+    for (const browserLocal of [
+      '.getDate(', '.getMonth(', '.getFullYear(', '.getDay(',
+      'toLocaleDateString(', 'toLocaleString(', 'toDateString(',
+      'getTimezoneOffset(', 'Asia/Kolkata', '+05:30', '19800000', '5.5',
+    ]) {
+      if (code.includes(browserLocal)) {
+        cngProblems.push(`${path} decides the day locally: ${browserLocal}`)
+      }
+    }
+
+    if (/Date\.now\(\)|new Date\(\)/.test(code)) {
+      cngProblems.push(`${path} reads the clock, so the same awards could group differently`)
+    }
+  }
+
+  const groupingCode = stripComments(awardGroups)
+
+  if (/dayAwards\.sort\(/.test(groupingCode)) {
+    cngProblems.push('award grouping re-sorts the awards inside a day')
+  }
+
+  if (!/right\.dayKey\.localeCompare\(left\.dayKey\)/.test(groupingCode)) {
+    cngProblems.push('award groups are not newest-day-first by day key')
+  }
+
+  if (!/isDefaultExpandedAwardGroup/.test(awardHistory)) {
+    cngProblems.push('the awards tab does not expand the latest day by default')
+  }
+
+  if (/formatEventDateTime/.test(awardHistory)) {
+    cngProblems.push('an award card still repeats the date')
+  }
+
+  if (!/formatEventTime\(/.test(awardHistory) ||
+      !/formatEventDateLong\(/.test(awardHistory)) {
+    cngProblems.push('the awards tab does not separate the day heading from the row time')
+  }
+
+  if (/Undo|Delete|Remove|Edit/.test(stripComments(awardHistory))) {
+    cngProblems.push('the awards tab offers to change history')
+  }
+
+  /**
+   * And a CNG row never prints a badge. BOTH BRANCHES ARE PINNED: asserting
+   * only that an ATTENDEE gets `formatBadgeNumber` says nothing about what a
+   * volunteer gets, and a fabricated `#000` on the other side of that ternary
+   * would pass while inventing exactly the badge this model refuses to have.
+   */
+  if (!/award\.source === 'attendee'\s*\?\s*formatBadgeNumber\([\s\S]{0,120}:\s*'CNG'/
+    .test(awardHistory)) {
+    cngProblems.push('the awards tab does not distinguish a badge from a CNG recipient')
+  }
+
+  /* ------------------------------------------- 0008, and what it may not do */
+
+  const statements = cngMigration.replace(/^--.*$/gm, '')
+
+  if (!/RAISE EXCEPTION/.test(statements) ||
+      !/IF EXISTS \(SELECT 1 FROM "cng_members"\)/.test(statements)) {
+    cngProblems.push('0008 does not refuse to run against a non-empty cng_members')
+  }
+
+  if (statements.indexOf('RAISE EXCEPTION') > statements.indexOf('ALTER TABLE')) {
+    cngProblems.push('0008 alters cng_members before proving it is empty')
+  }
+
+  /**
+   * AND THE REFERENCED KEY IS CREATED BEFORE THE FOREIGN KEY THAT NEEDS IT.
+   *
+   * `cng_prize_awards_member_event_fk` references
+   * `cng_members("id","event_id")`, and PostgreSQL requires that column PAIR
+   * to already carry a UNIQUE or PRIMARY KEY constraint when the foreign key
+   * is created — the primary key on `id` ALONE does not satisfy it.
+   *
+   * Drizzle generated the FK BEFORE `cng_members_id_event_id_key`, so the
+   * migration would have aborted part-way through, on every environment, with
+   * "there is no unique constraint matching given keys for referenced table".
+   * No test that only reads the final schema can see that: the schema the
+   * statements describe is correct, and only their ORDER is wrong. The file is
+   * hand-ordered, and a regenerate would put the original order back.
+   *
+   * Read from the COMMENT-STRIPPED text and matched on the `ADD CONSTRAINT`
+   * form, so the migration's own prose explaining this cannot satisfy it.
+   */
+  const referencedKey = statements
+    .indexOf('ADD CONSTRAINT "cng_members_id_event_id_key"')
+  const compositeMemberFk = statements
+    .indexOf('ADD CONSTRAINT "cng_prize_awards_member_event_fk"')
+
+  if (referencedKey === -1 || compositeMemberFk === -1 ||
+      referencedKey > compositeMemberFk) {
+    cngProblems.push(
+      '0008 creates cng_prize_awards_member_event_fk before the UNIQUE(id, event_id) it references',
+    )
+  }
+
+  if (/UPDATE "cng_members"|INSERT INTO/i.test(statements)) {
+    cngProblems.push('0008 converts or seeds rows instead of refusing')
+  }
+
+  for (const table of [
+    'prize_awards', 'device_attributes', 'badge_assignments',
+    'dandiya_loans', 'dandiya_loan_holders',
+  ]) {
+    if (statements.includes(`"${table}"`)) {
+      cngProblems.push(`0008 touches ${table}, which it must not`)
+    }
+  }
+
+  for (const altered of new Set(
+    [...statements.matchAll(/ALTER TABLE "([a-z_]+)"/g)].map((match) => match[1]),
+  )) {
+    if (!['cng_members', 'cng_prize_awards'].includes(altered)) {
+      cngProblems.push(`0008 alters ${altered}, which it must not`)
+    }
+  }
+
+  const seventh = readText(join(ROOT, 'drizzle/0007_cng_members.sql')) ?? ''
+
+  if (!/"badge_number" integer NOT NULL/.test(seventh)) {
+    cngProblems.push('0007 was edited; a migration that has run anywhere is history')
+  }
+
+  /**
+   * AND BYTE FOR BYTE, because content alone is too weak a reading of
+   * "history". 0007 has already been applied to the Development database, so
+   * a comment, a reordered statement or a trailing newline is as much an edit
+   * as a dropped column: the file is the record of what ran. 0008 is
+   * deliberately NOT pinned this way — it has run nowhere yet.
+   */
+  if (createHash('md5').update(seventh).digest('hex') !== '9b23bfc02eb89ccb0886f1a3545f1fdd') {
+    cngProblems.push('0007 is no longer byte-identical; it has already been applied')
+  }
+}
+
+addCheck(
+  'cng-membership',
+  'CNG members are named volunteers: no badge, no other PII, soft removal, and the attendee ledger untouched',
+  cngProblems,
 )
 
 // --- K2. the attendee directory reads and changes nothing -----------------
@@ -5365,6 +6442,121 @@ if (dbCheckSource === null) {
     }
   }
 
+  /* ----------------------------- the CNG tables, as 0008 LEAVES them */
+
+  /**
+   * ASSERTED AGAINST THE FINAL SCHEMA, not against one migration.
+   *
+   * 0007 created a badge-keyed `cng_members` and 0008 corrected it, so the
+   * union of the two files is not what a migrated database holds: 0007's
+   * uniqueness and its positivity CHECK are GONE. `db:check` must therefore
+   * expect what 0008 leaves behind — and must NOT expect what it dropped,
+   * because a correctly migrated database would then fail and the operator's
+   * fix would be to put the badge model back.
+   */
+  const cngMigrationSql = readText(join(ROOT, 'drizzle/0008_cng_named_members.sql'))
+
+  if (cngMigrationSql === null) {
+    dbCheckProblems.push('drizzle/0008_cng_named_members.sql could not be read')
+  } else {
+    // SQL only: the header names these in prose, which is not a declaration.
+    const cngStatements = cngMigrationSql.replace(/^--.*$/gm, '')
+
+    for (const table of ['cng_members', 'cng_prize_awards']) {
+      if (!dbCheckList(dbCheckSource, 'EXPECTED_TABLES')?.includes(`'${table}'`)) {
+        dbCheckProblems.push(`db:check does not expect the ${table} table`)
+      }
+    }
+
+    const expectedCng = [
+      dbCheckList(dbCheckSource, 'EXPECTED_CNG_CONSTRAINTS'),
+      dbCheckList(dbCheckSource, 'EXPECTED_CNG_AWARD_CONSTRAINTS'),
+      dbCheckList(dbCheckSource, 'EXPECTED_CNG_INDEXES'),
+    ]
+
+    if (expectedCng.some((list) => list === null)) {
+      dbCheckProblems.push('db:check no longer declares its CNG expectation lists')
+    }
+
+    const expectedCngText = expectedCng.filter((list) => list !== null).join('\n')
+
+    /** Everything 0008 CREATES must be verified. */
+    const createdCng = [
+      ...cngStatements.matchAll(/ADD CONSTRAINT "([a-z_0-9]+)"/g),
+      ...cngStatements.matchAll(/CONSTRAINT "([a-z_0-9]+)" CHECK/g),
+      ...cngStatements.matchAll(/CREATE (?:UNIQUE )?INDEX "([a-z_0-9]+)"/g),
+    ].map((match) => match[1])
+
+    if (createdCng.length === 0) {
+      dbCheckProblems.push('no CNG constraint or index could be read from 0008')
+    }
+
+    for (const name of new Set(createdCng)) {
+      if (!expectedCngText.includes(name)) {
+        dbCheckProblems.push(`db:check does not verify the CNG guarantee ${name}`)
+      }
+    }
+
+    /** And nothing 0008 DROPS may still be expected. */
+    for (const match of cngStatements.matchAll(/DROP CONSTRAINT "([a-z_0-9]+)"/g)) {
+      if (expectedCngText.includes(match[1])) {
+        dbCheckProblems.push(`db:check still expects the dropped constraint ${match[1]}`)
+      }
+    }
+
+    /**
+     * THE TWO ABSENCES, which can only be checked as absences: a volunteer's
+     * NAME is not unique — two people may share one — and a CNG prize may be
+     * repeated. Both are easy to reintroduce while tidying, because
+     * uniqueness usually looks like a good idea.
+     */
+    for (const proof of [
+      'two CNG members may share a name',
+      'repeated CNG prize awards are allowed',
+    ]) {
+      if (!dbCheckSource.includes(proof)) {
+        dbCheckProblems.push(`db:check does not prove: ${proof}`)
+      }
+    }
+
+    for (const list of ['CNG_COLUMNS', 'CNG_AWARD_COLUMNS']) {
+      if (!dbCheckSource.includes(`const ${list} = {`)) {
+        dbCheckProblems.push(`db:check no longer declares ${list}`)
+      }
+    }
+
+    const cngColumnLists = ['CNG_COLUMNS', 'CNG_AWARD_COLUMNS']
+      .map((name) => {
+        const start = dbCheckSource.indexOf(`const ${name} = {`)
+
+        return start === -1 ? '' : dbCheckSource.slice(start, dbCheckSource.indexOf('\n}', start))
+      })
+      .join('\n')
+
+    /**
+     * THE FINAL COLUMN SET, which is 0007's minus `badge_number` plus the
+     * three 0008 adds. Derived from the schema rather than from either
+     * migration, because neither one holds the whole truth.
+     */
+    for (const column of [
+      'id', 'event_id', 'name', 'added_by_device_id', 'added_at',
+      'removed_at', 'removed_by_device_id',
+      'cng_member_id', 'prize_name', 'awarded_by_device_id', 'awarded_at',
+    ]) {
+      if (!cngColumnLists.includes(`'${column}'`)) {
+        dbCheckProblems.push(`db:check does not verify the CNG column ${column}`)
+      }
+    }
+
+    if (cngColumnLists.includes("'badge_number'")) {
+      dbCheckProblems.push('db:check still expects a badge number on cng_members')
+    }
+
+    if (!/cng_members holds exactly its|holds exactly its/.test(dbCheckSource)) {
+      dbCheckProblems.push('db:check does not compare the CNG column sets for equality')
+    }
+  }
+
   // READ-ONLY, and not by convention: no statement may mutate anything.
   const dbCheckCode = stripComments(dbCheckSource)
 
@@ -5395,8 +6587,67 @@ if (dbCheckSource === null) {
 
 addCheck(
   'db-check-coverage',
-  'pnpm db:check verifies every migrated table, the prize rule and the dandiya guarantees',
+  'pnpm db:check verifies every migrated table, the prize rule, the dandiya guarantees and the CNG group',
   dbCheckProblems,
+)
+
+// --- M. React list keys identify the item, never the UI's current state ----
+
+/**
+ * A KEY IS THE ITEM'S IDENTITY, NOT A PIECE OF STATE.
+ *
+ * This exists because a real defect reached a browser console. Two dialogs
+ * were rendered as unconditional siblings, each keyed
+ * `<target> === null ? '<literal>' : <target>.<id>`, so with neither open the
+ * two carried the SAME key and React warned
+ * "Encountered two children with the same key". It appeared only once a
+ * SECOND such dialog existed: one component reaching for a shared fallback
+ * collides with nothing.
+ *
+ * NO GATE COULD SEE IT. React 19's server renderer emits no duplicate-key
+ * warning, so every `renderToStaticMarkup` assertion in the suites passed,
+ * and the final markup was correct either way. The rule is therefore checked
+ * at the source.
+ *
+ * A key built from a literal fallback is a key describing the ABSENCE of an
+ * item, and absence is the same for every sibling. An element with no item to
+ * identify should not be mounted; both of those dialogs already rendered
+ * nothing for a null target.
+ *
+ * An INDEX is banned for the same reason from the other direction: it
+ * identifies a position, so it survives the item moving out of it.
+ */
+const keyProblems = []
+
+for (const path of walk(join(ROOT, 'src/components'))) {
+  if (!path.endsWith('.tsx')) {
+    continue
+  }
+
+  const code = stripComments(readText(path) ?? '')
+
+  for (const expression of [...code.matchAll(/key=\{[^}\n]*\}/g)].map((m) => m[0])) {
+    /**
+     * A quoted literal reached through a conditional or a `??`. A template
+     * literal built from the item's own fields is fine and matches nothing
+     * here, because it carries no `?`.
+     */
+    if (/(\?\?|\?)\s*['"]/.test(expression)) {
+      keyProblems.push(
+        `${rel(path)} keys a child by a shared literal fallback, which collides between siblings: ${expression}`,
+      )
+    }
+
+    if (/^key=\{(index|i|idx|position)\}$/.test(expression)) {
+      keyProblems.push(`${rel(path)} keys a child by its array position: ${expression}`)
+    }
+  }
+}
+
+addCheck(
+  'react-list-keys',
+  'React list keys identify the item rather than the current UI state',
+  keyProblems,
 )
 
 // --- report -----------------------------------------------------------------

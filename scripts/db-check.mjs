@@ -24,6 +24,14 @@
  * `resolved_at`, not on the resolution, because a LOST stick frees its holder
  * exactly as a returned one does.
  *
+ * ONE TABLE HOLDS A NAME ON PURPOSE, and exactly one. Phase CNG1.1 corrected
+ * `cng_members` from badge-keyed to NAMED, because event volunteers do not
+ * wear the numbered attendee badges: the name is the only thing that can
+ * identify them, and storing it is an explicit product decision. It is still
+ * the ONLY person field either CNG table may hold, so both column sets are
+ * compared for EQUALITY — and a surviving `badge_number` means 0008 has not
+ * been applied.
+ *
  * ONE CHECK PROVES AN ABSENCE. `0004_repeat_prize_awards.sql` removed P1's
  * `UNIQUE(event_id, badge_number)` because repeat prizes became the event
  * rule, so a database that still carries it — or any replacement uniqueness
@@ -50,6 +58,9 @@ const EXPECTED_TABLES = [
   // Phase D3's dandiya checkout ledger: one loan, two holders.
   'dandiya_loan_holders',
   'dandiya_loans',
+  // Phase CNG1.1's volunteer group and its own prize ledger.
+  'cng_members',
+  'cng_prize_awards',
 ]
 
 const EXPECTED_GUARANTEES = [
@@ -86,6 +97,174 @@ const PRIZE_COLUMNS = [
   'event_id',
   'id',
   'prize_name',
+]
+
+/**
+ * THE TWO CNG COLUMN SETS, checked as SETS with their nullability named.
+ *
+ * Equality is the point. `cng_members.name` is stored DELIBERATELY — a
+ * volunteer has no badge and no Sheet row, so the name is the only thing that
+ * can identify them — and it is the ONLY person field either table may hold.
+ * A second one appearing is the regression these checks exist to catch, and a
+ * presence test could not see it.
+ *
+ * THE TWO REMOVAL COLUMNS MUST BE NULLABLE, because null means ACTIVE. A NOT
+ * NULL there would make every new membership unwritable. Everything else must
+ * not be: a membership with no name or no adding device is a row nobody can
+ * account for.
+ *
+ * `badge_number` IS DELIBERATELY ABSENT. Phase CNG1 keyed membership by badge
+ * on the assumption that a volunteer was a registered attendee; 0008 dropped
+ * the column with that model, and a database still carrying it is one where
+ * 0008 has not been applied.
+ */
+const CNG_COLUMNS = {
+  table: 'cng_members',
+  required: ['added_at', 'added_by_device_id', 'event_id', 'id', 'name'],
+  nullable: ['removed_at', 'removed_by_device_id'],
+}
+
+const CNG_AWARD_COLUMNS = {
+  table: 'cng_prize_awards',
+  required: [
+    'awarded_at', 'awarded_by_device_id', 'cng_member_id', 'event_id', 'id',
+    'prize_name',
+  ],
+  nullable: [],
+}
+
+/**
+ * The CNG guarantees, verified by DEFINITION rather than by name alone.
+ *
+ * THERE IS DELIBERATELY NO UNIQUENESS OVER THE NAME, and none may be added:
+ * two volunteers may genuinely share one, and refusing the second would
+ * refuse a real person. That absence is checked below, by shape, for the same
+ * reason the repeat-prize rule is.
+ */
+const EXPECTED_CNG_CONSTRAINTS = [
+  [
+    'cng_members_name_not_empty',
+    'CNG member name non-empty',
+    ['check', 'btrim(name)', '> 0'],
+  ],
+  [
+    'cng_members_name_max_length',
+    'CNG member name length bounded',
+    ['check', 'length(name) <= 120'],
+  ],
+  /**
+   * A REMOVAL IS ONE FACT, so its columns move together — the same rule a
+   * dandiya close follows. A row with a removal time and no removing device
+   * would be a membership nobody could account for.
+   */
+  [
+    'cng_members_removal_paired',
+    'a CNG removal records its time and its device together',
+    ['check', 'removed_at is null', 'removed_by_device_id is null'],
+  ],
+  [
+    'cng_members_event_id_events_id_fk',
+    'CNG membership belongs to an event',
+    ['foreign key (event_id)', 'references events(id)'],
+  ],
+  [
+    'cng_members_added_by_device_id_devices_id_fk',
+    'CNG adding device is a registered device',
+    ['foreign key (added_by_device_id)', 'references devices(id)'],
+  ],
+  [
+    'cng_members_device_event_fk',
+    'CNG adding device belongs to the same event',
+    ['foreign key (added_by_device_id, event_id)', 'references devices(id, event_id)'],
+  ],
+  [
+    'cng_members_removed_by_device_id_devices_id_fk',
+    'CNG removing device is a registered device',
+    ['foreign key (removed_by_device_id)', 'references devices(id)'],
+  ],
+  [
+    'cng_members_removed_device_event_fk',
+    'CNG removing device belongs to the same event',
+    ['foreign key (removed_by_device_id, event_id)', 'references devices(id, event_id)'],
+  ],
+  /**
+   * The key the award's composite foreign key REFERENCES. Without it that key
+   * could not exist, so an award could name a member from another event.
+   */
+  [
+    'cng_members_id_event_id_key',
+    'a CNG membership is identified with its event',
+    ['unique (id, event_id)'],
+  ],
+]
+
+/** The CNG group's read paths: the roster by event, and by adding device. */
+const EXPECTED_CNG_INDEXES = [
+  ['cng_members_event_id_idx', 'CNG group indexed by event', 'event_id'],
+  [
+    'cng_members_added_by_device_id_idx',
+    'CNG group indexed by adding device',
+    'added_by_device_id',
+  ],
+  ['cng_prize_awards_event_id_idx', 'CNG prize history indexed by event', 'event_id'],
+  [
+    'cng_prize_awards_cng_member_id_idx',
+    'CNG prize history indexed by member',
+    'cng_member_id',
+  ],
+  [
+    'cng_prize_awards_awarded_by_device_id_idx',
+    'CNG prize history indexed by awarding device',
+    'awarded_by_device_id',
+  ],
+]
+
+/**
+ * The CNG PRIZE guarantees. A volunteer's prize lives in its own table
+ * because a volunteer has no badge: recording it in `prize_awards` would have
+ * meant making `badge_number` nullable, inventing a value for it, or
+ * overloading it with an identity it does not describe.
+ *
+ * `ON DELETE restrict` ON THE MEMBER IS LOAD-BEARING. It is what makes the
+ * soft removal a requirement rather than a preference: history must still be
+ * able to name its recipient, so a member with awards cannot be deleted.
+ */
+const EXPECTED_CNG_AWARD_CONSTRAINTS = [
+  [
+    'cng_prize_awards_prize_name_not_empty',
+    'CNG prize name non-empty',
+    ['check', 'btrim(prize_name)', '> 0'],
+  ],
+  [
+    'cng_prize_awards_prize_name_max_length',
+    'CNG prize name length bounded',
+    ['check', 'length(prize_name) <= 80'],
+  ],
+  [
+    'cng_prize_awards_event_id_events_id_fk',
+    'CNG prize belongs to an event',
+    ['foreign key (event_id)', 'references events(id)'],
+  ],
+  [
+    'cng_prize_awards_cng_member_id_cng_members_id_fk',
+    'CNG prize belongs to a CNG member, who cannot then be deleted',
+    ['foreign key (cng_member_id)', 'references cng_members(id)', 'on delete restrict'],
+  ],
+  [
+    'cng_prize_awards_member_event_fk',
+    'CNG prize recipient belongs to the same event',
+    ['foreign key (cng_member_id, event_id)', 'references cng_members(id, event_id)'],
+  ],
+  [
+    'cng_prize_awards_awarded_by_device_id_devices_id_fk',
+    'CNG awarding device is a registered device',
+    ['foreign key (awarded_by_device_id)', 'references devices(id)'],
+  ],
+  [
+    'cng_prize_awards_device_event_fk',
+    'CNG awarding device belongs to the same event',
+    ['foreign key (awarded_by_device_id, event_id)', 'references devices(id, event_id)'],
+  ],
 ]
 
 /**
@@ -734,6 +913,161 @@ try {
 
       if (!ok) {
         if (absent.length > 0) console.log(`        missing: ${absent.join(', ')}`)
+        if (added.length > 0) console.log(`        unexpected: ${added.join(', ')}`)
+        if (wrongNullability.length > 0) {
+          console.log(`        wrong nullability: ${wrongNullability.join(', ')}`)
+        }
+      }
+    }
+  }
+
+  /**
+   * THE CNG GROUP AND ITS PRIZE LEDGER. Reported separately so the
+   * guarantees the product rules depend on are visible in the output rather
+   * than folded into a count.
+   *
+   * Every check below is a lookup in `pg_constraint`, `pg_indexes` or
+   * `information_schema.columns`. No row is created, updated or deleted.
+   */
+  if (!present.has('cng_members') || !present.has('cng_prize_awards')) {
+    console.log(
+      'SKIP  CNG guarantees — a table is absent, so none were checked',
+    )
+  } else {
+    const definitionOf = new Map(
+      constraints.map((row) => [row.name, normalize(row.definition)]),
+    )
+    const indexDefinitionOf = new Map(
+      indexes.map((row) => [row.name, normalize(row.definition)]),
+    )
+
+    for (const expectations of [
+      EXPECTED_CNG_CONSTRAINTS,
+      EXPECTED_CNG_AWARD_CONSTRAINTS,
+    ]) {
+      for (const [name, description, fragments] of expectations) {
+        const definition = definitionOf.get(name)
+        const absent =
+          definition === undefined
+            ? ['it is missing']
+            : fragments.filter((fragment) => !definition.includes(fragment))
+        const ok = absent.length === 0
+
+        if (!ok) missing++
+
+        console.log(`${ok ? 'PASS' : 'FAIL'}  ${description}`)
+
+        if (!ok) {
+          // What is EXPECTED and absent, never the stored data.
+          console.log(
+            definition === undefined
+              ? `        ${name} is missing`
+              : `        ${name} does not say: ${absent.join('; ')}`,
+          )
+        }
+      }
+    }
+
+    for (const [name, description, column] of EXPECTED_CNG_INDEXES) {
+      const definition = indexDefinitionOf.get(name)
+      const ok = definition !== undefined && definition.includes(`(${column})`)
+
+      if (!ok) missing++
+
+      console.log(`${ok ? 'PASS' : 'FAIL'}  ${description}`)
+    }
+
+    /**
+     * REPEATED CNG AWARDS MUST BE POSSIBLE, and so must two members sharing
+     * a name. Both are checked as ABSENCES, which is the only way to check
+     * them without writing a row — and both are easy to reintroduce while
+     * tidying, because uniqueness usually looks like a good idea.
+     *
+     * The primary key on `id` names neither a member nor a name and is not
+     * matched.
+     */
+    const uniquenessOver = (relation, columns) => [
+      ...constraints
+        .filter(
+          (row) =>
+            normalize(String(row.relation)).replace(/^public\./, '') === relation &&
+            /^(unique|primary key)/.test(normalize(row.definition)),
+        )
+        .map((row) => ({ name: row.name, definition: normalize(row.definition) })),
+      ...indexes
+        .filter(
+          (row) =>
+            normalize(String(row.relation)).replace(/^public\./, '') === relation &&
+            normalize(row.definition).includes('create unique index'),
+        )
+        .map((row) => ({ name: row.name, definition: normalize(row.definition) })),
+    ].filter((entry) => columns.some((column) => entry.definition.includes(column)))
+
+    const repeatedCng = uniquenessOver('cng_prize_awards', ['cng_member_id'])
+    const uniqueNames = uniquenessOver('cng_members', ['(name)', ', name)', '(name,'])
+
+    if (repeatedCng.length > 0) missing++
+
+    console.log(
+      `${repeatedCng.length === 0 ? 'PASS' : 'FAIL'}  repeated CNG prize awards are allowed`,
+    )
+
+    if (repeatedCng.length > 0) {
+      console.log(
+        `        the member is unique: ${repeatedCng.map((entry) => entry.name).join(', ')}`,
+      )
+    }
+
+    if (uniqueNames.length > 0) missing++
+
+    console.log(
+      `${uniqueNames.length === 0 ? 'PASS' : 'FAIL'}  two CNG members may share a name`,
+    )
+
+    if (uniqueNames.length > 0) {
+      console.log(
+        `        the name is unique: ${uniqueNames.map((entry) => entry.name).join(', ')}`,
+      )
+    }
+
+    /**
+     * THE COLUMN SETS, compared for EQUALITY with the nullable ones named.
+     * `removed_at` and `removed_by_device_id` are null for an ACTIVE member,
+     * so a NOT NULL there would make every new membership unwritable. An
+     * ADDED column is the privacy regression this catches — and a surviving
+     * `badge_number` means 0008 has not been applied.
+     */
+    for (const expected of [CNG_COLUMNS, CNG_AWARD_COLUMNS]) {
+      const rows = columns.filter((row) => row.table_name === expected.table)
+      const names = rows.map((row) => row.column_name).sort()
+      const all = [...expected.required, ...expected.nullable].sort()
+
+      const added = names.filter((column) => !all.includes(column))
+      const absent = all.filter((column) => !names.includes(column))
+      const wrongNullability = rows
+        .filter((row) => {
+          if (added.includes(row.column_name)) return false
+
+          return expected.nullable.includes(row.column_name)
+            ? row.is_nullable !== 'YES'
+            : row.is_nullable !== 'NO'
+        })
+        .map((row) => row.column_name)
+        .sort()
+
+      const ok =
+        added.length === 0 && absent.length === 0 && wrongNullability.length === 0
+
+      if (!ok) missing++
+
+      console.log(
+        `${ok ? 'PASS' : 'FAIL'}  ${expected.table} holds exactly its ${String(all.length)} columns`,
+      )
+
+      if (!ok) {
+        if (absent.length > 0) console.log(`        missing: ${absent.join(', ')}`)
+        // An ADDED column is the regression this check exists to catch, and
+        // a surviving `badge_number` means 0008 has not been applied here.
         if (added.length > 0) console.log(`        unexpected: ${added.join(', ')}`)
         if (wrongNullability.length > 0) {
           console.log(`        wrong nullability: ${wrongNullability.join(', ')}`)

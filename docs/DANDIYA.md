@@ -679,9 +679,9 @@ One Function, dispatched by method.
       "id": "…",
       "pairCode": "D-014",
       "issuedAt": "2026-10-11T14:02:00.000Z",
-      "issuedBy": { "id": "…", "name": "Anuradha" },
+      "issuedBy": { "id": "…", "name": "Dandiya Desk A" },
       "holders": [
-        { "badgeNumber": 42, "slot": 1, "resolution": "returned", "resolvedAt": "2026-10-11T14:44:00.000Z", "resolvedBy": { "id": "…", "name": "Anuradha" }, "attendee": { "badgeNumber": 42, "name": "Meera Patel", "age": 11, "gender": "female" } },
+        { "badgeNumber": 42, "slot": 1, "resolution": "returned", "resolvedAt": "2026-10-11T14:44:00.000Z", "resolvedBy": { "id": "…", "name": "Dandiya Desk A" }, "attendee": { "badgeNumber": 42, "name": "Meera Patel", "age": 11, "gender": "female" } },
         { "badgeNumber": 81, "slot": 2, "resolution": null, "resolvedAt": null, "resolvedBy": null, "attendee": { "badgeNumber": 81, "name": "Arjun Shah", "age": 15, "gender": "male" } }
       ]
     }
@@ -930,7 +930,7 @@ PAIR D-014                                        OUT
 #0042  Meera Patel   Stick 1 · Out   [ Return Stick ] [ Mark Lost ]
 #0081  Arjun Shah    Stick 2 · Out   [ Return Stick ] [ Mark Lost ]
 
-Issued 7:32 PM by Anuradha
+Issued 7:32 PM by Dandiya Desk A
 
 [ Return Whole Pair ]                      [ Report Pair Lost ]
 ```

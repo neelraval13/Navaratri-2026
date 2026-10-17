@@ -280,13 +280,24 @@ check('40. and cannot call a local device identity writer',
 /**
  * NOT a blanket ban on `crypto.randomUUID`: registration ids legitimately
  * use one. What must not exist is one reaching `EventConfig.deviceId`.
+ *
+ * THE SECOND CLAUSE IS AN INVENTORY, so a new minting site is a decision
+ * somebody makes rather than a habit. Phase CNG1.1 added two, both for the
+ * SAME reason and neither for an identity: the `PUT` that adds a CNG member
+ * is idempotent on a client-generated `cng_members.id`, so the browser has
+ * to mint that key before it sends — once per open dialog, once per
+ * previewed name — or a retried request would create a second volunteer.
+ * They are member ids, never device ids, which is exactly what the first
+ * clause keeps proving across the whole of `src`.
  */
 check('41. no product UI can mint a local config.deviceId',
   [offenders(/deviceId:\s*crypto\.randomUUID\(\)/),
    walk(join(root, 'src')).filter((file) => /crypto\.randomUUID\(\)/
      .test(stripComments(readFileSync(file, 'utf8'))))
      .map((file) => file.replace(`${root}/src/`, '')).sort()],
-  [[], ['db/registrations.ts']])
+  [[], ['components/cng/add-cng-member-dialog.tsx',
+        'components/cng/bulk-add-cng-names-dialog.tsx',
+        'db/registrations.ts']])
 /**
  * UNCHANGED BY PHASE P1. Prizes became a real module, but Home became
  * attribute-aware in the same phase and this grant holds `registration` only,
@@ -528,7 +539,7 @@ check('69. no Postgres migration was added',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
-    '0006_dandiya_badgeless_issuance.sql'])
+    '0006_dandiya_badgeless_issuance.sql', '0007_cng_members.sql', '0008_cng_named_members.sql'])
 /**
  * Every migration later phases appended: the two prize ones and D3's dandiya
  * ledger. Named `PRIZE_MIGRATIONS` when there were only two; what each

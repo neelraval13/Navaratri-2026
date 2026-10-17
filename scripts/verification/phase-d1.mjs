@@ -511,7 +511,7 @@ check('38. NO central migration was added',
   ['0000_central_foundation.sql', '0001_range_guards_and_touch.sql',
    '0002_device_credentials.sql', '0003_prize_awards.sql',
    '0004_repeat_prize_awards.sql', '0005_dandiya_checkout.sql',
-    '0006_dandiya_badgeless_issuance.sql'])
+    '0006_dandiya_badgeless_issuance.sql', '0007_cng_members.sql', '0008_cng_named_members.sql'])
 /**
  * `awarded_by_device_id` is a FOREIGN KEY to the central device, which is the
  * right thing for a ledger to record. What D1 protects is that central

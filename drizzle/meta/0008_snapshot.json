@@ -1,0 +1,1544 @@
+{
+  "id": "558b823e-b02e-4067-a340-80c90187d30d",
+  "prevId": "d3485e9f-dc22-425e-81e7-9f7f5723fce4",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.badge_assignments": {
+      "name": "badge_assignments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "range_start": {
+          "name": "range_start",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "range_end": {
+          "name": "range_end",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "assigned_at": {
+          "name": "assigned_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "released_at": {
+          "name": "released_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "badge_assignments_event_id_idx": {
+          "name": "badge_assignments_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "badge_assignments_device_id_idx": {
+          "name": "badge_assignments_device_id_idx",
+          "columns": [
+            {
+              "expression": "device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "badge_assignments_one_active_per_device": {
+          "name": "badge_assignments_one_active_per_device",
+          "columns": [
+            {
+              "expression": "device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"badge_assignments\".\"released_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "badge_assignments_event_id_events_id_fk": {
+          "name": "badge_assignments_event_id_events_id_fk",
+          "tableFrom": "badge_assignments",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "badge_assignments_device_id_devices_id_fk": {
+          "name": "badge_assignments_device_id_devices_id_fk",
+          "tableFrom": "badge_assignments",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "badge_assignments_device_event_fk": {
+          "name": "badge_assignments_device_event_fk",
+          "tableFrom": "badge_assignments",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "badge_assignments_range_start_positive": {
+          "name": "badge_assignments_range_start_positive",
+          "value": "\"badge_assignments\".\"range_start\" > 0"
+        },
+        "badge_assignments_range_end_positive": {
+          "name": "badge_assignments_range_end_positive",
+          "value": "\"badge_assignments\".\"range_end\" > 0"
+        },
+        "badge_assignments_range_ordered": {
+          "name": "badge_assignments_range_ordered",
+          "value": "\"badge_assignments\".\"range_start\" <= \"badge_assignments\".\"range_end\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.cng_members": {
+      "name": "cng_members",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "added_by_device_id": {
+          "name": "added_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "added_at": {
+          "name": "added_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "removed_at": {
+          "name": "removed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "removed_by_device_id": {
+          "name": "removed_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "cng_members_event_id_idx": {
+          "name": "cng_members_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "cng_members_added_by_device_id_idx": {
+          "name": "cng_members_added_by_device_id_idx",
+          "columns": [
+            {
+              "expression": "added_by_device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "cng_members_event_id_events_id_fk": {
+          "name": "cng_members_event_id_events_id_fk",
+          "tableFrom": "cng_members",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_members_added_by_device_id_devices_id_fk": {
+          "name": "cng_members_added_by_device_id_devices_id_fk",
+          "tableFrom": "cng_members",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "added_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_members_removed_by_device_id_devices_id_fk": {
+          "name": "cng_members_removed_by_device_id_devices_id_fk",
+          "tableFrom": "cng_members",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "removed_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_members_device_event_fk": {
+          "name": "cng_members_device_event_fk",
+          "tableFrom": "cng_members",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "added_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_members_removed_device_event_fk": {
+          "name": "cng_members_removed_device_event_fk",
+          "tableFrom": "cng_members",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "removed_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "cng_members_id_event_id_key": {
+          "name": "cng_members_id_event_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "event_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "cng_members_name_not_empty": {
+          "name": "cng_members_name_not_empty",
+          "value": "length(btrim(\"cng_members\".\"name\")) > 0"
+        },
+        "cng_members_name_max_length": {
+          "name": "cng_members_name_max_length",
+          "value": "length(\"cng_members\".\"name\") <= 120"
+        },
+        "cng_members_removal_paired": {
+          "name": "cng_members_removal_paired",
+          "value": "(\"cng_members\".\"removed_at\" is null) = (\"cng_members\".\"removed_by_device_id\" is null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.cng_prize_awards": {
+      "name": "cng_prize_awards",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cng_member_id": {
+          "name": "cng_member_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prize_name": {
+          "name": "prize_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "awarded_by_device_id": {
+          "name": "awarded_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "awarded_at": {
+          "name": "awarded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "cng_prize_awards_event_id_idx": {
+          "name": "cng_prize_awards_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "cng_prize_awards_cng_member_id_idx": {
+          "name": "cng_prize_awards_cng_member_id_idx",
+          "columns": [
+            {
+              "expression": "cng_member_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "cng_prize_awards_awarded_by_device_id_idx": {
+          "name": "cng_prize_awards_awarded_by_device_id_idx",
+          "columns": [
+            {
+              "expression": "awarded_by_device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "cng_prize_awards_event_id_events_id_fk": {
+          "name": "cng_prize_awards_event_id_events_id_fk",
+          "tableFrom": "cng_prize_awards",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_prize_awards_cng_member_id_cng_members_id_fk": {
+          "name": "cng_prize_awards_cng_member_id_cng_members_id_fk",
+          "tableFrom": "cng_prize_awards",
+          "tableTo": "cng_members",
+          "columnsFrom": [
+            "cng_member_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_prize_awards_awarded_by_device_id_devices_id_fk": {
+          "name": "cng_prize_awards_awarded_by_device_id_devices_id_fk",
+          "tableFrom": "cng_prize_awards",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "awarded_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_prize_awards_member_event_fk": {
+          "name": "cng_prize_awards_member_event_fk",
+          "tableFrom": "cng_prize_awards",
+          "tableTo": "cng_members",
+          "columnsFrom": [
+            "cng_member_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "cng_prize_awards_device_event_fk": {
+          "name": "cng_prize_awards_device_event_fk",
+          "tableFrom": "cng_prize_awards",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "awarded_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "cng_prize_awards_prize_name_not_empty": {
+          "name": "cng_prize_awards_prize_name_not_empty",
+          "value": "length(btrim(\"cng_prize_awards\".\"prize_name\")) > 0"
+        },
+        "cng_prize_awards_prize_name_max_length": {
+          "name": "cng_prize_awards_prize_name_max_length",
+          "value": "length(\"cng_prize_awards\".\"prize_name\") <= 80"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.dandiya_loan_holders": {
+      "name": "dandiya_loan_holders",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "loan_id": {
+          "name": "loan_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "badge_number": {
+          "name": "badge_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slot": {
+          "name": "slot",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolution": {
+          "name": "resolution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_by_device_id": {
+          "name": "resolved_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "dandiya_loan_holders_one_unresolved_per_badge": {
+          "name": "dandiya_loan_holders_one_unresolved_per_badge",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "badge_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"dandiya_loan_holders\".\"resolved_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dandiya_loan_holders_loan_id_idx": {
+          "name": "dandiya_loan_holders_loan_id_idx",
+          "columns": [
+            {
+              "expression": "loan_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dandiya_loan_holders_event_id_idx": {
+          "name": "dandiya_loan_holders_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "dandiya_loan_holders_loan_id_dandiya_loans_id_fk": {
+          "name": "dandiya_loan_holders_loan_id_dandiya_loans_id_fk",
+          "tableFrom": "dandiya_loan_holders",
+          "tableTo": "dandiya_loans",
+          "columnsFrom": [
+            "loan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "dandiya_loan_holders_event_id_events_id_fk": {
+          "name": "dandiya_loan_holders_event_id_events_id_fk",
+          "tableFrom": "dandiya_loan_holders",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dandiya_loan_holders_resolved_by_device_id_devices_id_fk": {
+          "name": "dandiya_loan_holders_resolved_by_device_id_devices_id_fk",
+          "tableFrom": "dandiya_loan_holders",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "resolved_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dandiya_loan_holders_loan_event_fk": {
+          "name": "dandiya_loan_holders_loan_event_fk",
+          "tableFrom": "dandiya_loan_holders",
+          "tableTo": "dandiya_loans",
+          "columnsFrom": [
+            "loan_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "dandiya_loan_holders_resolved_device_event_fk": {
+          "name": "dandiya_loan_holders_resolved_device_event_fk",
+          "tableFrom": "dandiya_loan_holders",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "resolved_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "dandiya_loan_holders_loan_id_slot_key": {
+          "name": "dandiya_loan_holders_loan_id_slot_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "loan_id",
+            "slot"
+          ]
+        },
+        "dandiya_loan_holders_loan_id_badge_number_key": {
+          "name": "dandiya_loan_holders_loan_id_badge_number_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "loan_id",
+            "badge_number"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "dandiya_loan_holders_badge_number_positive": {
+          "name": "dandiya_loan_holders_badge_number_positive",
+          "value": "\"dandiya_loan_holders\".\"badge_number\" is null or \"dandiya_loan_holders\".\"badge_number\" > 0"
+        },
+        "dandiya_loan_holders_slot_valid": {
+          "name": "dandiya_loan_holders_slot_valid",
+          "value": "\"dandiya_loan_holders\".\"slot\" in (1, 2)"
+        },
+        "dandiya_loan_holders_resolution_paired": {
+          "name": "dandiya_loan_holders_resolution_paired",
+          "value": "(\"dandiya_loan_holders\".\"resolution\" is null) = (\"dandiya_loan_holders\".\"resolved_at\" is null)\n          and (\"dandiya_loan_holders\".\"resolution\" is null) = (\"dandiya_loan_holders\".\"resolved_by_device_id\" is null)"
+        },
+        "dandiya_loan_holders_resolution_valid": {
+          "name": "dandiya_loan_holders_resolution_valid",
+          "value": "\"dandiya_loan_holders\".\"resolution\" is null or \"dandiya_loan_holders\".\"resolution\" in ('returned', 'lost')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.dandiya_loans": {
+      "name": "dandiya_loans",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pair_code": {
+          "name": "pair_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issued_by_device_id": {
+          "name": "issued_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issued_at": {
+          "name": "issued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_by_device_id": {
+          "name": "closed_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pair_released_at": {
+          "name": "pair_released_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "contact_phone": {
+          "name": "contact_phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accountability_badge_number": {
+          "name": "accountability_badge_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "dandiya_loans_one_unreleased_per_pair": {
+          "name": "dandiya_loans_one_unreleased_per_pair",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "pair_code",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"dandiya_loans\".\"pair_released_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dandiya_loans_event_id_idx": {
+          "name": "dandiya_loans_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dandiya_loans_issued_by_device_id_idx": {
+          "name": "dandiya_loans_issued_by_device_id_idx",
+          "columns": [
+            {
+              "expression": "issued_by_device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dandiya_loans_one_open_per_contact": {
+          "name": "dandiya_loans_one_open_per_contact",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "contact_phone",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"dandiya_loans\".\"closed_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dandiya_loans_one_open_per_accountability_badge": {
+          "name": "dandiya_loans_one_open_per_accountability_badge",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "accountability_badge_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"dandiya_loans\".\"closed_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "dandiya_loans_event_id_events_id_fk": {
+          "name": "dandiya_loans_event_id_events_id_fk",
+          "tableFrom": "dandiya_loans",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dandiya_loans_issued_by_device_id_devices_id_fk": {
+          "name": "dandiya_loans_issued_by_device_id_devices_id_fk",
+          "tableFrom": "dandiya_loans",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "issued_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dandiya_loans_closed_by_device_id_devices_id_fk": {
+          "name": "dandiya_loans_closed_by_device_id_devices_id_fk",
+          "tableFrom": "dandiya_loans",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "closed_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dandiya_loans_issued_device_event_fk": {
+          "name": "dandiya_loans_issued_device_event_fk",
+          "tableFrom": "dandiya_loans",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "issued_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dandiya_loans_closed_device_event_fk": {
+          "name": "dandiya_loans_closed_device_event_fk",
+          "tableFrom": "dandiya_loans",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "closed_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "dandiya_loans_id_event_id_key": {
+          "name": "dandiya_loans_id_event_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "event_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "dandiya_loans_pair_code_not_empty": {
+          "name": "dandiya_loans_pair_code_not_empty",
+          "value": "length(btrim(\"dandiya_loans\".\"pair_code\")) > 0"
+        },
+        "dandiya_loans_pair_code_max_length": {
+          "name": "dandiya_loans_pair_code_max_length",
+          "value": "length(\"dandiya_loans\".\"pair_code\") <= 32"
+        },
+        "dandiya_loans_pair_code_canonical": {
+          "name": "dandiya_loans_pair_code_canonical",
+          "value": "\"dandiya_loans\".\"pair_code\" = upper(btrim(\"dandiya_loans\".\"pair_code\"))"
+        },
+        "dandiya_loans_close_paired": {
+          "name": "dandiya_loans_close_paired",
+          "value": "(\"dandiya_loans\".\"closed_at\" is null) = (\"dandiya_loans\".\"outcome\" is null)\n          and (\"dandiya_loans\".\"closed_at\" is null) = (\"dandiya_loans\".\"closed_by_device_id\" is null)"
+        },
+        "dandiya_loans_outcome_valid": {
+          "name": "dandiya_loans_outcome_valid",
+          "value": "\"dandiya_loans\".\"outcome\" is null or \"dandiya_loans\".\"outcome\" in ('returned', 'partial_loss', 'lost')"
+        },
+        "dandiya_loans_release_requires_returned": {
+          "name": "dandiya_loans_release_requires_returned",
+          "value": "\"dandiya_loans\".\"pair_released_at\" is null or \"dandiya_loans\".\"outcome\" = 'returned'"
+        },
+        "dandiya_loans_returned_requires_release": {
+          "name": "dandiya_loans_returned_requires_release",
+          "value": "\"dandiya_loans\".\"outcome\" is distinct from 'returned' or \"dandiya_loans\".\"pair_released_at\" is not null"
+        },
+        "dandiya_loans_contact_phone_canonical": {
+          "name": "dandiya_loans_contact_phone_canonical",
+          "value": "\"dandiya_loans\".\"contact_phone\" is null or \"dandiya_loans\".\"contact_phone\" ~ '^[0-9]{10}$'"
+        },
+        "dandiya_loans_accountability_badge_positive": {
+          "name": "dandiya_loans_accountability_badge_positive",
+          "value": "\"dandiya_loans\".\"accountability_badge_number\" is null or \"dandiya_loans\".\"accountability_badge_number\" > 0"
+        },
+        "dandiya_loans_accountability_exclusive": {
+          "name": "dandiya_loans_accountability_exclusive",
+          "value": "\"dandiya_loans\".\"accountability_badge_number\" is null or \"dandiya_loans\".\"contact_phone\" is null"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.device_attributes": {
+      "name": "device_attributes",
+      "schema": "",
+      "columns": {
+        "device_id": {
+          "name": "device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attribute": {
+          "name": "attribute",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "device_attributes_device_id_idx": {
+          "name": "device_attributes_device_id_idx",
+          "columns": [
+            {
+              "expression": "device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "device_attributes_device_id_devices_id_fk": {
+          "name": "device_attributes_device_id_devices_id_fk",
+          "tableFrom": "device_attributes",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "device_attributes_device_id_attribute_pk": {
+          "name": "device_attributes_device_id_attribute_pk",
+          "columns": [
+            "device_id",
+            "attribute"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "device_attributes_attribute_not_empty": {
+          "name": "device_attributes_attribute_not_empty",
+          "value": "length(btrim(\"device_attributes\".\"attribute\")) > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.devices": {
+      "name": "devices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "login_name": {
+          "name": "login_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "session_version": {
+          "name": "session_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "devices_event_id_login_name_key": {
+          "name": "devices_event_id_login_name_key",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "login_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "devices_event_id_idx": {
+          "name": "devices_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "devices_event_id_events_id_fk": {
+          "name": "devices_event_id_events_id_fk",
+          "tableFrom": "devices",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "devices_id_event_id_key": {
+          "name": "devices_id_event_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "event_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "devices_name_not_empty": {
+          "name": "devices_name_not_empty",
+          "value": "length(btrim(\"devices\".\"name\")) > 0"
+        },
+        "devices_login_name_not_empty": {
+          "name": "devices_login_name_not_empty",
+          "value": "\"devices\".\"login_name\" is null or length(btrim(\"devices\".\"login_name\")) > 0"
+        },
+        "devices_password_hash_not_empty": {
+          "name": "devices_password_hash_not_empty",
+          "value": "\"devices\".\"password_hash\" is null or length(btrim(\"devices\".\"password_hash\")) > 0"
+        },
+        "devices_session_version_positive": {
+          "name": "devices_session_version_positive",
+          "value": "\"devices\".\"session_version\" >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.events": {
+      "name": "events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "events_slug_idx": {
+          "name": "events_slug_idx",
+          "columns": [
+            {
+              "expression": "slug",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "events_slug_key": {
+          "name": "events_slug_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "slug"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "events_slug_not_empty": {
+          "name": "events_slug_not_empty",
+          "value": "length(btrim(\"events\".\"slug\")) > 0"
+        },
+        "events_name_not_empty": {
+          "name": "events_name_not_empty",
+          "value": "length(btrim(\"events\".\"name\")) > 0"
+        },
+        "events_timezone_not_empty": {
+          "name": "events_timezone_not_empty",
+          "value": "length(btrim(\"events\".\"timezone\")) > 0"
+        },
+        "events_dates_ordered": {
+          "name": "events_dates_ordered",
+          "value": "\"events\".\"starts_at\" is null or \"events\".\"ends_at\" is null or \"events\".\"ends_at\" >= \"events\".\"starts_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.prize_awards": {
+      "name": "prize_awards",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "badge_number": {
+          "name": "badge_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prize_name": {
+          "name": "prize_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "awarded_by_device_id": {
+          "name": "awarded_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "awarded_at": {
+          "name": "awarded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "prize_awards_event_id_idx": {
+          "name": "prize_awards_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "prize_awards_awarded_by_device_id_idx": {
+          "name": "prize_awards_awarded_by_device_id_idx",
+          "columns": [
+            {
+              "expression": "awarded_by_device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "prize_awards_event_id_events_id_fk": {
+          "name": "prize_awards_event_id_events_id_fk",
+          "tableFrom": "prize_awards",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "prize_awards_awarded_by_device_id_devices_id_fk": {
+          "name": "prize_awards_awarded_by_device_id_devices_id_fk",
+          "tableFrom": "prize_awards",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "awarded_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "prize_awards_device_event_fk": {
+          "name": "prize_awards_device_event_fk",
+          "tableFrom": "prize_awards",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "awarded_by_device_id",
+            "event_id"
+          ],
+          "columnsTo": [
+            "id",
+            "event_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "prize_awards_badge_number_positive": {
+          "name": "prize_awards_badge_number_positive",
+          "value": "\"prize_awards\".\"badge_number\" > 0"
+        },
+        "prize_awards_prize_name_not_empty": {
+          "name": "prize_awards_prize_name_not_empty",
+          "value": "length(btrim(\"prize_awards\".\"prize_name\")) > 0"
+        },
+        "prize_awards_prize_name_max_length": {
+          "name": "prize_awards_prize_name_max_length",
+          "value": "length(\"prize_awards\".\"prize_name\") <= 80"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

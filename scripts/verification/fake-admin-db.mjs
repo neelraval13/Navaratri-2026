@@ -13,6 +13,11 @@ export const state = {
   events: [],
   // { id, eventId, badgeNumber, prizeName, awardedByDeviceId, awardedAt }
   prizeAwards: [],
+  // { id, eventId, name, addedByDeviceId, addedAt,
+  //   removedAt, removedByDeviceId }
+  cngMembers: [],
+  // { id, eventId, cngMemberId, prizeName, awardedByDeviceId, awardedAt }
+  cngPrizeAwards: [],
   // { id, eventId, pairCode, issuedByDeviceId, issuedAt,
   //   closedAt, closedByDeviceId, outcome, pairReleasedAt }
   dandiyaLoans: [],
@@ -39,6 +44,8 @@ export const reset = () => {
   state.assignments = []
   state.events = []
   state.prizeAwards = []
+  state.cngMembers = []
+  state.cngPrizeAwards = []
   state.dandiyaLoans = []
   state.dandiyaLoanHolders = []
   state.applied = []
@@ -54,6 +61,8 @@ const snapshot = () => ({
   assignments: clone(state.assignments),
   events: clone(state.events),
   prizeAwards: clone(state.prizeAwards),
+  cngMembers: clone(state.cngMembers),
+  cngPrizeAwards: clone(state.cngPrizeAwards),
   dandiyaLoans: clone(state.dandiyaLoans),
   dandiyaLoanHolders: clone(state.dandiyaLoanHolders),
 })
@@ -64,6 +73,8 @@ const restore = (taken) => {
   state.assignments = taken.assignments
   state.events = taken.events
   state.prizeAwards = taken.prizeAwards
+  state.cngMembers = taken.cngMembers
+  state.cngPrizeAwards = taken.cngPrizeAwards
   state.dandiyaLoans = taken.dandiyaLoans
   state.dandiyaLoanHolders = taken.dandiyaLoanHolders
 }
@@ -74,6 +85,8 @@ const rowsOf = (table) => {
   if (table === 'badge_assignments') return state.assignments
   if (table === 'events') return state.events
   if (table === 'prize_awards') return state.prizeAwards
+  if (table === 'cng_members') return state.cngMembers
+  if (table === 'cng_prize_awards') return state.cngPrizeAwards
   if (table === 'dandiya_loans') return state.dandiyaLoans
   if (table === 'dandiya_loan_holders') return state.dandiyaLoanHolders
   throw new Error(`unexpected table ${table}`)
@@ -492,6 +505,98 @@ const guardPrizeAward = (row) => {
 
   if (String(row.prizeName ?? '').length > 80) {
     throw constraintViolation('prize_awards_prize_name_max_length')
+  }
+}
+
+/**
+ * The guarantees `0008_cng_named_members.sql` places on `cng_members`.
+ *
+ * THERE IS DELIBERATELY NO UNIQUENESS OVER THE NAME, and a fake that invented
+ * one would fail the very tests that prove two volunteers may share a name.
+ * 0007's `UNIQUE(event_id, badge_number)` is gone with the column it keyed.
+ */
+const guardCngMember = (row) => {
+  /**
+   * THE PRIMARY KEY. Modelled because it is the idempotency authority: a
+   * fake that silently accepted a repeated id would let a retry create a
+   * second row and the `already-member` path would never be reached.
+   */
+  if (state.cngMembers.some((entry) => entry.id === row.id)) {
+    throw constraintViolation('cng_members_pkey')
+  }
+
+  const device = state.devices.get(row.addedByDeviceId)
+
+  // The composite foreign key: a membership cannot pair an event with a
+  // device belonging to a different one.
+  if (device === undefined || device.eventId !== row.eventId) {
+    throw constraintViolation('cng_members_device_event_fk')
+  }
+
+  if (String(row.name ?? '').trim() === '') {
+    throw constraintViolation('cng_members_name_not_empty')
+  }
+
+  if (String(row.name ?? '').length > 120) {
+    throw constraintViolation('cng_members_name_max_length')
+  }
+
+  guardCngMemberState(row)
+}
+
+/**
+ * The membership's own CHECKs, on insert and on UPDATE alike — which is the
+ * point, because a soft removal IS an update. A fake that guarded only
+ * inserts would let the writer stamp a removal time with no removing device.
+ */
+const guardCngMemberState = (row) => {
+  const removedAt = row.removedAt ?? null
+  const removedBy = row.removedByDeviceId ?? null
+
+  if ((removedAt === null) !== (removedBy === null)) {
+    throw constraintViolation('cng_members_removal_paired')
+  }
+
+  if (removedBy !== null) {
+    const remover = state.devices.get(removedBy)
+
+    if (remover === undefined || remover.eventId !== row.eventId) {
+      throw constraintViolation('cng_members_removed_device_event_fk')
+    }
+  }
+}
+
+/**
+ * The guarantees `0008_cng_named_members.sql` places on `cng_prize_awards`.
+ *
+ * NO UNIQUENESS HERE EITHER, deliberately: repeat prizes are legal for
+ * volunteers exactly as they are for attendees, so a fake that enforced one
+ * would fail the tests that prove it.
+ *
+ * The composite foreign key to the member is modelled because it is what
+ * stops an award pairing one event's member with another's row — and the
+ * MEMBER'S EXISTENCE is modelled because `ON DELETE restrict` is what makes
+ * the soft removal a requirement rather than a preference.
+ */
+const guardCngPrizeAward = (row) => {
+  const device = state.devices.get(row.awardedByDeviceId)
+
+  if (device === undefined || device.eventId !== row.eventId) {
+    throw constraintViolation('cng_prize_awards_device_event_fk')
+  }
+
+  const member = state.cngMembers.find((entry) => entry.id === row.cngMemberId)
+
+  if (member === undefined || member.eventId !== row.eventId) {
+    throw constraintViolation('cng_prize_awards_member_event_fk')
+  }
+
+  if (String(row.prizeName ?? '').trim() === '') {
+    throw constraintViolation('cng_prize_awards_prize_name_not_empty')
+  }
+
+  if (String(row.prizeName ?? '').length > 80) {
+    throw constraintViolation('cng_prize_awards_prize_name_max_length')
   }
 }
 
@@ -995,7 +1100,7 @@ const evaluateInsertField = (expression) => {
       return null
     }
 
-    if (normalised === 'gen_random_uuid()') {
+    if (normalised === 'gen_random_uuid()' || normalised === 'now()') {
       return undefined
     }
   }
@@ -1046,6 +1151,19 @@ const applyInsertRow = (target, payload) => {
     row.awardedAt ??= new Date('2026-10-10T12:30:00.000Z')
     guardPrizeAward(row)
     state.prizeAwards.push(row)
+  } else if (target === 'cng_members') {
+    row.id ??= `cccccccc-2222-4222-8222-${String(100000000000 + nextId++)}`
+    row.addedAt ??= new Date('2026-10-16T12:00:00.000Z')
+    /** Null means ACTIVE, as the migration declares. */
+    row.removedAt ??= null
+    row.removedByDeviceId ??= null
+    guardCngMember(row)
+    state.cngMembers.push(row)
+  } else if (target === 'cng_prize_awards') {
+    row.id ??= `dddddddd-2222-4222-8222-${String(100000000000 + nextId++)}`
+    row.awardedAt ??= new Date('2026-10-16T12:30:00.000Z')
+    guardCngPrizeAward(row)
+    state.cngPrizeAwards.push(row)
   } else if (target === 'dandiya_loans') {
     row.id ??= `aaaaaaaa-1111-4111-8111-${String(100000000000 + nextId++)}`
     row.issuedAt ??= new Date('2026-10-11T12:00:00.000Z')
@@ -1079,18 +1197,104 @@ const applyInsertRow = (target, payload) => {
   return clone(row)
 }
 
+/**
+ * THE ONE CONFLICT AN INSERT MAY TOLERATE, mapped from the table and the
+ * TARGET COLUMNS the writer declares to the index Postgres would name.
+ *
+ * Explicit rather than derived, and anything unlisted THROWS. `ON CONFLICT DO
+ * NOTHING` is the one place a write can fail and look like a success, so the
+ * stand-in refuses to guess which failure was meant: a bare
+ * `onConflictDoNothing()` with no target would absorb a foreign-key or CHECK
+ * violation nobody intended, and a fake that quietly allowed it would let
+ * that through every test.
+ */
+const CONFLICT_TARGETS = {
+  /**
+   * THE PRIMARY KEY, which is what makes `PUT /api/prizes` idempotent since
+   * Phase CNG1.1. CNG1 targeted a unique index over
+   * `(event_id, badge_number)`; 0008 dropped that column, and a volunteer's
+   * NAME cannot replace it because two volunteers may genuinely share one.
+   * The client-generated row id can, so the add conflicts on `id` and the
+   * EMPTY `RETURNING` is what says "this request has already been applied".
+   *
+   * Postgres names the primary-key constraint in that error, which is why
+   * the key maps to `cng_members_pkey` rather than to a column list.
+   */
+  'cng_members:id': 'cng_members_pkey',
+}
+
+/** The Postgres error's constraint name, through the Drizzle wrapper. */
+const conflictConstraintName = (error) => {
+  let current = error
+
+  while (current !== null && current !== undefined) {
+    if (typeof current.constraint === 'string') {
+      return current.constraint
+    }
+
+    current = current.cause
+  }
+
+  return null
+}
+
 const insertBuilder = (table) => {
   const target = table.__table
 
   return {
     values(payload) {
+      /** `null` until `onConflictDoNothing` declares one. */
+      let tolerated = null
+
       const built = statement(
-        () => `insert ${target}`,
-        () => [applyInsertRow(target, payload)],
+        () => (tolerated === null ? `insert ${target}` : `insert ${target} on conflict`),
+        () => {
+          if (tolerated === null) {
+            return [applyInsertRow(target, payload)]
+          }
+
+          try {
+            return [applyInsertRow(target, payload)]
+          } catch (error) {
+            /**
+             * ONLY the declared conflict yields an empty result, exactly as
+             * Postgres does. Everything else is a genuine failure and travels
+             * up — which is what keeps the writer's `already-member` path
+             * from absorbing a cross-event device or a negative badge.
+             */
+            if (conflictConstraintName(error) === tolerated) {
+              return []
+            }
+
+            throw error
+          }
+        },
       )
 
       /** Drizzle returns the SAME builder, so it stays batchable. */
       built.returning = () => built
+
+      built.onConflictDoNothing = (config) => {
+        /**
+         * Drizzle accepts one column or several, and the writers use both
+         * forms: the dandiya contact index is a pair, the CNG idempotency
+         * key is the single primary key.
+         */
+        const declared = config?.target ?? []
+        const columns = (Array.isArray(declared) ? declared : [declared])
+          .map((column) => column.column)
+          .join(',')
+        const key = `${target}:${columns}`
+        const index = CONFLICT_TARGETS[key]
+
+        if (index === undefined) {
+          throw new Error(`unsupported conflict target: ${key}`)
+        }
+
+        tolerated = index
+
+        return built
+      }
 
       return built
     },
@@ -1169,6 +1373,8 @@ const updateBuilder = (table) => {
              */
             dandiya_loans: guardDandiyaLoanState,
             dandiya_loan_holders: guardDandiyaHolderState,
+            /** A SOFT REMOVAL IS AN UPDATE, so its CHECKs apply here too. */
+            cng_members: guardCngMemberState,
           }
           const guard = guards[target]
           const restorePoint = guard === undefined ? null : rowsOf(target).map((row) => clone(row))
@@ -1198,6 +1404,7 @@ const updateBuilder = (table) => {
               if (target === 'badge_assignments') state.assignments = restorePoint
               if (target === 'dandiya_loans') state.dandiyaLoans = restorePoint
               if (target === 'dandiya_loan_holders') state.dandiyaLoanHolders = restorePoint
+              if (target === 'cng_members') state.cngMembers = restorePoint
             }
 
             throw error
@@ -1255,20 +1462,53 @@ const deleteBuilder = (table) => {
 
   return {
     where(condition) {
-      return statement(
+      /** `undefined` until `returning` names a projection. */
+      let projection
+
+      const built = statement(
         () => `delete ${target}`,
         () => {
           guardFailure()
 
+          /**
+           * THE REMOVED ROWS, captured BEFORE the filter. `RETURNING` on a
+           * delete is what tells the CNG writer whether the badge was a
+           * member at all — an empty result is the verdict, not an error —
+           * so a stand-in that returned `[]` unconditionally would make
+           * every removal look like a miss.
+           */
+          const removed = rowsOf(target)
+            .filter((row) => matches(row, condition))
+            .map((row) =>
+              projection === undefined
+                ? clone(row)
+                : Object.fromEntries(
+                    Object.entries(projection).map(([alias, descriptor]) => [
+                      alias,
+                      clone(row[descriptor.column]),
+                    ]),
+                  ),
+            )
+
           if (target === 'device_attributes') {
             state.attributes = state.attributes.filter((row) => !matches(row, condition))
-
-            return []
+          } else if (target === 'cng_members') {
+            state.cngMembers = state.cngMembers.filter((row) => !matches(row, condition))
+          } else {
+            throw new Error(`unexpected delete on ${target}`)
           }
 
-          throw new Error(`unexpected delete on ${target}`)
+          return removed
         },
       )
+
+      built.returning = (columns) => {
+        projection = columns
+
+        return built
+      }
+
+      return built
     },
   }
 }

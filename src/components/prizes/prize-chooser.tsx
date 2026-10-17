@@ -14,8 +14,15 @@ import {
 interface PrizeChooserProps {
   /** The selected canonical label, or `null` when nothing is chosen yet. */
   value: string | null
-  /** The division age and gender suggest. Highlighted, never enforced. */
-  suggestedDivision: PrizeDivision
+  /**
+   * The division age and gender suggest. Highlighted, never enforced.
+   *
+   * `null` for a recipient there is nothing to derive one from — a CNG
+   * volunteer has no age or gender recorded, and this application is not
+   * going to start collecting them in order to light up a button. No division
+   * is then marked, and all eight stay equally available.
+   */
+  suggestedDivision: PrizeDivision | null
   disabled: boolean
   onChange: (prizeName: string) => void
 }
@@ -39,6 +46,10 @@ interface PrizeChooserProps {
  * every button stays enabled, nothing is preselected and nothing is
  * auto-submitted. The volunteer at the table knows things the Badge Register
  * does not, and an award is never refused for disagreeing with the hint.
+ *
+ * AND IT IS OPTIONAL. A CNG member has no age or gender recorded, so
+ * `suggestedDivision` is `null` there and nothing is marked — the chooser is
+ * otherwise identical, because the eight prizes are the same eight.
  */
 const PrizeChooser: React.FC<PrizeChooserProps> = ({
   value,
